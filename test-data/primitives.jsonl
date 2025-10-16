@@ -1,0 +1,3 @@
+{"value": null, "empty": "", "zero": 0}
+{"bool": true, "negative": -42, "decimal": 3.14159}
+{"array": [], "object": {}, "mixed": [null, true, false]}

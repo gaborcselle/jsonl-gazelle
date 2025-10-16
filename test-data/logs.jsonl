@@ -1,0 +1,5 @@
+{"timestamp": "2024-01-01T00:00:00Z", "level": "INFO", "message": "Application started"}
+{"timestamp": "2024-01-01T00:01:00Z", "level": "WARN", "message": "High memory usage detected"}
+{"timestamp": "2024-01-01T00:02:00Z", "level": "ERROR", "message": "Database connection failed"}
+{"timestamp": "2024-01-01T00:03:00Z", "level": "INFO", "message": "Retrying connection"}
+{"timestamp": "2024-01-01T00:04:00Z", "level": "INFO", "message": "Connection restored"}

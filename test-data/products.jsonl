@@ -1,0 +1,3 @@
+{"products": [{"id": 1, "name": "Widget A", "tags": ["electronics", "gadget"], "specs": {"weight": 0.5, "dimensions": {"width": 10, "height": 5, "depth": 2}}}, {"id": 2, "name": "Widget B", "tags": ["electronics"], "specs": {"weight": 0.3, "dimensions": {"width": 8, "height": 4, "depth": 1.5}}}]}
+{"products": [{"id": 3, "name": "Widget C", "tags": ["gadget", "premium"], "specs": {"weight": 1.2, "dimensions": {"width": 15, "height": 8, "depth": 3}}}]}
+{"products": []}

@@ -1,0 +1,10 @@
+{"user": {"id": 1, "name": "Alice", "profile": {"email": "alice@example.com", "preferences": {"theme": "dark", "notifications": true}}}, "orders": [{"id": 101, "amount": 29.99}, {"id": 102, "amount": 15.50}]}
+{"user": {"id": 2, "name": "Bob", "profile": {"email": "bob@example.com", "preferences": {"theme": "light", "notifications": false}}}, "orders": [{"id": 201, "amount": 45.00}]}
+{"user": {"id": 3, "name": "Charlie", "profile": {"email": "charlie@example.com", "preferences": {"theme": "auto", "notifications": true}}}, "orders": []}
+{"user": {"id": 4, "name": "Diana", "profile": {"email": "diana@example.com", "preferences": {"theme": "dark", "notifications": true}}}, "orders": [{"id": 301, "amount": 67.25}, {"id": 302, "amount": 12.99}, {"id": 303, "amount": 89.50}]}
+{"user": {"id": 5, "name": "Eve", "profile": {"email": "eve@example.com", "preferences": {"theme": "light", "notifications": false}}}, "orders": [{"id": 401, "amount": 23.75}]}
+{"user": {"id": 6, "name": "Frank", "profile": {"email": "frank@example.com", "preferences": {"theme": "auto", "notifications": true}}}, "orders": [{"id": 501, "amount": 156.00}, {"id": 502, "amount": 34.99}]}
+{"user": {"id": 7, "name": "Grace", "profile": {"email": "grace@example.com", "preferences": {"theme": "dark", "notifications": false}}}, "orders": []}
+{"user": {"id": 8, "name": "Henry", "profile": {"email": "henry@example.com", "preferences": {"theme": "light", "notifications": true}}}, "orders": [{"id": 601, "amount": 78.50}, {"id": 602, "amount": 45.25}, {"id": 603, "amount": 12.00}, {"id": 604, "amount": 99.99}]}
+{"user": {"id": 9, "name": "Ivy", "profile": {"email": "ivy@example.com", "preferences": {"theme": "auto", "notifications": false}}}, "orders": [{"id": 701, "amount": 234.75}]}
+{"user": {"id": 10, "name": "Jack", "profile": {"email": "jack@example.com", "preferences": {"theme": "dark", "notifications": true}}}, "orders": [{"id": 801, "amount": 56.99}, {"id": 802, "amount": 78.00}]}

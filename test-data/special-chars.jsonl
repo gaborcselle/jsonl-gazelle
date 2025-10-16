@@ -1,0 +1,3 @@
+{"text": "Hello \"World\"", "emoji": "🎉", "unicode": "こんにちは"}
+{"text": "Special chars: \n\t\r", "path": "C:\\Users\\test\\file.txt"}
+{"text": "Quotes: 'single' and \"double\"", "escaped": "Line1\\nLine2"}

@@ -1,0 +1,3 @@
+{"config": {"database": {"host": "localhost", "port": 5432, "ssl": true}, "cache": {"enabled": true, "ttl": 3600}, "features": ["auth", "logging", "metrics"]}, "version": "1.2.3"}
+{"config": {"database": {"host": "prod-db", "port": 5432, "ssl": true}, "cache": {"enabled": false, "ttl": 0}, "features": ["auth", "logging"]}, "version": "1.2.4"}
+{"config": {"database": {"host": "staging-db", "port": 5432, "ssl": false}, "cache": {"enabled": true, "ttl": 1800}, "features": ["auth", "logging", "metrics", "debug"]}, "version": "1.3.0-beta"}
