@@ -1,12 +1,10 @@
 # JSONL Gazelle
 
 <div align="center">
-
-  ![JSONL Gazelle](jsonl-gazelle.png)
-
+  <img src="jsonl-gazelle.png" alt="JSONL Gazelle" width="200">
 </div>
 
-A fast JSONL viewer / editor for VS Code with advanced features including table view, item view, JSON pretty print view, search, and AI. JSONL (JSON Lines) is increasingly important for machine learning datasets, log analysis, data streaming, and LLM evals - unlike regular JSON, it can be processed line-by-line making it perfect for large datasets.
+A fast JSONL viewer / editor for VS Code with advanced features including table view, item view, JSON pretty print view, search, and AI. JSONL (JSON Lines) is increasingly important for machine learning datasets, log analysis, data streaming, and LLM training - unlike regular JSON, it can be processed line-by-line making it perfect for large datasets.
 
 ![JSONL Gazelle Screenshot](jsonl-gazelle-screenshot.jpg)
 
