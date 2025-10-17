@@ -128,25 +128,48 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
             }
         );
 
+        // Handle document changes
+        const changeDocumentSubscription = vscode.workspace.onDidChangeTextDocument(e => {
+            if (e.document.uri.toString() === document.uri.toString()) {
+                this.loadJsonlFile(document);
+            }
+        });
+
+        // Store subscription for cleanup
+        webviewPanel.onDidDispose(() => {
+            changeDocumentSubscription.dispose();
+        });
+
         // Load and parse the JSONL file
         await this.loadJsonlFile(document);
         this.updateWebview(webviewPanel);
     }
 
     private async loadJsonlFile(document: vscode.TextDocument) {
-        this.isIndexing = true;
-        const text = document.getText();
-        this.rawContent = text;
-        const lines = text.split('\n');
-        
-        this.totalLines = lines.length;
-        this.loadedLines = 0;
-        this.rows = [];
-        this.parsedLines = [];
-        this.columns = []; // Clear columns from previous file
-        this.errorCount = 0;
-        this.pathCounts = {};
-        this.memoryOptimized = false;
+        try {
+            this.isIndexing = true;
+            const text = document.getText();
+            this.rawContent = text;
+            const lines = text.split('\n');
+            
+            this.totalLines = lines.length;
+            this.loadedLines = 0;
+            this.rows = [];
+            this.parsedLines = [];
+            this.columns = []; // Clear columns from previous file
+            this.errorCount = 0;
+            this.pathCounts = {};
+            this.memoryOptimized = false;
+            
+            // Handle empty files
+            if (this.totalLines === 0 || (this.totalLines === 1 && lines[0].trim() === '')) {
+                this.isIndexing = false;
+                this.filteredRows = [];
+                if (this.currentWebviewPanel) {
+                    this.updateWebview(this.currentWebviewPanel);
+                }
+                return;
+            }
         
         // For small files, load everything at once (no chunked loading)
         if (this.totalLines <= this.CHUNKED_LOADING_THRESHOLD) {
@@ -187,6 +210,20 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
         // Continue loading remaining chunks in background
         if (this.loadedLines < this.totalLines) {
             this.loadRemainingChunks(lines);
+        }
+        } catch (error) {
+            console.error('Error loading JSONL file:', error);
+            this.isIndexing = false;
+            this.errorCount = 1;
+            this.parsedLines = [{
+                data: null,
+                lineNumber: 1,
+                rawLine: '',
+                error: `Error loading file: ${error instanceof Error ? error.message : 'Unknown error'}`
+            }];
+            if (this.currentWebviewPanel) {
+                this.updateWebview(this.currentWebviewPanel);
+            }
         }
     }
     
