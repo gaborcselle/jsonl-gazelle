@@ -40,6 +40,7 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
     private readonly CHUNK_SIZE = 100; // Lines per chunk
     private readonly INITIAL_CHUNKS = 3; // Load first 3 chunks immediately
     private readonly MAX_MEMORY_ROWS = 50000; // Maximum rows to keep in memory for very large files
+    private readonly CHUNKED_LOADING_THRESHOLD = 1000; // Only use chunked loading for files with more than 1000 lines
     private loadingChunks: boolean = false;
     private totalLines: number = 0;
     private loadedLines: number = 0;
@@ -147,6 +148,20 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
         this.pathCounts = {};
         this.memoryOptimized = false;
         
+        // For small files, load everything at once (no chunked loading)
+        if (this.totalLines <= this.CHUNKED_LOADING_THRESHOLD) {
+            this.processChunk(lines, 0);
+            this.loadedLines = this.totalLines;
+            this.updateColumns();
+            this.filteredRows = this.rows; // Point to same array for small files
+            this.isIndexing = false;
+            
+            if (this.currentWebviewPanel) {
+                this.updateWebview(this.currentWebviewPanel);
+            }
+            return;
+        }
+        
         // Determine if we need memory optimization for very large files
         if (this.totalLines > this.MAX_MEMORY_ROWS) {
             this.memoryOptimized = true;
@@ -162,7 +177,7 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
         
         // Update UI with initial data
         this.updateColumns();
-        this.filteredRows = [...this.rows];
+        this.filteredRows = this.rows; // Point to same array initially
         this.isIndexing = false;
         
         if (this.currentWebviewPanel) {
@@ -198,10 +213,16 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
             
             // Update columns progressively - only add new columns, don't re-expand
             this.addNewColumnsOnly();
-            this.filteredRows = [...this.rows];
             
-            // Update UI periodically (every 2 chunks to avoid too frequent updates)
-            if ((startIndex / this.CHUNK_SIZE) % 2 === 0 && this.currentWebviewPanel) {
+            // Only copy array if there's an active search, otherwise point to same array
+            if (this.searchTerm) {
+                this.filteredRows = [...this.rows];
+            } else {
+                this.filteredRows = this.rows; // Much faster - no copying
+            }
+            
+            // Update UI less frequently (every 5 chunks = every 500 lines)
+            if ((startIndex / this.CHUNK_SIZE) % 5 === 0 && this.currentWebviewPanel) {
                 this.updateWebview(this.currentWebviewPanel);
             }
             
@@ -298,15 +319,9 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
             const fullPath = prefix ? `${prefix}.${key}` : key;
             
             if (value !== null && value !== undefined) {
-                // Only count paths that are either:
-                // 1. Top-level fields (no prefix)
-                // 2. Leaf values (not objects/arrays)
-                // 3. Objects/arrays that are 2 levels deep (to show expandable columns)
-                const isTopLevel = !prefix;
-                const isLeaf = typeof value !== 'object' || Array.isArray(value);
-                const isTwoLevelsDeep = prefix && prefix.split('.').length === 1;
-                
-                if (isTopLevel || isLeaf || isTwoLevelsDeep) {
+                // Only count top-level fields initially
+                // Subcolumns will be created through expansion
+                if (!prefix) {
                     counts[fullPath] = (counts[fullPath] || 0) + 1;
                 }
                 
@@ -330,7 +345,8 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
 
     private filterRows() {
         if (!this.searchTerm) {
-            this.filteredRows = [...this.rows];
+            // If no search term, point to the same array (much faster than copying)
+            this.filteredRows = this.rows;
             return;
         }
 
@@ -1904,8 +1920,8 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
                     if (column.parentPath) {
                         const collapseButton = document.createElement('button');
                         collapseButton.className = 'collapse-button';
-                        collapseButton.textContent = '▶';
-                        collapseButton.title = 'Collapse';
+                        collapseButton.textContent = '◀';
+                        collapseButton.title = 'Collapse to ' + column.parentPath;
                         collapseButton.addEventListener('click', (e) => {
                             e.preventDefault();
                             e.stopPropagation();
