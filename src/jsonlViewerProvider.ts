@@ -35,6 +35,17 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
     private parsedLines: ParsedLine[] = [];
     private rawContent: string = '';
     private errorCount: number = 0;
+    
+    // Chunked loading properties
+    private readonly CHUNK_SIZE = 100; // Lines per chunk
+    private readonly INITIAL_CHUNKS = 3; // Load first 3 chunks immediately
+    private readonly MAX_MEMORY_ROWS = 50000; // Maximum rows to keep in memory for very large files
+    private loadingChunks: boolean = false;
+    private totalLines: number = 0;
+    private loadedLines: number = 0;
+    private pathCounts: { [key: string]: number } = {};
+    private currentWebviewPanel: vscode.WebviewPanel | null = null;
+    private memoryOptimized: boolean = false;
 
     constructor(private readonly context: vscode.ExtensionContext) {}
 
@@ -49,6 +60,7 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
         webviewPanel: vscode.WebviewPanel,
         _token: vscode.CancellationToken
     ): Promise<void> {
+        this.currentWebviewPanel = webviewPanel;
         webviewPanel.webview.options = {
             enableScripts: true,
         };
@@ -126,52 +138,132 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
         this.rawContent = text;
         const lines = text.split('\n');
         
+        this.totalLines = lines.length;
+        this.loadedLines = 0;
         this.rows = [];
         this.parsedLines = [];
+        this.columns = []; // Clear columns from previous file
         this.errorCount = 0;
-        const pathCounts: { [key: string]: number } = {};
-
+        this.pathCounts = {};
+        this.memoryOptimized = false;
+        
+        // Determine if we need memory optimization for very large files
+        if (this.totalLines > this.MAX_MEMORY_ROWS) {
+            this.memoryOptimized = true;
+            console.log(`Large file detected (${this.totalLines} lines). Using memory optimization.`);
+        }
+        
+        // Load initial chunks immediately
+        const initialChunkSize = this.CHUNK_SIZE * this.INITIAL_CHUNKS;
+        const initialLines = lines.slice(0, Math.min(initialChunkSize, this.totalLines));
+        
+        this.processChunk(initialLines, 0);
+        this.loadedLines = initialLines.length;
+        
+        // Update UI with initial data
+        this.updateColumns();
+        this.filteredRows = [...this.rows];
+        this.isIndexing = false;
+        
+        if (this.currentWebviewPanel) {
+            this.updateWebview(this.currentWebviewPanel);
+        }
+        
+        // Continue loading remaining chunks in background
+        if (this.loadedLines < this.totalLines) {
+            this.loadRemainingChunks(lines);
+        }
+    }
+    
+    private async loadRemainingChunks(lines: string[]) {
+        this.loadingChunks = true;
+        
+        for (let startIndex = this.loadedLines; startIndex < this.totalLines; startIndex += this.CHUNK_SIZE) {
+            const endIndex = Math.min(startIndex + this.CHUNK_SIZE, this.totalLines);
+            const chunkLines = lines.slice(startIndex, endIndex);
+            
+            this.processChunk(chunkLines, startIndex);
+            this.loadedLines = endIndex;
+            
+            // Memory optimization: keep only recent rows for very large files
+            if (this.memoryOptimized && this.rows.length > this.MAX_MEMORY_ROWS) {
+                const keepRows = Math.floor(this.MAX_MEMORY_ROWS * 0.8); // Keep 80% of max
+                this.rows = this.rows.slice(-keepRows);
+                this.parsedLines = this.parsedLines.slice(-keepRows);
+                
+                // Recalculate path counts for remaining rows
+                this.pathCounts = {};
+                this.rows.forEach(row => this.countPaths(row, '', this.pathCounts));
+            }
+            
+            // Update columns progressively - only add new columns, don't re-expand
+            this.addNewColumnsOnly();
+            this.filteredRows = [...this.rows];
+            
+            // Update UI periodically (every 2 chunks to avoid too frequent updates)
+            if ((startIndex / this.CHUNK_SIZE) % 2 === 0 && this.currentWebviewPanel) {
+                this.updateWebview(this.currentWebviewPanel);
+            }
+            
+            // Yield control to prevent blocking the UI
+            await new Promise(resolve => setTimeout(resolve, 0));
+        }
+        
+        this.loadingChunks = false;
+        
+        // Final update
+        if (this.currentWebviewPanel) {
+            this.updateWebview(this.currentWebviewPanel);
+        }
+    }
+    
+    private processChunk(lines: string[], startIndex: number) {
         lines.forEach((line, index) => {
+            const globalIndex = startIndex + index;
             const trimmedLine = line.trim();
+            
             if (trimmedLine) {
                 try {
                     const obj = JSON.parse(trimmedLine);
                     this.rows.push(obj);
                     this.parsedLines.push({
                         data: obj,
-                        lineNumber: index + 1,
+                        lineNumber: globalIndex + 1,
                         rawLine: line
                     });
                     
                     // Count paths for column detection
-                    this.countPaths(obj, '', pathCounts);
+                    this.countPaths(obj, '', this.pathCounts);
                 } catch (error) {
                     this.errorCount++;
                     this.parsedLines.push({
                         data: null,
-                        lineNumber: index + 1,
+                        lineNumber: globalIndex + 1,
                         rawLine: line,
                         error: error instanceof Error ? error.message : 'Parse error'
                     });
-                    console.error(`Error parsing JSON line ${index + 1}:`, error);
+                    console.error(`Error parsing JSON line ${globalIndex + 1}:`, error);
                 }
             } else {
                 // Empty line
                 this.parsedLines.push({
                     data: null,
-                    lineNumber: index + 1,
+                    lineNumber: globalIndex + 1,
                     rawLine: line
                 });
             }
         });
-
-        // Create columns based on common paths
-        this.columns = [];
+    }
+    
+    private updateColumns() {
         const totalRows = this.rows.length;
         const threshold = Math.max(1, Math.floor(totalRows * 0.1)); // At least 10% of rows
-
-        for (const [path, count] of Object.entries(pathCounts)) {
-            if (count >= threshold) {
+        
+        // Create a set of existing column paths to avoid duplicates
+        const existingPaths = new Set(this.columns.map(col => col.path));
+        
+        for (const [path, count] of Object.entries(this.pathCounts)) {
+            if (count >= threshold && !existingPaths.has(path)) {
                 this.columns.push({
                     path,
                     displayName: this.getDisplayName(path),
@@ -180,9 +272,25 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
                 });
             }
         }
-
-        this.filteredRows = [...this.rows];
-        this.isIndexing = false;
+    }
+    
+    private addNewColumnsOnly() {
+        const totalRows = this.rows.length;
+        const threshold = Math.max(1, Math.floor(totalRows * 0.1)); // At least 10% of rows
+        
+        // Create a set of existing column paths to avoid duplicates
+        const existingPaths = new Set(this.columns.map(col => col.path));
+        
+        for (const [path, count] of Object.entries(this.pathCounts)) {
+            if (count >= threshold && !existingPaths.has(path)) {
+                this.columns.push({
+                    path,
+                    displayName: this.getDisplayName(path),
+                    visible: true,
+                    isExpanded: false
+                });
+            }
+        }
     }
 
     private countPaths(obj: any, prefix: string, counts: { [key: string]: number }) {
@@ -190,19 +298,34 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
             const fullPath = prefix ? `${prefix}.${key}` : key;
             
             if (value !== null && value !== undefined) {
-                // Only count top-level paths for initial column creation
-                // Nested paths will be created via expand functionality
-                if (!prefix) {
-                    // This is a top-level property, count it
+                // Only count paths that are either:
+                // 1. Top-level fields (no prefix)
+                // 2. Leaf values (not objects/arrays)
+                // 3. Objects/arrays that are 2 levels deep (to show expandable columns)
+                const isTopLevel = !prefix;
+                const isLeaf = typeof value !== 'object' || Array.isArray(value);
+                const isTwoLevelsDeep = prefix && prefix.split('.').length === 1;
+                
+                if (isTopLevel || isLeaf || isTwoLevelsDeep) {
                     counts[fullPath] = (counts[fullPath] || 0) + 1;
+                }
+                
+                // Recursively count nested objects (but limit depth to avoid too many columns)
+                if (typeof value === 'object' && !Array.isArray(value) && prefix.split('.').length < 2) {
+                    this.countPaths(value, fullPath, counts);
                 }
             }
         }
     }
 
     private getDisplayName(path: string): string {
+        // For nested paths, return the full path to avoid conflicts with expanded columns
+        // For top-level paths, return just the field name
         const parts = path.split('.');
-        return parts[parts.length - 1];
+        if (parts.length > 1) {
+            return path; // Return full path for nested fields
+        }
+        return parts[parts.length - 1]; // Return just the field name for top-level
     }
 
     private filterRows() {
@@ -503,7 +626,15 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
                 useRegex: this.useRegex,
                 parsedLines: this.parsedLines,
                 rawContent: this.rawContent,
-                errorCount: this.errorCount
+                errorCount: this.errorCount,
+                loadingProgress: {
+                    loadedLines: this.loadedLines,
+                    totalLines: this.totalLines,
+                    loadingChunks: this.loadingChunks,
+                    progressPercent: this.totalLines > 0 ? Math.round((this.loadedLines / this.totalLines) * 100) : 100,
+                    memoryOptimized: this.memoryOptimized,
+                    displayedRows: this.rows.length
+                }
             }
         });
     }
@@ -542,6 +673,29 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
             width: 32px;
             height: 32px;
             margin-right: 10px;
+        }
+        
+        .logo.loading {
+            animation: spin 2s linear infinite;
+        }
+        
+        .loading-state {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            flex: 1;
+            justify-content: center;
+            font-size: 14px;
+            color: var(--vscode-descriptionForeground);
+        }
+        
+        .loading-progress {
+            font-size: 12px;
+            color: var(--vscode-descriptionForeground);
+        }
+        
+        .controls-hidden {
+            display: none !important;
         }
         
         .search-container {
@@ -1127,8 +1281,12 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
 </head>
 <body>
     <div class="header">
-        <img src="${gazelleIconUri}" class="logo" alt="JSONL Gazelle">
-        <div class="search-container">
+        <img src="${gazelleIconUri}" class="logo" alt="JSONL Gazelle" id="logo">
+        <div class="loading-state" id="loadingState" style="display: none;">
+            <div>Loading large file...</div>
+            <div class="loading-progress" id="loadingProgress"></div>
+        </div>
+        <div class="search-container" id="searchContainer">
             <span class="search-icon">🔍</span>
             <input type="text" class="search-input" id="searchInput" placeholder="Search...">
             <div class="checkbox-container">
@@ -1137,7 +1295,7 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
             </div>
         </div>
         
-        <div class="replace-container">
+        <div class="replace-container" id="replaceContainer">
             <button class="replace-toggle" id="replaceToggle">Replace</button>
             <input type="text" class="replace-input" id="replaceInput" placeholder="Replace with...">
             <div class="checkbox-container replace-checkbox" style="display: none;">
@@ -1147,13 +1305,13 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
             <button class="button" id="replaceButton" style="display: none;">Replace</button>
         </div>
         
-        <div class="ai-container">
+        <div class="ai-container" id="aiContainer">
             <input type="text" class="ai-input" id="aiInput" placeholder="Prompt to run against lines...">
             <button class="button" id="askAIButton">▶️ AI</button>
         </div>
         
         <button class="button settings-button" id="settingsButton" title="Settings">⚙️</button>
-        <div class="export-container">
+        <div class="export-container" id="exportContainer">
             <button class="button export-button" id="exportButton" title="Export">📤</button>
             <div class="export-dropdown" id="exportDropdown" style="display: none;">
                 <div class="export-dropdown-item" data-action="csv">Export CSV</div>
@@ -1629,14 +1787,68 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
         function updateTable(data) {
             currentData = data;
             
+            // Handle loading state in header
+            const logo = document.getElementById('logo');
+            const loadingState = document.getElementById('loadingState');
+            const loadingProgress = document.getElementById('loadingProgress');
+            const searchContainer = document.getElementById('searchContainer');
+            const replaceContainer = document.getElementById('replaceContainer');
+            const aiContainer = document.getElementById('aiContainer');
+            const settingsButton = document.getElementById('settingsButton');
+            const exportContainer = document.getElementById('exportContainer');
+            
             if (data.isIndexing) {
-                document.getElementById('indexingDiv').style.display = 'flex';
+                // Initial loading - show spinning logo and hide controls
+                logo.classList.add('loading');
+                loadingState.style.display = 'flex';
+                searchContainer.classList.add('controls-hidden');
+                replaceContainer.classList.add('controls-hidden');
+                aiContainer.classList.add('controls-hidden');
+                settingsButton.classList.add('controls-hidden');
+                exportContainer.classList.add('controls-hidden');
+                
+                // Don't show the indexing div since we have header loading state
+                document.getElementById('indexingDiv').style.display = 'none';
                 document.getElementById('dataTable').style.display = 'none';
                 return;
             }
             
-            document.getElementById('indexingDiv').style.display = 'none';
-            document.getElementById('dataTable').style.display = 'table';
+            // Show loading progress if chunks are still loading
+            if (data.loadingProgress && data.loadingProgress.loadingChunks) {
+                logo.classList.add('loading');
+                loadingState.style.display = 'flex';
+                searchContainer.classList.add('controls-hidden');
+                replaceContainer.classList.add('controls-hidden');
+                aiContainer.classList.add('controls-hidden');
+                settingsButton.classList.add('controls-hidden');
+                exportContainer.classList.add('controls-hidden');
+                
+                const memoryInfo = data.loadingProgress.memoryOptimized ? 
+                    \`<div style="font-size: 11px; color: var(--vscode-warningForeground); margin-top: 5px;">
+                        Memory optimized: Showing \${data.loadingProgress.displayedRows.toLocaleString()} of \${data.loadingProgress.loadedLines.toLocaleString()} loaded rows
+                    </div>\` : '';
+                
+                loadingProgress.innerHTML = \`
+                    <div>\${data.loadingProgress.loadedLines.toLocaleString()} / \${data.loadingProgress.totalLines.toLocaleString()} lines (\${data.loadingProgress.progressPercent}%)</div>
+                    \${memoryInfo}
+                \`;
+                
+                // Don't show the indexing div since we have header loading state
+                document.getElementById('indexingDiv').style.display = 'none';
+                document.getElementById('dataTable').style.display = 'table';
+            } else {
+                // Loading complete - show controls and stop spinning logo
+                logo.classList.remove('loading');
+                loadingState.style.display = 'none';
+                searchContainer.classList.remove('controls-hidden');
+                replaceContainer.classList.remove('controls-hidden');
+                aiContainer.classList.remove('controls-hidden');
+                settingsButton.classList.remove('controls-hidden');
+                exportContainer.classList.remove('controls-hidden');
+                
+                document.getElementById('indexingDiv').style.display = 'none';
+                document.getElementById('dataTable').style.display = 'table';
+            }
             
             // Update search inputs
             document.getElementById('searchInput').value = data.searchTerm;
@@ -1976,7 +2188,12 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
             const rawView = document.getElementById('rawContent');
             rawView.innerHTML = '';
             
-            currentData.parsedLines.forEach((line) => {
+            // Filter out empty lines and only show lines with content or errors
+            const filteredLines = currentData.parsedLines.filter(line => 
+                line.rawLine.trim() !== '' || line.error
+            );
+            
+            filteredLines.forEach((line) => {
                 const lineDiv = document.createElement('div');
                 lineDiv.className = 'raw-line';
                 if (line.error) {
