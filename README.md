@@ -84,6 +84,26 @@ npm run compile
 npm run watch
 ```
 
+## Test Data Generation
+
+For testing with large datasets, you can generate a comprehensive test file with 10,000 lines (~64MB) containing varied fields and nested structures:
+
+```bash
+# Generate large test data file
+cd test-data
+node generate-large.js
+```
+
+This will create `test-data/large.jsonl` with:
+- **User profiles** with nested addresses, preferences, and social media links
+- **Orders** with items, pricing, shipping, and tracking information  
+- **Analytics data** with metrics, device info, and campaign details
+- **Log entries** with request details, performance metrics, and error information
+- **Mixed data types**: strings, numbers, booleans, arrays, objects
+- **Nested structures** up to 4-5 levels deep
+
+The generated file is automatically excluded from git via `.gitignore` to keep the repository lightweight.
+
 ## What's next / Roadmap
 
 - [X] Basic plugin working
