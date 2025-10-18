@@ -1276,7 +1276,7 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
         .expand-button {
             background: none;
             border: none;
-            color: var(--vscode-button-foreground);
+            color: var(--vscode-foreground);
             cursor: pointer;
             font-size: 12px;
             padding: 2px 4px;
@@ -1289,18 +1289,22 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
         .expand-button svg {
             width: 12px;
             height: 12px;
-            stroke: var(--vscode-button-foreground);
-            opacity: 0.9;
+            stroke: var(--vscode-foreground);
+            opacity: 1;
         }
         
         .expand-button:hover {
             background-color: var(--vscode-button-hoverBackground);
         }
         
+        .expand-button:not(:hover) {
+            opacity: 1;
+        }
+        
         .collapse-button {
             background: none;
             border: none;
-            color: var(--vscode-button-foreground);
+            color: var(--vscode-foreground);
             cursor: pointer;
             font-size: 12px;
             padding: 2px 4px;
@@ -1313,10 +1317,16 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
         .collapse-button svg {
             width: 12px;
             height: 12px;
+            stroke: var(--vscode-foreground);
+            opacity: 1;
         }
         
         .collapse-button:hover {
             background-color: var(--vscode-button-hoverBackground);
+        }
+        
+        .collapse-button:not(:hover) {
+            opacity: 1;
         }
         
         .expanded-column {
@@ -2171,10 +2181,6 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
                         if (typeof value === 'object' && value !== null && !column.isExpanded) {
                             td.classList.add('expandable-cell');
                             td.textContent = valueStr;
-                            const expandIcon = document.createElement('span');
-                            expandIcon.className = 'expand-icon';
-                            expandIcon.innerHTML = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6,9 12,15 18,9"></polyline></svg>';
-                            td.appendChild(expandIcon);
                             td.title = valueStr;
                             td.addEventListener('click', (e) => expandCell(e, td, rowIndex, column.path));
                         } else {
