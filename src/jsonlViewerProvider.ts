@@ -125,6 +125,9 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
                                 this.collapseColumn(message.columnPath);
                                 this.updateWebview(webviewPanel);
                                 break;
+                            case 'openUrl':
+                                vscode.env.openExternal(vscode.Uri.parse(message.url));
+                                break;
                         }
                     } catch (error) {
                         console.error('Error handling webview message:', error);
@@ -825,6 +828,13 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
         
         .search-icon {
             color: var(--vscode-foreground);
+            display: flex;
+            align-items: center;
+        }
+        
+        .search-icon svg {
+            width: 16px;
+            height: 16px;
         }
         
         .replace-container {
@@ -879,6 +889,15 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
             border: none;
             border-radius: 3px;
             cursor: pointer;
+            display: flex;
+            align-items: center;
+            gap: 5px;
+        }
+        
+        .button svg {
+            width: 16px;
+            height: 16px;
+            flex-shrink: 0;
         }
         
         .button:hover {
@@ -1087,6 +1106,13 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
             margin-bottom: 15px;
         }
         
+        .settings-section:last-child {
+            display: flex;
+            gap: 10px;
+            justify-content: flex-start;
+            align-items: center;
+        }
+        
         .settings-label {
             display: block;
             margin-bottom: 5px;
@@ -1149,6 +1175,15 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
             color: var(--vscode-button-secondaryForeground);
             cursor: pointer;
             transition: background-color 0.2s;
+            display: flex;
+            align-items: center;
+            gap: 5px;
+        }
+        
+        .segmented-control button svg {
+            width: 16px;
+            height: 16px;
+            flex-shrink: 0;
         }
         
         .segmented-control button.active {
@@ -1225,7 +1260,17 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
         .expand-icon {
             margin-left: 5px;
             font-size: 10px;
-            opacity: 0.7;
+            opacity: 1;
+            display: flex;
+            align-items: center;
+            color: var(--vscode-foreground);
+        }
+        
+        .expand-icon svg {
+            width: 12px;
+            height: 12px;
+            stroke: var(--vscode-foreground);
+            opacity: 0.8;
         }
         
         .expand-button {
@@ -1237,6 +1282,15 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
             padding: 2px 4px;
             margin-left: 5px;
             border-radius: 2px;
+            display: flex;
+            align-items: center;
+        }
+        
+        .expand-button svg {
+            width: 12px;
+            height: 12px;
+            stroke: var(--vscode-button-foreground);
+            opacity: 0.9;
         }
         
         .expand-button:hover {
@@ -1252,6 +1306,13 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
             padding: 2px 4px;
             margin: 0;
             border-radius: 2px;
+            display: flex;
+            align-items: center;
+        }
+        
+        .collapse-button svg {
+            width: 12px;
+            height: 12px;
         }
         
         .collapse-button:hover {
@@ -1385,13 +1446,13 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
 </head>
 <body>
     <div class="header">
-        <img src="${gazelleIconUri}" class="logo" alt="JSONL Gazelle" id="logo">
+        <img src="${gazelleIconUri}" class="logo" alt="JSONL Gazelle" id="logo" title="JSONL Gazelle" style="cursor: pointer;">
         <div class="loading-state" id="loadingState" style="display: none;">
             <div>Loading large file...</div>
             <div class="loading-progress" id="loadingProgress"></div>
         </div>
         <div class="search-container" id="searchContainer">
-            <span class="search-icon">🔍</span>
+            <span class="search-icon"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"></circle><path d="m21 21-4.35-4.35"></path></svg></span>
             <input type="text" class="search-input" id="searchInput" placeholder="Search...">
             <div class="checkbox-container">
                 <input type="checkbox" class="checkbox" id="regexCheckbox">
@@ -1411,12 +1472,12 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
         
         <div class="ai-container" id="aiContainer">
             <input type="text" class="ai-input" id="aiInput" placeholder="Prompt to run against lines...">
-            <button class="button" id="askAIButton">▶️ AI</button>
+            <button class="button" id="askAIButton"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="5,3 19,12 5,21"></polygon></svg> AI</button>
         </div>
         
-        <button class="button settings-button" id="settingsButton" title="Settings">⚙️</button>
+        <button class="button settings-button" id="settingsButton" title="Settings"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"></path></svg></button>
         <div class="export-container" id="exportContainer">
-            <button class="button export-button" id="exportButton" title="Export">📤</button>
+            <button class="button export-button" id="exportButton" title="Export"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7,10 12,15 17,10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg></button>
             <div class="export-dropdown" id="exportDropdown" style="display: none;">
                 <div class="export-dropdown-item" data-action="csv">Export CSV</div>
                 <div class="export-dropdown-item" data-action="jsonl">Export JSONL</div>
@@ -1426,10 +1487,10 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
     
     <div class="view-controls">
         <div class="segmented-control">
-            <button class="active" data-view="table">📊 Table</button>
-            <button data-view="detail">📋 Detail</button>
-            <button data-view="json">📄 JSONL</button>
-            <button data-view="raw">📝 Raw</button>
+            <button class="active" data-view="table"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3v18h18"></path><path d="M18.7 8l-5.1 5.2-2.8-2.7L7 14.3"></path></svg> Table</button>
+            <button data-view="detail"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 12l2 2 4-4"></path><path d="M21 12c-1 0-3-1-3-3s2-3 3-3 3 1 3 3-2 3-3 3"></path><path d="M3 12c1 0 3-1 3-3s-2-3-3-3-3 1-3 3 2 3 3 3"></path><path d="M12 3c0 1-1 3-3 3s-3-2-3-3 1-3 3-3 3 2 3 3"></path><path d="M12 21c0-1 1-3 3-3s3 2 3 3-1 3-3 3-3-2-3-3"></path></svg> Detail</button>
+            <button data-view="json"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14,2 14,8 20,8"></polyline><line x1="16" y1="13" x2="8" y2="13"></line><line x1="16" y1="17" x2="8" y2="17"></line><polyline points="10,9 9,9 8,9"></polyline></svg> JSONL</button>
+            <button data-view="raw"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"></path><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"></path></svg> Raw</button>
             <div class="error-count" id="errorCount" style="display: none;"></div>
         </div>
     </div>
@@ -1484,7 +1545,7 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
         </div>
         <div class="settings-section">
             <button class="button" id="saveSettingsButton">Save Settings</button>
-            <button class="button" id="closeSettingsButton" style="margin-left: 10px;">Close</button>
+            <button class="button" id="closeSettingsButton">Close</button>
         </div>
     </div>
 
@@ -1573,6 +1634,12 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
         document.getElementById('closeSettingsButton').addEventListener('click', closeSettings);
         document.getElementById('exportButton').addEventListener('click', toggleExportDropdown);
         document.getElementById('exportDropdown').addEventListener('click', handleExportAction);
+        document.getElementById('logo').addEventListener('click', () => {
+            vscode.postMessage({
+                type: 'openUrl',
+                url: 'https://github.com/gaborcselle/jsonl-gazelle'
+            });
+        });
         
         // Context menu
         document.addEventListener('click', hideContextMenu);
@@ -2008,7 +2075,7 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
                     if (column.parentPath) {
                         const collapseButton = document.createElement('button');
                         collapseButton.className = 'collapse-button';
-                        collapseButton.textContent = '◀';
+                        collapseButton.innerHTML = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="15,18 9,12 15,6"></polyline></svg>';
                         collapseButton.title = 'Collapse to ' + column.parentPath;
                         collapseButton.addEventListener('click', (e) => {
                             e.preventDefault();
@@ -2026,7 +2093,7 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
                         if (typeof value === 'object' && value !== null && !column.isExpanded) {
                             const expandButton = document.createElement('button');
                             expandButton.className = 'expand-button';
-                            expandButton.textContent = '▼';
+                            expandButton.innerHTML = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6,9 12,15 18,9"></polyline></svg>';
                             expandButton.title = 'Expand';
                             expandButton.addEventListener('click', (e) => {
                                 e.preventDefault();
@@ -2047,7 +2114,7 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
                         if (typeof value === 'object' && value !== null) {
                             const button = document.createElement('button');
                             button.className = 'expand-button';
-                            button.textContent = '▼';
+                            button.innerHTML = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6,9 12,15 18,9"></polyline></svg>';
                             button.title = 'Expand';
                             button.addEventListener('click', (e) => {
                                 e.preventDefault();
@@ -2106,7 +2173,7 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
                             td.textContent = valueStr;
                             const expandIcon = document.createElement('span');
                             expandIcon.className = 'expand-icon';
-                            expandIcon.textContent = ' ▼';
+                            expandIcon.innerHTML = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6,9 12,15 18,9"></polyline></svg>';
                             td.appendChild(expandIcon);
                             td.title = valueStr;
                             td.addEventListener('click', (e) => expandCell(e, td, rowIndex, column.path));
