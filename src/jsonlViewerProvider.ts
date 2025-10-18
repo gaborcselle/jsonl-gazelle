@@ -1,6 +1,5 @@
 import * as vscode from 'vscode';
 import * as path from 'path';
-import axios from 'axios';
 
 interface JsonRow {
     [key: string]: any;
@@ -61,88 +60,129 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
         webviewPanel: vscode.WebviewPanel,
         _token: vscode.CancellationToken
     ): Promise<void> {
-        this.currentWebviewPanel = webviewPanel;
-        webviewPanel.webview.options = {
-            enableScripts: true,
-        };
+        try {
+            this.currentWebviewPanel = webviewPanel;
+            webviewPanel.webview.options = {
+                enableScripts: true,
+            };
 
-        webviewPanel.webview.html = this.getHtmlForWebview(webviewPanel.webview);
+            webviewPanel.webview.html = this.getHtmlForWebview(webviewPanel.webview);
 
-        // Handle messages from the webview
-        webviewPanel.webview.onDidReceiveMessage(
-            async (message) => {
-                switch (message.type) {
-                    case 'search':
-                        this.searchTerm = message.searchTerm;
-                        this.useRegex = message.useRegex;
-                        this.filterRows();
-                        this.updateWebview(webviewPanel);
-                        break;
-                    case 'replace':
-                        this.replaceTerm = message.replaceTerm;
-                        this.useReplaceRegex = message.useReplaceRegex;
-                        this.performReplace();
-                        this.updateWebview(webviewPanel);
-                        break;
-                    case 'toggleColumn':
-                        this.toggleColumnVisibility(message.columnPath);
-                        this.updateWebview(webviewPanel);
-                        break;
-                    case 'addColumn':
-                        this.addColumn(message.columnPath);
-                        this.updateWebview(webviewPanel);
-                        break;
-                    case 'removeColumn':
-                        this.removeColumn(message.columnPath);
-                        this.updateWebview(webviewPanel);
-                        break;
-                    case 'askAI':
-                        await this.askAI(message.question, message.model);
-                        this.updateWebview(webviewPanel);
-                        break;
-                    case 'exportCSV':
-                        this.performCSVExport();
-                        break;
-                    case 'exportJSONL':
-                        this.performJSONLExport();
-                        break;
-                    case 'getApiKey':
-                        this.sendApiKey(webviewPanel);
-                        break;
-                    case 'saveApiKey':
-                        this.saveApiKey(message.apiKey);
-                        break;
-                    case 'updateCell':
-                        this.updateCell(message.rowIndex, message.columnPath, message.value);
-                        this.updateWebview(webviewPanel);
-                        break;
-                    case 'expandColumn':
-                        this.expandColumn(message.columnPath);
-                        this.updateWebview(webviewPanel);
-                        break;
-                    case 'collapseColumn':
-                        this.collapseColumn(message.columnPath);
-                        this.updateWebview(webviewPanel);
-                        break;
+            // Handle messages from the webview
+            webviewPanel.webview.onDidReceiveMessage(
+                async (message) => {
+                    try {
+                        switch (message.type) {
+                            case 'search':
+                                this.searchTerm = message.searchTerm;
+                                this.useRegex = message.useRegex;
+                                this.filterRows();
+                                this.updateWebview(webviewPanel);
+                                break;
+                            case 'replace':
+                                this.replaceTerm = message.replaceTerm;
+                                this.useReplaceRegex = message.useReplaceRegex;
+                                this.performReplace();
+                                this.updateWebview(webviewPanel);
+                                break;
+                            case 'toggleColumn':
+                                this.toggleColumnVisibility(message.columnPath);
+                                this.updateWebview(webviewPanel);
+                                break;
+                            case 'addColumn':
+                                this.addColumn(message.columnPath);
+                                this.updateWebview(webviewPanel);
+                                break;
+                            case 'removeColumn':
+                                this.removeColumn(message.columnPath);
+                                this.updateWebview(webviewPanel);
+                                break;
+                            case 'askAI':
+                                await this.askAI(message.question, message.model);
+                                this.updateWebview(webviewPanel);
+                                break;
+                            case 'exportCSV':
+                                this.performCSVExport();
+                                break;
+                            case 'exportJSONL':
+                                this.performJSONLExport();
+                                break;
+                            case 'getApiKey':
+                                this.sendApiKey(webviewPanel);
+                                break;
+                            case 'saveApiKey':
+                                this.saveApiKey(message.apiKey);
+                                break;
+                            case 'updateCell':
+                                this.updateCell(message.rowIndex, message.columnPath, message.value);
+                                this.updateWebview(webviewPanel);
+                                break;
+                            case 'expandColumn':
+                                this.expandColumn(message.columnPath);
+                                this.updateWebview(webviewPanel);
+                                break;
+                            case 'collapseColumn':
+                                this.collapseColumn(message.columnPath);
+                                this.updateWebview(webviewPanel);
+                                break;
+                        }
+                    } catch (error) {
+                        console.error('Error handling webview message:', error);
+                    }
                 }
+            );
+
+            // Handle document changes
+            const changeDocumentSubscription = vscode.workspace.onDidChangeTextDocument(e => {
+                if (e.document.uri.toString() === document.uri.toString()) {
+                    this.loadJsonlFile(document);
+                }
+            });
+
+            // Store subscription for cleanup
+            webviewPanel.onDidDispose(() => {
+                changeDocumentSubscription.dispose();
+            });
+
+            // Load and parse the JSONL file
+            await this.loadJsonlFile(document);
+            
+            // Always send an initial update to ensure webview gets data
+            this.updateWebview(webviewPanel);
+        } catch (error) {
+            console.error('Error in resolveCustomTextEditor:', error);
+            // Send error message to webview
+            try {
+                webviewPanel.webview.postMessage({
+                    type: 'update',
+                    data: {
+                        rows: [],
+                        columns: [],
+                        isIndexing: false,
+                        searchTerm: '',
+                        useRegex: false,
+                        parsedLines: [{
+                            data: null,
+                            lineNumber: 1,
+                            rawLine: '',
+                            error: `Extension error: ${error instanceof Error ? error.message : 'Unknown error'}`
+                        }],
+                        rawContent: '',
+                        errorCount: 1,
+                        loadingProgress: {
+                            loadedLines: 0,
+                            totalLines: 0,
+                            loadingChunks: false,
+                            progressPercent: 100,
+                            memoryOptimized: false,
+                            displayedRows: 0
+                        }
+                    }
+                });
+            } catch (postError) {
+                console.error('Error posting error message to webview:', postError);
             }
-        );
-
-        // Handle document changes
-        const changeDocumentSubscription = vscode.workspace.onDidChangeTextDocument(e => {
-            if (e.document.uri.toString() === document.uri.toString()) {
-                this.loadJsonlFile(document);
-            }
-        });
-
-        // Store subscription for cleanup
-        webviewPanel.onDidDispose(() => {
-            changeDocumentSubscription.dispose();
-        });
-
-        // Load and parse the JSONL file
-        await this.loadJsonlFile(document);
-        this.updateWebview(webviewPanel);
+        }
     }
 
     private async loadJsonlFile(document: vscode.TextDocument) {
@@ -575,24 +615,31 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
                     return value !== undefined ? JSON.stringify(value) : match;
                 });
 
-                const response = await axios.post('https://api.openai.com/v1/chat/completions', {
-                    model: model,
-                    messages: [
-                        {
-                            role: 'user',
-                            content: processedQuestion
-                        }
-                    ],
-                    max_tokens: 500,
-                    temperature: 0.7
-                }, {
+                const response = await fetch('https://api.openai.com/v1/chat/completions', {
+                    method: 'POST',
                     headers: {
                         'Authorization': `Bearer ${apiKey}`,
                         'Content-Type': 'application/json'
-                    }
+                    },
+                    body: JSON.stringify({
+                        model: model,
+                        messages: [
+                            {
+                                role: 'user',
+                                content: processedQuestion
+                            }
+                        ],
+                        max_tokens: 500,
+                        temperature: 0.7
+                    })
                 });
 
-                row._aiResponse = response.data.choices[0].message.content;
+                if (!response.ok) {
+                    throw new Error(`HTTP error! status: ${response.status}`);
+                }
+
+                const data = await response.json();
+                row._aiResponse = data.choices[0].message.content;
             }
         } catch (error) {
             vscode.window.showErrorMessage(`AI request failed: ${error}`);
@@ -669,27 +716,31 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
     }
 
     private updateWebview(webviewPanel: vscode.WebviewPanel) {
-        webviewPanel.webview.postMessage({
-            type: 'update',
-            data: {
-                rows: this.filteredRows,
-                columns: this.columns,
-                isIndexing: this.isIndexing,
-                searchTerm: this.searchTerm,
-                useRegex: this.useRegex,
-                parsedLines: this.parsedLines,
-                rawContent: this.rawContent,
-                errorCount: this.errorCount,
-                loadingProgress: {
-                    loadedLines: this.loadedLines,
-                    totalLines: this.totalLines,
-                    loadingChunks: this.loadingChunks,
-                    progressPercent: this.totalLines > 0 ? Math.round((this.loadedLines / this.totalLines) * 100) : 100,
-                    memoryOptimized: this.memoryOptimized,
-                    displayedRows: this.rows.length
+        try {
+            webviewPanel.webview.postMessage({
+                type: 'update',
+                data: {
+                    rows: this.filteredRows,
+                    columns: this.columns,
+                    isIndexing: this.isIndexing,
+                    searchTerm: this.searchTerm,
+                    useRegex: this.useRegex,
+                    parsedLines: this.parsedLines,
+                    rawContent: this.rawContent,
+                    errorCount: this.errorCount,
+                    loadingProgress: {
+                        loadedLines: this.loadedLines,
+                        totalLines: this.totalLines,
+                        loadingChunks: this.loadingChunks,
+                        progressPercent: this.totalLines > 0 ? Math.round((this.loadedLines / this.totalLines) * 100) : 100,
+                        memoryOptimized: this.memoryOptimized,
+                        displayedRows: this.rows.length
+                    }
                 }
-            }
-        });
+            });
+        } catch (error) {
+            console.error('Error in updateWebview:', error);
+        }
     }
 
     private getHtmlForWebview(webview: vscode.Webview): string {
@@ -2179,6 +2230,35 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
                     break;
             }
         });
+        
+        // Fallback: if no message is received within 5 seconds, show error
+        setTimeout(() => {
+            if (currentData.isIndexing) {
+                updateTable({
+                    rows: [],
+                    columns: [],
+                    isIndexing: false,
+                    searchTerm: '',
+                    useRegex: false,
+                    parsedLines: [{
+                        data: null,
+                        lineNumber: 1,
+                        rawLine: '',
+                        error: 'Extension failed to load data. Please try reloading the file.'
+                    }],
+                    rawContent: '',
+                    errorCount: 1,
+                    loadingProgress: {
+                        loadedLines: 0,
+                        totalLines: 0,
+                        loadingChunks: false,
+                        progressPercent: 100,
+                        memoryOptimized: false,
+                        displayedRows: 0
+                    }
+                });
+            }
+        }, 5000);
         
         // View control functions
         function switchView(viewType) {
