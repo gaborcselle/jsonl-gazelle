@@ -110,12 +110,17 @@ The generated file is automatically excluded from git via `.gitignore` to keep t
 
 - [X] Basic plugin working
 - [X] Improve UI for nested JSON (column expansion functionality)
-- [ ] Improve table display for long text
-- [ ] Improve Find / Replace UI
-- [ ] Improve table display for Strings
-- [ ] Better search highlighting
-- [ ] Add varied test data in a separate repo
-- [ ] Super powered AI mode where you can quickly run LLMs through each line and evaluate things. Highly parallelized
+- [ ] Table view: Improving loading performance for large.jsonl (which you can generate as above)
+- [ ] Table view: Improve table view performance for large.jsonl
+- [ ] Table view: Allow wrapping text
+- [ ] Table view: Row deletion and addition
+- [ ] Table view: Column deletion and addition
+- [ ] Table view: Synthesize new rows from existing rows via AI
+- [ ] Table view: Test and refine adding new columns by running LLM on each
+- [ ] JSONL view: rename to "Pretty Print"
+- [ ] Pretty print view: Allow edits
+- [ ] Pretty print view: Allow moving to the same row in Table view, and vice versa
+- [ ] All views: Better search highlighting
 
 ## License
 
