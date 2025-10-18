@@ -6,13 +6,15 @@
 
 A fast JSONL viewer / editor for VS Code with advanced features including table view, item view, JSON pretty print view, search, and AI. JSONL (JSON Lines) is increasingly important for machine learning datasets, log analysis, data streaming, and LLM training - unlike regular JSON, it can be processed line-by-line making it perfect for large datasets.
 
-![JSONL Gazelle Screenshot](jsonl-gazelle-screenshot.jpg)
+![JSONL Gazelle Screenshot - Light Theme](jsonl-gazelle-screenshot.jpg)
 
-![JSONL Gazelle Screenshot 2](jsonl-gazelle-screenshot2.jpg)
+![JSONL Gazelle Screenshot - Dark Theme](jsonl-gazelle-screenshot2.jpg)
 
-![JSONL Gazelle Screenshot 3](jsonl-gazelle-screenshot3.jpg)
+![JSONL Gazelle Screenshot - Detail View](jsonl-gazelle-screenshot3.jpg)
 
-![JSONL Gazelle Screenshot 4](jsonl-gazelle-screenshot4.jpg)
+![JSONL Gazelle Screenshot - Pretty Print](jsonl-gazelle-screenshot4.jpg)
+
+![JSONL Gazelle Screenshot - Raw View](jsonl-gazelle-screenshot5.jpg)
 
 ## Features
 
