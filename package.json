@@ -1,8 +1,8 @@
 {
   "name": "jsonl-gazelle",
   "displayName": "JSONL Gazelle",
-  "description": "Fast JSONL viewer / editor for VS Code with advanced features including table view, item view, JSON pretty print view, search, and AI.",
-  "version": "0.1.3",
+  "description": "Fast JSONL viewer / editor for VS Code with advanced features including Table View and Pretty Print view.",
+  "version": "0.2.0",
   "publisher": "gabor",
   "icon": "jsonl-gazelle.png",
   "engines": {
