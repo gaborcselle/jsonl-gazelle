@@ -11,16 +11,7 @@ export function activate(context: vscode.ExtensionContext) {
         supportsMultipleEditorsPerDocument: false,
     });
 
-    // Register commands
-    const openSettingsCommand = vscode.commands.registerCommand('jsonl-gazelle.openSettings', () => {
-        provider.openSettings();
-    });
-
-    const exportCSVCommand = vscode.commands.registerCommand('jsonl-gazelle.exportCSV', () => {
-        // This will be handled by the webview message
-    });
-
-    context.subscriptions.push(providerRegistration, openSettingsCommand, exportCSVCommand);
+    context.subscriptions.push(providerRegistration);
 }
 
 export function deactivate() {}
