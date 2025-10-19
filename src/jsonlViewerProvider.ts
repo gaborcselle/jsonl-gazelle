@@ -128,6 +128,12 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
                             case 'openUrl':
                                 vscode.env.openExternal(vscode.Uri.parse(message.url));
                                 break;
+                            case 'documentChanged':
+                                await this.handleDocumentChange(message.rowIndex, message.newData, webviewPanel, document);
+                                break;
+                            case 'rawContentChanged':
+                                await this.handleRawContentChange(message.newContent, webviewPanel, document);
+                                break;
                         }
                     } catch (error) {
                         console.error('Error handling webview message:', error);
@@ -609,20 +615,29 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
         }
 
         try {
-            for (const row of this.filteredRows) {
-                let processedQuestion = question;
+            // Process each row with the AI question
+            for (let i = 0; i < this.filteredRows.length; i++) {
+                const row = this.filteredRows[i];
                 
-                // Replace field references like {{fieldname.subname[0]}}
-                processedQuestion = processedQuestion.replace(/\{\{([^}]+)\}\}/g, (match, fieldPath) => {
-                    const value = this.getNestedValue(row, fieldPath.trim());
-                    return value !== undefined ? JSON.stringify(value) : match;
-                });
-
+                // Replace field references in the question with actual values
+                let processedQuestion = question;
+                const fieldMatches = question.match(/\{\{([^}]+)\}\}/g);
+                
+                if (fieldMatches) {
+                    fieldMatches.forEach(match => {
+                        const fieldPath = match.slice(2, -2); // Remove {{ and }}
+                        const value = this.getNestedValue(row, fieldPath);
+                        const stringValue = value !== undefined ? String(value) : '';
+                        processedQuestion = processedQuestion.replace(match, stringValue);
+                    });
+                }
+                
+                // Call OpenAI API
                 const response = await fetch('https://api.openai.com/v1/chat/completions', {
                     method: 'POST',
                     headers: {
                         'Authorization': `Bearer ${apiKey}`,
-                        'Content-Type': 'application/json'
+                        'Content-Type': 'application/json',
                     },
                     body: JSON.stringify({
                         model: model,
@@ -632,20 +647,36 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
                                 content: processedQuestion
                             }
                         ],
-                        max_tokens: 500,
+                        max_tokens: 1000,
                         temperature: 0.7
                     })
                 });
 
                 if (!response.ok) {
-                    throw new Error(`HTTP error! status: ${response.status}`);
+                    throw new Error(`OpenAI API error: ${response.status} ${response.statusText}`);
                 }
 
                 const data = await response.json();
-                row._aiResponse = data.choices[0].message.content;
+                const aiResponse = data.choices[0]?.message?.content || 'No response';
+                
+                // Store the AI response in the row
+                row._aiResponse = aiResponse;
             }
+            
+            // Update columns to include AI response if not already present
+            const hasAiColumn = this.columns.some(col => col.path === '_aiResponse');
+            if (!hasAiColumn) {
+                this.columns.push({
+                    path: '_aiResponse',
+                    displayName: 'AI Response',
+                    visible: true
+                });
+            }
+            
         } catch (error) {
-            vscode.window.showErrorMessage(`AI request failed: ${error}`);
+            console.error('Error calling OpenAI API:', error);
+            const errorMessage = error instanceof Error ? error.message : String(error);
+            vscode.window.showErrorMessage('Failed to get AI response: ' + errorMessage);
         }
     }
 
@@ -667,6 +698,57 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
         
         return current;
     }
+
+    private async handleRawContentChange(newContent: string, webviewPanel: vscode.WebviewPanel, document: vscode.TextDocument) {
+        try {
+            // Update the raw content
+            this.rawContent = newContent;
+            
+            // Update the document content
+            const edit = new vscode.WorkspaceEdit();
+            edit.replace(
+                document.uri,
+                new vscode.Range(0, 0, document.lineCount, 0),
+                newContent
+            );
+            await vscode.workspace.applyEdit(edit);
+            
+            // Reload the file to update parsed data
+            await this.loadJsonlFile(document);
+            
+            // Update the webview to reflect changes
+            this.updateWebview(webviewPanel);
+        } catch (error) {
+            console.error('Error handling raw content change:', error);
+            const errorMessage = error instanceof Error ? error.message : String(error);
+            vscode.window.showErrorMessage('Failed to save raw content changes: ' + errorMessage);
+        }
+    }
+
+    private async handleDocumentChange(rowIndex: number, newData: any, webviewPanel: vscode.WebviewPanel, document: vscode.TextDocument) {
+        try {
+            // Update the row data
+            this.rows[rowIndex] = newData;
+            
+            // Update the document content
+            const jsonlContent = this.rows.map(row => JSON.stringify(row)).join('\n');
+            const edit = new vscode.WorkspaceEdit();
+            edit.replace(
+                document.uri,
+                new vscode.Range(0, 0, document.lineCount, 0),
+                jsonlContent
+            );
+            await vscode.workspace.applyEdit(edit);
+            
+            // Update the webview to reflect changes
+            this.updateWebview(webviewPanel);
+        } catch (error) {
+            console.error('Error handling document change:', error);
+            const errorMessage = error instanceof Error ? error.message : String(error);
+            vscode.window.showErrorMessage('Failed to save changes: ' + errorMessage);
+        }
+    }
+
 
     private performCSVExport() {
         if (this.filteredRows.length === 0) {
@@ -931,6 +1013,17 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
         .table-container {
             overflow: auto;
             height: calc(100vh - 60px);
+        }
+        
+        .view-container {
+            width: 100%;
+            height: 100%;
+            overflow: auto;
+        }
+        
+        .view-container.isolated {
+            position: relative;
+            z-index: 10;
         }
         
         table {
@@ -1218,8 +1311,30 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
             line-height: 1.4;
             overflow: auto;
             background-color: var(--vscode-editor-background);
-            padding: 10px;
+            padding: 0;
             height: calc(100vh - 120px);
+        }
+        
+        .raw-textarea {
+            width: 100%;
+            height: 100%;
+            font-family: var(--vscode-editor-font-family);
+            font-size: var(--vscode-editor-font-size);
+            line-height: 1.4;
+            background-color: var(--vscode-editor-background);
+            color: var(--vscode-editor-foreground);
+            border: none;
+            outline: none;
+            padding: 10px;
+            resize: none;
+            box-sizing: border-box;
+            white-space: pre;
+            overflow: auto;
+            tab-size: 4;
+        }
+        
+        .raw-textarea:focus {
+            outline: none;
         }
         
         .raw-content {
@@ -1374,11 +1489,18 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
             overflow: auto;
             background-color: var(--vscode-editor-background);
             padding: 10px;
+            width: 100%;
+            box-sizing: border-box;
+            overflow-x: auto;
+            overflow-y: auto;
         }
         
         .json-line {
             display: flex;
             margin-bottom: 2px;
+            width: 100%;
+            min-width: 0;
+            overflow: visible;
         }
         
         .line-number {
@@ -1395,6 +1517,42 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
             white-space: pre;
         }
         
+        .json-content-editable {
+            flex: 1;
+            font-family: 'Courier New', monospace;
+            font-size: 12px;
+            line-height: 1.4;
+            background-color: var(--vscode-editor-background);
+            color: var(--vscode-editor-foreground);
+            border: 1px solid transparent;
+            border-radius: 3px;
+            padding: 4px 8px;
+            resize: none;
+            outline: none;
+            width: 100%;
+            min-width: 300px;
+            white-space: pre-wrap;
+            word-wrap: break-word;
+            overflow-wrap: break-word;
+            overflow: hidden;
+            box-sizing: border-box;
+            height: auto;
+        }
+        
+        .json-content-editable:focus {
+            border-color: var(--vscode-focusBorder);
+            box-shadow: 0 0 0 1px var(--vscode-focusBorder);
+        }
+        
+        .json-content-editable.json-error {
+            border-color: var(--vscode-inputValidation-errorBorder);
+            background-color: var(--vscode-inputValidation-errorBackground);
+        }
+        
+        .json-content-editable.json-valid {
+            border-color: var(--vscode-inputValidation-infoBorder);
+        }
+        
         .search-highlight {
             background-color: var(--vscode-editor-findMatchBackground);
             color: var(--vscode-editor-findMatchForeground);
@@ -1407,56 +1565,6 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
             color: var(--vscode-editor-findMatchForeground);
         }
         
-        .detail-view {
-            display: none;
-        }
-        
-        .detail-view.active {
-            display: block;
-        }
-        
-        .detail-navigation {
-            display: flex;
-            align-items: center;
-            gap: 10px;
-            padding: 10px;
-            background-color: var(--vscode-editor-background);
-            border-bottom: 1px solid var(--vscode-panel-border);
-        }
-        
-        .detail-content {
-            padding: 20px;
-        }
-        
-        .detail-row {
-            display: flex;
-            margin-bottom: 10px;
-            align-items: center;
-        }
-        
-        .detail-label {
-            min-width: 200px;
-            font-weight: bold;
-            margin-right: 10px;
-        }
-        
-        .detail-value {
-            flex: 1;
-            padding: 5px 10px;
-            border: 1px solid var(--vscode-input-border);
-            background-color: var(--vscode-input-background);
-            color: var(--vscode-input-foreground);
-            border-radius: 3px;
-            cursor: pointer;
-        }
-        
-        .detail-value:hover {
-            background-color: var(--vscode-input-hoverBackground);
-        }
-        
-        .detail-value.editing {
-            cursor: text;
-        }
     </style>
 </head>
 <body>
@@ -1502,9 +1610,8 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
     
     <div class="view-controls">
         <div class="segmented-control">
-            <button class="active" data-view="table"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3v18h18"></path><path d="M18.7 8l-5.1 5.2-2.8-2.7L7 14.3"></path></svg> Table</button>
-            <button data-view="detail"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 12l2 2 4-4"></path><path d="M21 12c-1 0-3-1-3-3s2-3 3-3 3 1 3 3-2 3-3 3"></path><path d="M3 12c1 0 3-1 3-3s-2-3-3-3-3 1-3 3 2 3 3 3"></path><path d="M12 3c0 1-1 3-3 3s-3-2-3-3 1-3 3-3 3 2 3 3"></path><path d="M12 21c0-1 1-3 3-3s3 2 3 3-1 3-3 3-3-2-3-3"></path></svg> Detail</button>
-            <button data-view="json"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14,2 14,8 20,8"></polyline><line x1="16" y1="13" x2="8" y2="13"></line><line x1="16" y1="17" x2="8" y2="17"></line><polyline points="10,9 9,9 8,9"></polyline></svg> JSONL</button>
+            <button class="active" data-view="table"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect><line x1="9" y1="3" x2="9" y2="21"></line><line x1="15" y1="3" x2="15" y2="21"></line><line x1="3" y1="9" x2="21" y2="9"></line><line x1="3" y1="15" x2="21" y2="15"></line></svg> Table</button>
+            <button data-view="json"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="4" y1="6" x2="20" y2="6"></line><line x1="8" y1="10" x2="20" y2="10"></line><line x1="12" y1="14" x2="20" y2="14"></line><line x1="8" y1="18" x2="20" y2="18"></line></svg> Pretty Print</button>
             <button data-view="raw"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"></path><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"></path></svg> Raw</button>
             <div class="error-count" id="errorCount" style="display: none;"></div>
         </div>
@@ -1515,24 +1622,24 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
             <img src="${gazelleIconUri}" class="indexing-icon" alt="Indexing...">
             <div>Indexing JSONL file...</div>
         </div>
-        <table id="dataTable" style="display: none;">
-            <thead id="tableHead"></thead>
-            <tbody id="tableBody"></tbody>
-        </table>
-        
-        <div class="json-view" id="jsonView" style="display: none;"></div>
-        
-        <div class="detail-view" id="detailView">
-            <div class="detail-navigation">
-                <button class="button" id="prevDetailButton">← Previous</button>
-                <span id="detailCounter">1 of 1</span>
-                <button class="button" id="nextDetailButton">Next →</button>
-            </div>
-            <div class="detail-content" id="detailContent"></div>
+        <!-- Table View Container -->
+        <div class="view-container" id="tableViewContainer">
+            <table id="dataTable" style="display: none;">
+                <thead id="tableHead"></thead>
+                <tbody id="tableBody"></tbody>
+            </table>
         </div>
         
-        <div class="raw-view" id="rawView" style="display: none;">
-            <div class="raw-content" id="rawContent"></div>
+        <!-- Pretty Print View Container -->
+        <div class="view-container" id="jsonViewContainer" style="display: none;">
+            <div class="json-view" id="jsonView"></div>
+        </div>
+        
+        <!-- Raw View Container -->
+        <div class="view-container" id="rawViewContainer" style="display: none;">
+            <div class="raw-view" id="rawView">
+                <textarea class="raw-textarea" id="rawTextarea"></textarea>
+            </div>
         </div>
     </div>
     
@@ -1584,9 +1691,13 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
         
         let contextMenuColumn = null;
         let currentView = 'table';
-        let currentDetailIndex = 0;
         let isResizing = false;
         let resizeData = null;
+        let scrollPositions = {
+            table: 0,
+            json: 0,
+            raw: 0
+        };
         
         // Column resize functionality
         function startResize(e, th, columnPath) {
@@ -1674,8 +1785,6 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
                 highlightTableResults(searchTerm, useRegex);
             } else if (currentView === 'json') {
                 highlightJsonResults(searchTerm, useRegex);
-            } else if (currentView === 'detail') {
-                highlightDetailResults(searchTerm, useRegex);
             } else if (currentView === 'raw') {
                 highlightRawResults(searchTerm, useRegex);
             }
@@ -1702,102 +1811,68 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
         }
         
         function highlightJsonResults(searchTerm, useRegex) {
-            const jsonLines = document.querySelectorAll('.json-content');
-            jsonLines.forEach(line => {
-                const originalText = line.textContent;
-                line.innerHTML = '';
+            const jsonLines = document.querySelectorAll('.json-content-editable');
+            jsonLines.forEach(textarea => {
+                // For textareas, we can't easily highlight within the text
+                // Instead, we'll add a visual indicator if the content matches
+                const content = textarea.value;
+                let hasMatch = false;
                 
-                if (!searchTerm) {
-                    line.textContent = originalText;
-                    return;
+                if (searchTerm) {
+                    try {
+                        if (useRegex) {
+                            const regex = new RegExp(searchTerm, 'gi');
+                            hasMatch = regex.test(content);
+                        } else {
+                            hasMatch = content.toLowerCase().includes(searchTerm.toLowerCase());
+                        }
+                    } catch (e) {
+                        // Invalid regex, treat as literal search
+                        hasMatch = content.toLowerCase().includes(searchTerm.toLowerCase());
+                    }
                 }
                 
-                try {
-                    const regex = useRegex ? 
-                        new RegExp('(' + searchTerm + ')', 'gi') : 
-                        new RegExp('(' + escapeRegex(searchTerm) + ')', 'gi');
-                    
-                    const parts = originalText.split(regex);
-                    parts.forEach((part, i) => {
-                        if (i % 2 === 1) {
-                            const highlight = document.createElement('span');
-                            highlight.className = 'search-highlight';
-                            highlight.textContent = part;
-                            line.appendChild(highlight);
-                        } else {
-                            line.appendChild(document.createTextNode(part));
-                        }
-                    });
-                } catch (e) {
-                    line.textContent = originalText;
+                if (hasMatch) {
+                    textarea.style.borderColor = 'var(--vscode-editor-findMatchBackground)';
+                    textarea.style.boxShadow = '0 0 0 2px var(--vscode-editor-findMatchBackground)';
+                } else {
+                    textarea.style.borderColor = '';
+                    textarea.style.boxShadow = '';
                 }
             });
         }
         
-        function highlightDetailResults(searchTerm, useRegex) {
-            const detailValues = document.querySelectorAll('.detail-value');
-            detailValues.forEach(value => {
-                const originalText = value.textContent;
-                value.innerHTML = '';
-                
-                if (!searchTerm) {
-                    value.textContent = originalText;
-                    return;
-                }
-                
-                try {
-                    const regex = useRegex ? 
-                        new RegExp('(' + searchTerm + ')', 'gi') : 
-                        new RegExp('(' + escapeRegex(searchTerm) + ')', 'gi');
-                    
-                    const parts = originalText.split(regex);
-                    parts.forEach((part, i) => {
-                        if (i % 2 === 1) {
-                            const highlight = document.createElement('span');
-                            highlight.className = 'search-highlight';
-                            highlight.textContent = part;
-                            value.appendChild(highlight);
-                        } else {
-                            value.appendChild(document.createTextNode(part));
-                        }
-                    });
-                } catch (e) {
-                    value.textContent = originalText;
-                }
-            });
-        }
         
         function highlightRawResults(searchTerm, useRegex) {
-            const rawLines = document.querySelectorAll('.raw-line-content');
-            rawLines.forEach(line => {
-                const originalText = line.textContent;
-                line.innerHTML = '';
-                
-                if (!searchTerm) {
-                    line.textContent = originalText;
-                    return;
-                }
-                
+            const rawTextarea = document.getElementById('rawTextarea');
+            if (!rawTextarea) return;
+            
+            // For textarea, we can't easily highlight within the text
+            // Instead, we'll add a visual indicator if the content matches
+            const content = rawTextarea.value;
+            let hasMatch = false;
+            
+            if (searchTerm) {
                 try {
-                    const regex = useRegex ? 
-                        new RegExp('(' + searchTerm + ')', 'gi') : 
-                        new RegExp('(' + escapeRegex(searchTerm) + ')', 'gi');
-                    
-                    const parts = originalText.split(regex);
-                    parts.forEach((part, i) => {
-                        if (i % 2 === 1) {
-                            const highlight = document.createElement('span');
-                            highlight.className = 'search-highlight';
-                            highlight.textContent = part;
-                            line.appendChild(highlight);
-                        } else {
-                            line.appendChild(document.createTextNode(part));
-                        }
-                    });
+                    if (useRegex) {
+                        const regex = new RegExp(searchTerm, 'gi');
+                        hasMatch = regex.test(content);
+                    } else {
+                        hasMatch = content.toLowerCase().includes(searchTerm.toLowerCase());
+                    }
                 } catch (e) {
-                    line.textContent = originalText;
+                    // Invalid regex, treat as literal search
+                    hasMatch = content.toLowerCase().includes(searchTerm.toLowerCase());
                 }
-            });
+            }
+            
+            if (hasMatch) {
+                rawTextarea.style.borderColor = 'var(--vscode-editor-findMatchBackground)';
+                rawTextarea.style.boxShadow = '0 0 0 2px var(--vscode-editor-findMatchBackground)';
+            } else {
+                rawTextarea.style.borderColor = '';
+                rawTextarea.style.boxShadow = '';
+            }
         }
         
         function toggleReplace() {
@@ -2350,6 +2425,12 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
         
         // View control functions
         function switchView(viewType) {
+            // Save current scroll position
+            const tableContainer = document.getElementById('tableContainer');
+            if (tableContainer) {
+                scrollPositions[currentView] = tableContainer.scrollTop;
+            }
+            
             currentView = viewType;
             
             // Update segmented control
@@ -2357,35 +2438,52 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
                 button.classList.toggle('active', button.dataset.view === viewType);
             });
             
-            // Hide all views
-            document.getElementById('dataTable').style.display = 'none';
-            document.getElementById('jsonView').style.display = 'none';
-            document.getElementById('detailView').style.display = 'none';
-            document.getElementById('rawView').style.display = 'none';
+            // Hide all view containers
+            document.getElementById('tableViewContainer').style.display = 'none';
+            document.getElementById('jsonViewContainer').style.display = 'none';
+            document.getElementById('rawViewContainer').style.display = 'none';
             
-            // Show selected view
+            // Show selected view container
             switch (viewType) {
                 case 'table':
+                    document.getElementById('tableViewContainer').style.display = 'block';
                     document.getElementById('dataTable').style.display = 'table';
                     break;
                 case 'json':
-                    document.getElementById('jsonView').style.display = 'block';
+                    document.getElementById('jsonViewContainer').style.display = 'block';
+                    document.getElementById('jsonViewContainer').classList.add('isolated');
+                    
+                    // Add event isolation to prevent bubbling
+                    const jsonContainer = document.getElementById('jsonViewContainer');
+                    jsonContainer.addEventListener('dblclick', function(e) {
+                        e.stopPropagation();
+                    });
+                    jsonContainer.addEventListener('click', function(e) {
+                        e.stopPropagation();
+                    });
+                    
                     updateJsonView();
                     break;
-                case 'detail':
-                    document.getElementById('detailView').style.display = 'block';
-                    updateDetailView();
-                    break;
                 case 'raw':
-                    document.getElementById('rawView').style.display = 'block';
+                    document.getElementById('rawViewContainer').style.display = 'block';
                     updateRawView();
                     break;
             }
+            
+            // Restore scroll position
+            setTimeout(() => {
+                if (tableContainer) {
+                    tableContainer.scrollTop = scrollPositions[viewType] || 0;
+                }
+            }, 0);
         }
         
         function updateJsonView() {
             const jsonView = document.getElementById('jsonView');
             jsonView.innerHTML = '';
+            
+            console.log('updateJsonView called, currentData.rows length:', currentData.rows.length);
+            console.log('currentData.rows:', currentData.rows);
             
             currentData.rows.forEach((row, index) => {
                 const lineDiv = document.createElement('div');
@@ -2395,9 +2493,103 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
                 lineNumber.className = 'line-number';
                 lineNumber.textContent = (index + 1).toString().padStart(4, ' ');
                 
-                const jsonContent = document.createElement('div');
-                jsonContent.className = 'json-content';
-                jsonContent.textContent = JSON.stringify(row, null, 2);
+                const jsonContent = document.createElement('textarea');
+                jsonContent.className = 'json-content-editable';
+                const jsonString = JSON.stringify(row, null, 2);
+                jsonContent.value = jsonString;
+                jsonContent.setAttribute('data-row-index', index);
+                
+                console.log('Created textarea for row', index, 'with value:', jsonString);
+                
+                // Simple auto-resize function using basic measurement
+                function autoResize(textarea) {
+                    // Reset height to auto to get natural height
+                    textarea.style.height = 'auto';
+                    
+                    // Get the scroll height (the full content height)
+                    const scrollHeight = textarea.scrollHeight;
+                    
+                    // Set the height to the scroll height
+                    textarea.style.height = scrollHeight + 'px';
+                    
+                    console.log('Resized textarea to height:', scrollHeight);
+                }
+                
+                // Set initial height and auto-resize with delay to ensure DOM is ready
+                jsonContent.style.height = '100px'; // Set reasonable initial height
+                
+                // Use setTimeout to ensure the textarea is fully rendered
+                setTimeout(() => {
+                    autoResize(jsonContent);
+                }, 10);
+                
+                // Fallback: ensure textarea is properly sized
+                setTimeout(() => {
+                    if (jsonContent.scrollHeight > jsonContent.offsetHeight) {
+                        jsonContent.style.height = jsonContent.scrollHeight + 'px';
+                        console.log('Applied fallback resize to textarea, height:', jsonContent.scrollHeight);
+                    }
+                }, 100);
+                
+                // Add event listener for changes
+                jsonContent.addEventListener('input', function() {
+                    autoResize(this);
+                    try {
+                        const parsed = JSON.parse(this.value);
+                        this.classList.remove('json-error');
+                        this.classList.add('json-valid');
+                    } catch (e) {
+                        this.classList.remove('json-valid');
+                        this.classList.add('json-error');
+                    }
+                });
+                
+                // Add blur event to save changes
+                jsonContent.addEventListener('blur', function() {
+                    try {
+                        const parsed = JSON.parse(this.value);
+                        const rowIndex = parseInt(this.getAttribute('data-row-index'));
+                        currentData.rows[rowIndex] = parsed;
+                        
+                        // Notify VS Code that the document has changed
+                        vscode.postMessage({
+                            type: 'documentChanged',
+                            rowIndex: rowIndex,
+                            newData: parsed
+                        });
+                        
+                        this.classList.remove('json-error');
+                        this.classList.add('json-valid');
+                    } catch (e) {
+                        // Keep error styling if JSON is invalid
+                        console.error('Invalid JSON on line', rowIndex + 1, ':', e.message);
+                    }
+                });
+                
+                // Prevent event bubbling to avoid triggering table events
+                lineDiv.addEventListener('dblclick', function(e) {
+                    e.stopPropagation();
+                });
+                
+                lineDiv.addEventListener('click', function(e) {
+                    e.stopPropagation();
+                });
+                
+                lineNumber.addEventListener('dblclick', function(e) {
+                    e.stopPropagation();
+                });
+                
+                lineNumber.addEventListener('click', function(e) {
+                    e.stopPropagation();
+                });
+                
+                jsonContent.addEventListener('dblclick', function(e) {
+                    e.stopPropagation();
+                });
+                
+                jsonContent.addEventListener('click', function(e) {
+                    e.stopPropagation();
+                });
                 
                 lineDiv.appendChild(lineNumber);
                 lineDiv.appendChild(jsonContent);
@@ -2406,169 +2598,35 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
         }
         
         function updateRawView() {
-            const rawView = document.getElementById('rawContent');
-            rawView.innerHTML = '';
+            const rawTextarea = document.getElementById('rawTextarea');
+            if (!rawTextarea) return;
             
-            // Filter out empty lines and only show lines with content or errors
-            const filteredLines = currentData.parsedLines.filter(line => 
-                line.rawLine.trim() !== '' || line.error
-            );
+            // Set the raw content
+            rawTextarea.value = currentData.rawContent || '';
             
-            filteredLines.forEach((line) => {
-                const lineDiv = document.createElement('div');
-                lineDiv.className = 'raw-line';
-                if (line.error) {
-                    lineDiv.classList.add('error');
-                }
+            // Add event listener for changes (only add once)
+            if (!rawTextarea.hasAttribute('data-listener-added')) {
+                rawTextarea.setAttribute('data-listener-added', 'true');
                 
-                const lineNumber = document.createElement('div');
-                lineNumber.className = 'raw-line-number';
-                lineNumber.textContent = line.lineNumber.toString().padStart(4, ' ');
-                
-                const lineContent = document.createElement('div');
-                lineContent.className = 'raw-line-content';
-                lineContent.textContent = line.rawLine;
-                
-                lineDiv.appendChild(lineNumber);
-                lineDiv.appendChild(lineContent);
-                rawView.appendChild(lineDiv);
-            });
-        }
-        
-        function updateDetailView() {
-            if (currentData.rows.length === 0) return;
-            
-            const currentRow = currentData.rows[currentDetailIndex];
-            const detailContent = document.getElementById('detailContent');
-            const detailCounter = document.getElementById('detailCounter');
-            
-            detailCounter.textContent = (currentDetailIndex + 1) + ' of ' + currentData.rows.length;
-            
-            // Clear existing content
-            detailContent.innerHTML = '';
-            
-            // Add AI Response if exists
-            if (currentRow._aiResponse) {
-                const aiRow = document.createElement('div');
-                aiRow.className = 'detail-row';
-                const aiLabel = document.createElement('div');
-                aiLabel.className = 'detail-label';
-                aiLabel.textContent = 'AI Response';
-                const aiValue = document.createElement('div');
-                aiValue.className = 'detail-value';
-                aiValue.dataset.path = '_aiResponse';
-                aiValue.textContent = currentRow._aiResponse;
-                aiRow.appendChild(aiLabel);
-                aiRow.appendChild(aiValue);
-                detailContent.appendChild(aiRow);
-            }
-            
-            // Add all other fields
-            Object.keys(currentRow).forEach(key => {
-                if (key === '_aiResponse') return;
-                
-                const value = currentRow[key];
-                const valueStr = typeof value === 'object' ? JSON.stringify(value, null, 2) : String(value);
-                
-                const row = document.createElement('div');
-                row.className = 'detail-row';
-                const label = document.createElement('div');
-                label.className = 'detail-label';
-                label.textContent = key;
-                const valueDiv = document.createElement('div');
-                valueDiv.className = 'detail-value';
-                valueDiv.dataset.path = key;
-                valueDiv.textContent = valueStr;
-                row.appendChild(label);
-                row.appendChild(valueDiv);
-                detailContent.appendChild(row);
-            });
-            
-            // Add event listeners for editing
-            detailContent.querySelectorAll('.detail-value').forEach(element => {
-                element.addEventListener('dblclick', (e) => editDetailValue(e.target));
-            });
-        }
-        
-        function navigateDetail(direction) {
-            const newIndex = currentDetailIndex + direction;
-            if (newIndex >= 0 && newIndex < currentData.rows.length) {
-                currentDetailIndex = newIndex;
-                updateDetailView();
-            }
-        }
-        
-        function editDetailValue(element) {
-            const originalValue = element.textContent;
-            const path = element.dataset.path;
-            
-            const input = document.createElement('input');
-            input.value = originalValue;
-            input.style.width = '100%';
-            input.style.border = 'none';
-            input.style.outline = 'none';
-            input.style.backgroundColor = 'var(--vscode-input-background)';
-            input.style.color = 'var(--vscode-input-foreground)';
-            input.style.padding = '5px 10px';
-            input.style.fontSize = 'inherit';
-            input.style.fontFamily = 'inherit';
-            input.style.boxSizing = 'border-box';
-            
-            element.innerHTML = '';
-            element.appendChild(input);
-            element.classList.add('editing');
-            
-            input.focus();
-            input.select();
-            
-            function saveEdit() {
-                const newValue = input.value;
-                element.classList.remove('editing');
-                element.textContent = newValue;
-                
-                // Update the data
-                const currentRow = currentData.rows[currentDetailIndex];
-                try {
-                    let parsedValue = newValue;
-                    if (newValue.trim() !== '') {
-                        try {
-                            parsedValue = JSON.parse(newValue);
-                        } catch {
-                            parsedValue = newValue;
-                        }
-                    } else {
-                        parsedValue = null;
-                    }
-                    currentRow[path] = parsedValue;
-                    
-                    // Send update message
+                rawTextarea.addEventListener('input', function() {
+                    // Notify VS Code that the document has changed
                     vscode.postMessage({
-                        type: 'updateCell',
-                        rowIndex: currentDetailIndex,
-                        columnPath: path,
-                        value: newValue
+                        type: 'rawContentChanged',
+                        newContent: this.value
                     });
-                } catch (error) {
-                    console.error('Error updating detail value:', error);
-                }
+                });
+                
+                // Prevent event bubbling
+                rawTextarea.addEventListener('dblclick', function(e) {
+                    e.stopPropagation();
+                });
+                
+                rawTextarea.addEventListener('click', function(e) {
+                    e.stopPropagation();
+                });
             }
-            
-            function cancelEdit() {
-                element.classList.remove('editing');
-                element.textContent = originalValue;
-            }
-            
-            input.addEventListener('blur', saveEdit);
-            input.addEventListener('keydown', (e) => {
-                if (e.key === 'Enter') {
-                    e.preventDefault();
-                    saveEdit();
-                } else if (e.key === 'Escape') {
-                    e.preventDefault();
-                    cancelEdit();
-                }
-            });
         }
+        
         
         function expandCell(event, td, rowIndex, columnPath) {
             event.preventDefault();
@@ -2618,9 +2676,6 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
             button.addEventListener('click', (e) => switchView(e.target.dataset.view));
         });
         
-        // Add event listeners for detail navigation
-        document.getElementById('prevDetailButton').addEventListener('click', () => navigateDetail(-1));
-        document.getElementById('nextDetailButton').addEventListener('click', () => navigateDetail(1));
     </script>
 </body>
 </html>`;
