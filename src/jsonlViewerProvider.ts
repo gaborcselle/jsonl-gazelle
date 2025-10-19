@@ -2273,6 +2273,15 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
                             td.textContent = valueStr;
                             td.title = valueStr;
                             td.addEventListener('click', (e) => expandCell(e, td, rowIndex, column.path));
+                            // Double-click on expandable cells should expand the column
+                            td.addEventListener('dblclick', (e) => {
+                                e.preventDefault();
+                                e.stopPropagation();
+                                vscode.postMessage({
+                                    type: 'expandColumn',
+                                    columnPath: column.path
+                                });
+                            });
                         } else {
                             td.textContent = valueStr;
                             td.title = valueStr;
@@ -2433,6 +2442,13 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
             
             currentView = viewType;
             
+            // Show spinning gazelle during view switch
+            const logo = document.getElementById('logo');
+            const loadingState = document.getElementById('loadingState');
+            logo.classList.add('loading');
+            loadingState.style.display = 'flex';
+            loadingState.innerHTML = '<div>Switching view...</div>';
+            
             // Update segmented control
             document.querySelectorAll('.segmented-control button').forEach(button => {
                 button.classList.toggle('active', button.dataset.view === viewType);
@@ -2448,6 +2464,9 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
                 case 'table':
                     document.getElementById('tableViewContainer').style.display = 'block';
                     document.getElementById('dataTable').style.display = 'table';
+                    // Hide loading state immediately for table view (already rendered)
+                    logo.classList.remove('loading');
+                    loadingState.style.display = 'none';
                     break;
                 case 'json':
                     document.getElementById('jsonViewContainer').style.display = 'block';
@@ -2462,11 +2481,27 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
                         e.stopPropagation();
                     });
                     
-                    updateJsonView();
+                    // Use setTimeout to allow the loading animation to show before rendering
+                    // Longer delay for larger datasets to ensure smooth animation
+                    const jsonDelay = currentData.rows.length > 1000 ? 100 : 50;
+                    setTimeout(() => {
+                        updateJsonView();
+                        // Hide loading state after JSON view is rendered
+                        logo.classList.remove('loading');
+                        loadingState.style.display = 'none';
+                    }, jsonDelay);
                     break;
                 case 'raw':
                     document.getElementById('rawViewContainer').style.display = 'block';
-                    updateRawView();
+                    // Use setTimeout to allow the loading animation to show before rendering
+                    // Longer delay for larger datasets to ensure smooth animation
+                    const rawDelay = currentData.rawContent && currentData.rawContent.length > 100000 ? 100 : 50;
+                    setTimeout(() => {
+                        updateRawView();
+                        // Hide loading state after raw view is rendered
+                        logo.classList.remove('loading');
+                        loadingState.style.display = 'none';
+                    }, rawDelay);
                     break;
             }
             
