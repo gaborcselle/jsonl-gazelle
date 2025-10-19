@@ -831,11 +831,12 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
         .table-container {
             flex: 1;
             overflow: auto;
+            min-height: 0;
         }
         
         .view-container {
-            flex: 1;
-            overflow: auto;
+            height: 100%;
+            overflow: visible;
         }
         
         .view-container.isolated {
