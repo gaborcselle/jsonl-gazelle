@@ -27,6 +27,7 @@ A fast JSONL viewer / editor for VS Code with advanced features including table 
 - **AI Integration**: OpenAI API integration with field reference syntax `{{fieldname.subname[0]}}`
 - **CSV Export**: Export tables to CSV with all JSON paths flattened
 - **Indexing State**: Shows Gazelle icon during file loading/indexing
+- **View Switching Animation**: Spinning gazelle animation during tab/view switching delays
 - **Memory Efficient**: All processing happens in memory without creating separate files
 
 ## Usage
@@ -34,7 +35,7 @@ A fast JSONL viewer / editor for VS Code with advanced features including table 
 1. Open any `.jsonl` file in VS Code
 2. The file will automatically open in the JSONL Gazelle viewer
 3. Use the search bar to filter rows (with regex support)
-4. Click ▼ buttons in column headers to expand objects/arrays into separate columns
+4. Click ▼ buttons in column headers or double-click expandable cells to expand objects/arrays into separate columns
 5. Right-click column headers to manage columns
 6. Set your OpenAI API key in settings for AI features
 7. Ask questions about specific rows using the AI input field
@@ -44,7 +45,7 @@ A fast JSONL viewer / editor for VS Code with advanced features including table 
 
 JSONL Gazelle automatically detects when columns contain objects or arrays and provides expand/collapse functionality:
 
-- **Expand**: Click ▼ to expand a column containing objects/arrays
+- **Expand**: Click ▼ to expand a column containing objects/arrays, or double-click on any expandable cell
   - Objects become separate columns: `user.name`, `user.profile.email`
   - Arrays become indexed columns: `orders[0]`, `orders[1]`, etc.
 - **Collapse**: Click ▶ to collapse expanded columns back to the original column
