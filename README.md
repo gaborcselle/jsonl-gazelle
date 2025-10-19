@@ -110,16 +110,17 @@ The generated file is automatically excluded from git via `.gitignore` to keep t
 
 - [X] Basic plugin working
 - [X] Improve UI for nested JSON (column expansion functionality)
-- [ ] Table view: Improving loading performance for large.jsonl (which you can generate as above)
-- [ ] Table view: Improve table view performance for large.jsonl
+- [ ] Table view: Improving loading performance for large.jsonl (which you can generate per the instructions above)
 - [ ] Table view: Allow wrapping text
 - [ ] Table view: Row deletion and addition
+- [ ] Table view: Allow hiding columns (and unhiding them) like Google Sheets
 - [ ] Table view: Column deletion and addition
 - [ ] Table view: Synthesize new rows from existing rows via AI
 - [ ] Table view: Test and refine adding new columns by running LLM on each
+- [ ] Detail view: delete
 - [ ] JSONL view: rename to "Pretty Print"
 - [ ] Pretty print view: Allow edits
-- [ ] Pretty print view: Allow moving to the same row in Table view, and vice versa
+- [ ] Pretty print view: Link to view the same row in Table view, and vice versa
 - [ ] All views: Better search highlighting
 
 ## License
