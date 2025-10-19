@@ -3,7 +3,6 @@ import * as path from 'path';
 
 interface JsonRow {
     [key: string]: any;
-    _aiResponse?: string;
 }
 
 interface ParsedLine {
@@ -27,9 +26,6 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
     private filteredRows: JsonRow[] = [];
     private columns: ColumnInfo[] = [];
     private searchTerm: string = '';
-    private useRegex: boolean = false;
-    private replaceTerm: string = '';
-    private useReplaceRegex: boolean = false;
     private isIndexing: boolean = false;
     private parsedLines: ParsedLine[] = [];
     private rawContent: string = '';
@@ -75,14 +71,7 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
                         switch (message.type) {
                             case 'search':
                                 this.searchTerm = message.searchTerm;
-                                this.useRegex = message.useRegex;
                                 this.filterRows();
-                                this.updateWebview(webviewPanel);
-                                break;
-                            case 'replace':
-                                this.replaceTerm = message.replaceTerm;
-                                this.useReplaceRegex = message.useReplaceRegex;
-                                this.performReplace();
                                 this.updateWebview(webviewPanel);
                                 break;
                             case 'toggleColumn':
@@ -96,22 +85,6 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
                             case 'removeColumn':
                                 this.removeColumn(message.columnPath);
                                 this.updateWebview(webviewPanel);
-                                break;
-                            case 'askAI':
-                                await this.askAI(message.question, message.model);
-                                this.updateWebview(webviewPanel);
-                                break;
-                            case 'exportCSV':
-                                this.performCSVExport();
-                                break;
-                            case 'exportJSONL':
-                                this.performJSONLExport();
-                                break;
-                            case 'getApiKey':
-                                this.sendApiKey(webviewPanel);
-                                break;
-                            case 'saveApiKey':
-                                this.saveApiKey(message.apiKey);
                                 break;
                             case 'updateCell':
                                 this.updateCell(message.rowIndex, message.columnPath, message.value);
@@ -169,7 +142,6 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
                         columns: [],
                         isIndexing: false,
                         searchTerm: '',
-                        useRegex: false,
                         parsedLines: [{
                             data: null,
                             lineNumber: 1,
@@ -439,54 +411,10 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
         this.filteredRows = this.rows.filter(row => {
             const searchText = JSON.stringify(row).toLowerCase();
             const term = this.searchTerm.toLowerCase();
-            
-            if (this.useRegex) {
-                try {
-                    const regex = new RegExp(term, 'i');
-                    return regex.test(searchText);
-                } catch (error) {
-                    return searchText.includes(term);
-                }
-            } else {
-                return searchText.includes(term);
-            }
+            return searchText.includes(term);
         });
     }
 
-    private performReplace() {
-        if (!this.replaceTerm) return;
-
-        let replaceCount = 0;
-        this.filteredRows.forEach(row => {
-            const jsonString = JSON.stringify(row);
-            let newString: string;
-            
-            if (this.useReplaceRegex) {
-                try {
-                    const regex = new RegExp(this.searchTerm, 'gi');
-                    newString = jsonString.replace(regex, this.replaceTerm);
-                } catch (error) {
-                    newString = jsonString.replace(new RegExp(this.searchTerm.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'gi'), this.replaceTerm);
-                }
-            } else {
-                newString = jsonString.replace(new RegExp(this.searchTerm.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'gi'), this.replaceTerm);
-            }
-            
-            if (newString !== jsonString) {
-                try {
-                    const newRow = JSON.parse(newString);
-                    Object.assign(row, newRow);
-                    replaceCount++;
-                } catch (error) {
-                    console.error('Error parsing replaced JSON:', error);
-                }
-            }
-        });
-
-        if (replaceCount > 0) {
-            vscode.window.showInformationMessage(`Replaced ${replaceCount} occurrences`);
-        }
-    }
 
     private toggleColumnVisibility(columnPath: string) {
         const column = this.columns.find(col => col.path === columnPath);
@@ -605,80 +533,6 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
         return Array.from(allKeys).sort();
     }
 
-    private async askAI(question: string, model: string = 'gpt-4o-mini') {
-        const config = vscode.workspace.getConfiguration('jsonl-gazelle');
-        const apiKey = config.get<string>('openaiApiKey');
-        
-        if (!apiKey) {
-            vscode.window.showErrorMessage('OpenAI API key not configured. Please set it in settings.');
-            return;
-        }
-
-        try {
-            // Process each row with the AI question
-            for (let i = 0; i < this.filteredRows.length; i++) {
-                const row = this.filteredRows[i];
-                
-                // Replace field references in the question with actual values
-                let processedQuestion = question;
-                const fieldMatches = question.match(/\{\{([^}]+)\}\}/g);
-                
-                if (fieldMatches) {
-                    fieldMatches.forEach(match => {
-                        const fieldPath = match.slice(2, -2); // Remove {{ and }}
-                        const value = this.getNestedValue(row, fieldPath);
-                        const stringValue = value !== undefined ? String(value) : '';
-                        processedQuestion = processedQuestion.replace(match, stringValue);
-                    });
-                }
-                
-                // Call OpenAI API
-                const response = await fetch('https://api.openai.com/v1/chat/completions', {
-                    method: 'POST',
-                    headers: {
-                        'Authorization': `Bearer ${apiKey}`,
-                        'Content-Type': 'application/json',
-                    },
-                    body: JSON.stringify({
-                        model: model,
-                        messages: [
-                            {
-                                role: 'user',
-                                content: processedQuestion
-                            }
-                        ],
-                        max_tokens: 1000,
-                        temperature: 0.7
-                    })
-                });
-
-                if (!response.ok) {
-                    throw new Error(`OpenAI API error: ${response.status} ${response.statusText}`);
-                }
-
-                const data = await response.json();
-                const aiResponse = data.choices[0]?.message?.content || 'No response';
-                
-                // Store the AI response in the row
-                row._aiResponse = aiResponse;
-            }
-            
-            // Update columns to include AI response if not already present
-            const hasAiColumn = this.columns.some(col => col.path === '_aiResponse');
-            if (!hasAiColumn) {
-                this.columns.push({
-                    path: '_aiResponse',
-                    displayName: 'AI Response',
-                    visible: true
-                });
-            }
-            
-        } catch (error) {
-            console.error('Error calling OpenAI API:', error);
-            const errorMessage = error instanceof Error ? error.message : String(error);
-            vscode.window.showErrorMessage('Failed to get AI response: ' + errorMessage);
-        }
-    }
 
     private getNestedValue(obj: any, path: string): any {
         const parts = path.split('.');
@@ -750,55 +604,6 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
     }
 
 
-    private performCSVExport() {
-        if (this.filteredRows.length === 0) {
-            vscode.window.showInformationMessage('No data to export');
-            return;
-        }
-
-        const csvContent = this.generateCSV();
-        const fileName = `export_${new Date().toISOString().slice(0, 19).replace(/:/g, '-')}.csv`;
-        
-        vscode.workspace.fs.writeFile(
-            vscode.Uri.file(path.join(this.context.extensionPath, fileName)),
-            Buffer.from(csvContent, 'utf8')
-        ).then(() => {
-            vscode.window.showInformationMessage(`CSV exported to ${fileName}`);
-        });
-    }
-    
-    private performJSONLExport() {
-        if (this.filteredRows.length === 0) {
-            vscode.window.showInformationMessage('No data to export');
-            return;
-        }
-
-        const jsonlContent = this.filteredRows.map(row => JSON.stringify(row)).join('\n');
-        const fileName = `export_${new Date().toISOString().slice(0, 19).replace(/:/g, '-')}.jsonl`;
-        
-        vscode.workspace.fs.writeFile(
-            vscode.Uri.file(path.join(this.context.extensionPath, fileName)),
-            Buffer.from(jsonlContent, 'utf8')
-        ).then(() => {
-            vscode.window.showInformationMessage(`JSONL exported to ${fileName}`);
-        });
-    }
-
-    private generateCSV(): string {
-        const headers = ['AI Response', ...this.columns.filter(col => col.visible).map(col => col.displayName)];
-        const rows = this.filteredRows.map(row => {
-            const values = [
-                row._aiResponse || '',
-                ...this.columns.filter(col => col.visible).map(col => {
-                    const value = this.getNestedValue(row, col.path);
-                    return value !== undefined ? JSON.stringify(value) : '';
-                })
-            ];
-            return values.map(val => `"${val.toString().replace(/"/g, '""')}"`).join(',');
-        });
-
-        return [headers.map(h => `"${h}"`).join(','), ...rows].join('\n');
-    }
 
     private updateWebview(webviewPanel: vscode.WebviewPanel) {
         try {
@@ -809,7 +614,6 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
                     columns: this.columns,
                     isIndexing: this.isIndexing,
                     searchTerm: this.searchTerm,
-                    useRegex: this.useRegex,
                     parsedLines: this.parsedLines,
                     rawContent: this.rawContent,
                     errorCount: this.errorCount,
@@ -840,13 +644,27 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>JSONL Gazelle</title>
     <style>
-        body {
+        html, body {
             font-family: var(--vscode-font-family);
             font-size: var(--vscode-font-size);
             color: var(--vscode-foreground);
             background-color: var(--vscode-editor-background);
             margin: 0;
             padding: 0;
+            height: 100%;
+            overflow: hidden;
+        }
+        
+        body {
+            display: flex;
+            flex-direction: column;
+        }
+        
+        .main-content {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
         }
         
         .header {
@@ -1011,13 +829,12 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
         }
         
         .table-container {
+            flex: 1;
             overflow: auto;
-            height: calc(100vh - 60px);
         }
         
         .view-container {
-            width: 100%;
-            height: 100%;
+            flex: 1;
             overflow: auto;
         }
         
@@ -1180,72 +997,7 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
             background-color: var(--vscode-menu-selectionBackground);
         }
         
-        .settings-panel {
-            position: absolute;
-            top: 50px;
-            right: 10px;
-            background-color: var(--vscode-editor-background);
-            border: 1px solid var(--vscode-panel-border);
-            border-radius: 5px;
-            padding: 15px;
-            box-shadow: 0 4px 8px rgba(0, 0, 0, 0.2);
-            z-index: 1000;
-            display: none;
-            min-width: 300px;
-        }
         
-        .settings-panel.expanded {
-            display: block;
-        }
-        
-        .settings-section {
-            margin-bottom: 15px;
-        }
-        
-        .settings-section:last-child {
-            display: flex;
-            gap: 10px;
-            justify-content: flex-start;
-            align-items: center;
-        }
-        
-        .settings-label {
-            display: block;
-            margin-bottom: 5px;
-            font-weight: bold;
-            color: var(--vscode-foreground);
-        }
-        
-        .settings-input {
-            width: 100%;
-            padding: 8px;
-            border: 1px solid var(--vscode-input-border);
-            background-color: var(--vscode-input-background);
-            color: var(--vscode-input-foreground);
-            border-radius: 3px;
-            box-sizing: border-box;
-        }
-        
-        .settings-description {
-            font-size: 12px;
-            color: var(--vscode-descriptionForeground);
-            margin-top: 5px;
-        }
-        
-        .ai-response-column {
-            background-color: var(--vscode-textBlockQuote-background);
-            border-left: 3px solid var(--vscode-textBlockQuote-border);
-            font-style: italic;
-            max-width: 300px;
-            white-space: normal;
-            word-wrap: break-word;
-        }
-        
-        .ai-response-header {
-            background-color: var(--vscode-textBlockQuote-background);
-            color: var(--vscode-textBlockQuote-foreground);
-            font-weight: bold;
-        }
         
         .view-controls {
             display: flex;
@@ -1255,6 +1007,7 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
             padding: 10px;
             background-color: var(--vscode-editor-background);
             border-bottom: 1px solid var(--vscode-panel-border);
+            flex-shrink: 0;
         }
         
         .segmented-control {
@@ -1312,7 +1065,7 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
             overflow: auto;
             background-color: var(--vscode-editor-background);
             padding: 0;
-            height: calc(100vh - 120px);
+            flex: 1;
         }
         
         .raw-textarea {
@@ -1576,69 +1329,43 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
         </div>
         <div class="search-container" id="searchContainer">
             <span class="search-icon"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"></circle><path d="m21 21-4.35-4.35"></path></svg></span>
-            <input type="text" class="search-input" id="searchInput" placeholder="Search...">
-            <div class="checkbox-container">
-                <input type="checkbox" class="checkbox" id="regexCheckbox">
-                <label for="regexCheckbox">Regex</label>
-            </div>
-        </div>
-        
-        <div class="replace-container" id="replaceContainer">
-            <button class="replace-toggle" id="replaceToggle">Replace</button>
-            <input type="text" class="replace-input" id="replaceInput" placeholder="Replace with...">
-            <div class="checkbox-container replace-checkbox" style="display: none;">
-                <input type="checkbox" class="checkbox" id="replaceRegexCheckbox">
-                <label for="replaceRegexCheckbox">Regex</label>
-            </div>
-            <button class="button" id="replaceButton" style="display: none;">Replace</button>
-        </div>
-        
-        <div class="ai-container" id="aiContainer">
-            <input type="text" class="ai-input" id="aiInput" placeholder="Prompt to run against lines...">
-            <button class="button" id="askAIButton"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="5,3 19,12 5,21"></polygon></svg> AI</button>
-        </div>
-        
-        <button class="button settings-button" id="settingsButton" title="Settings"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"></path></svg></button>
-        <div class="export-container" id="exportContainer">
-            <button class="button export-button" id="exportButton" title="Export"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7,10 12,15 17,10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg></button>
-            <div class="export-dropdown" id="exportDropdown" style="display: none;">
-                <div class="export-dropdown-item" data-action="csv">Export CSV</div>
-                <div class="export-dropdown-item" data-action="jsonl">Export JSONL</div>
-            </div>
+            <input type="text" class="search-input" id="searchInput" placeholder="Find...">
         </div>
     </div>
     
-    <div class="view-controls">
-        <div class="segmented-control">
-            <button class="active" data-view="table"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect><line x1="9" y1="3" x2="9" y2="21"></line><line x1="15" y1="3" x2="15" y2="21"></line><line x1="3" y1="9" x2="21" y2="9"></line><line x1="3" y1="15" x2="21" y2="15"></line></svg> Table</button>
-            <button data-view="json"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="4" y1="6" x2="20" y2="6"></line><line x1="8" y1="10" x2="20" y2="10"></line><line x1="12" y1="14" x2="20" y2="14"></line><line x1="8" y1="18" x2="20" y2="18"></line></svg> Pretty Print</button>
-            <button data-view="raw"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"></path><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"></path></svg> Raw</button>
-            <div class="error-count" id="errorCount" style="display: none;"></div>
-        </div>
-    </div>
-    
-    <div class="table-container" id="tableContainer">
-        <div class="indexing" id="indexingDiv">
-            <img src="${gazelleIconUri}" class="indexing-icon" alt="Indexing...">
-            <div>Indexing JSONL file...</div>
-        </div>
-        <!-- Table View Container -->
-        <div class="view-container" id="tableViewContainer">
-            <table id="dataTable" style="display: none;">
-                <thead id="tableHead"></thead>
-                <tbody id="tableBody"></tbody>
-            </table>
+    <div class="main-content">
+        <div class="view-controls">
+            <div class="segmented-control">
+                <button class="active" data-view="table"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect><line x1="9" y1="3" x2="9" y2="21"></line><line x1="15" y1="3" x2="15" y2="21"></line><line x1="3" y1="9" x2="21" y2="9"></line><line x1="3" y1="15" x2="21" y2="15"></line></svg> Table</button>
+                <button data-view="json"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="4" y1="6" x2="20" y2="6"></line><line x1="8" y1="10" x2="20" y2="10"></line><line x1="12" y1="14" x2="20" y2="14"></line><line x1="8" y1="18" x2="20" y2="18"></line></svg> Pretty Print</button>
+                <button data-view="raw"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"></path><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"></path></svg> Raw</button>
+                <div class="error-count" id="errorCount" style="display: none;"></div>
+            </div>
         </div>
         
-        <!-- Pretty Print View Container -->
-        <div class="view-container" id="jsonViewContainer" style="display: none;">
-            <div class="json-view" id="jsonView"></div>
-        </div>
-        
-        <!-- Raw View Container -->
-        <div class="view-container" id="rawViewContainer" style="display: none;">
-            <div class="raw-view" id="rawView">
-                <textarea class="raw-textarea" id="rawTextarea"></textarea>
+        <div class="table-container" id="tableContainer">
+            <div class="indexing" id="indexingDiv">
+                <img src="${gazelleIconUri}" class="indexing-icon" alt="Indexing...">
+                <div>Indexing JSONL file...</div>
+            </div>
+            <!-- Table View Container -->
+            <div class="view-container" id="tableViewContainer">
+                <table id="dataTable" style="display: none;">
+                    <thead id="tableHead"></thead>
+                    <tbody id="tableBody"></tbody>
+                </table>
+            </div>
+            
+            <!-- Pretty Print View Container -->
+            <div class="view-container" id="jsonViewContainer" style="display: none;">
+                <div class="json-view" id="jsonView"></div>
+            </div>
+            
+            <!-- Raw View Container -->
+            <div class="view-container" id="rawViewContainer" style="display: none;">
+                <div class="raw-view" id="rawView">
+                    <textarea class="raw-textarea" id="rawTextarea"></textarea>
+                </div>
             </div>
         </div>
     </div>
@@ -1649,27 +1376,6 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
         <div class="context-menu-item" data-action="remove">Remove Column</div>
     </div>
     
-    <div class="settings-panel" id="settingsPanel">
-        <div class="settings-section">
-            <label class="settings-label" for="openaiKeyInput">OpenAI API Key</label>
-            <input type="password" class="settings-input" id="openaiKeyInput" placeholder="sk-...">
-            <div class="settings-description">Your OpenAI API key for AI features. This is stored locally and not shared.</div>
-        </div>
-        <div class="settings-section">
-            <label class="settings-label" for="modelSelect">AI Model</label>
-            <select class="settings-input" id="modelSelect">
-                <option value="gpt-4o-mini">GPT-4o Mini</option>
-                <option value="gpt-4o">GPT-4o</option>
-                <option value="gpt-4-turbo">GPT-4 Turbo</option>
-                <option value="gpt-3.5-turbo">GPT-3.5 Turbo</option>
-            </select>
-            <div class="settings-description">Select the AI model to use for processing prompts.</div>
-        </div>
-        <div class="settings-section">
-            <button class="button" id="saveSettingsButton">Save Settings</button>
-            <button class="button" id="closeSettingsButton">Close</button>
-        </div>
-    </div>
 
     <script>
         const vscode = acquireVsCodeApi();
@@ -1683,7 +1389,6 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
             columns: [],
             isIndexing: true,
             searchTerm: '',
-            useRegex: false,
             parsedLines: [],
             rawContent: '',
             errorCount: 0
@@ -1751,15 +1456,6 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
         
         // Event listeners
         document.getElementById('searchInput').addEventListener('input', handleSearch);
-        document.getElementById('regexCheckbox').addEventListener('change', handleSearch);
-        document.getElementById('replaceToggle').addEventListener('click', toggleReplace);
-        document.getElementById('replaceButton').addEventListener('click', handleReplace);
-        document.getElementById('askAIButton').addEventListener('click', handleAskAI);
-        document.getElementById('settingsButton').addEventListener('click', toggleSettings);
-        document.getElementById('saveSettingsButton').addEventListener('click', saveSettings);
-        document.getElementById('closeSettingsButton').addEventListener('click', closeSettings);
-        document.getElementById('exportButton').addEventListener('click', toggleExportDropdown);
-        document.getElementById('exportDropdown').addEventListener('click', handleExportAction);
         document.getElementById('logo').addEventListener('click', () => {
             vscode.postMessage({
                 type: 'openUrl',
@@ -1773,24 +1469,22 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
         
         function handleSearch() {
             const searchTerm = document.getElementById('searchInput').value;
-            const useRegex = document.getElementById('regexCheckbox').checked;
             
             // Perform search in current view with highlighting
             if (currentView === 'table') {
                 vscode.postMessage({
                     type: 'search',
-                    searchTerm: searchTerm,
-                    useRegex: useRegex
+                    searchTerm: searchTerm
                 });
-                highlightTableResults(searchTerm, useRegex);
+                highlightTableResults(searchTerm);
             } else if (currentView === 'json') {
-                highlightJsonResults(searchTerm, useRegex);
+                highlightJsonResults(searchTerm);
             } else if (currentView === 'raw') {
-                highlightRawResults(searchTerm, useRegex);
+                highlightRawResults(searchTerm);
             }
         }
         
-        function highlightTableResults(searchTerm, useRegex) {
+        function highlightTableResults(searchTerm) {
             document.querySelectorAll('.table-highlight').forEach(el => {
                 el.classList.remove('table-highlight');
             });
@@ -1800,9 +1494,7 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
             const cells = document.querySelectorAll('#dataTable td');
             cells.forEach(cell => {
                 const text = cell.textContent;
-                const matches = useRegex ? 
-                    new RegExp(searchTerm, 'i').test(text) : 
-                    text.toLowerCase().includes(searchTerm.toLowerCase());
+                const matches = text.toLowerCase().includes(searchTerm.toLowerCase());
                 
                 if (matches) {
                     cell.classList.add('table-highlight');
@@ -1810,7 +1502,7 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
             });
         }
         
-        function highlightJsonResults(searchTerm, useRegex) {
+        function highlightJsonResults(searchTerm) {
             const jsonLines = document.querySelectorAll('.json-content-editable');
             jsonLines.forEach(textarea => {
                 // For textareas, we can't easily highlight within the text
@@ -1819,17 +1511,7 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
                 let hasMatch = false;
                 
                 if (searchTerm) {
-                    try {
-                        if (useRegex) {
-                            const regex = new RegExp(searchTerm, 'gi');
-                            hasMatch = regex.test(content);
-                        } else {
-                            hasMatch = content.toLowerCase().includes(searchTerm.toLowerCase());
-                        }
-                    } catch (e) {
-                        // Invalid regex, treat as literal search
-                        hasMatch = content.toLowerCase().includes(searchTerm.toLowerCase());
-                    }
+                    hasMatch = content.toLowerCase().includes(searchTerm.toLowerCase());
                 }
                 
                 if (hasMatch) {
@@ -1843,7 +1525,7 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
         }
         
         
-        function highlightRawResults(searchTerm, useRegex) {
+        function highlightRawResults(searchTerm) {
             const rawTextarea = document.getElementById('rawTextarea');
             if (!rawTextarea) return;
             
@@ -1853,17 +1535,7 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
             let hasMatch = false;
             
             if (searchTerm) {
-                try {
-                    if (useRegex) {
-                        const regex = new RegExp(searchTerm, 'gi');
-                        hasMatch = regex.test(content);
-                    } else {
-                        hasMatch = content.toLowerCase().includes(searchTerm.toLowerCase());
-                    }
-                } catch (e) {
-                    // Invalid regex, treat as literal search
-                    hasMatch = content.toLowerCase().includes(searchTerm.toLowerCase());
-                }
+                hasMatch = content.toLowerCase().includes(searchTerm.toLowerCase());
             }
             
             if (hasMatch) {
@@ -1875,129 +1547,10 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
             }
         }
         
-        function toggleReplace() {
-            const replaceInput = document.getElementById('replaceInput');
-            const replaceCheckbox = document.querySelector('.replace-checkbox');
-            const replaceButton = document.getElementById('replaceButton');
-            const replaceToggle = document.getElementById('replaceToggle');
-            
-            if (replaceInput.classList.contains('expanded')) {
-                replaceInput.classList.remove('expanded');
-                replaceCheckbox.style.display = 'none';
-                replaceButton.style.display = 'none';
-                replaceToggle.textContent = 'Replace';
-            } else {
-                replaceInput.classList.add('expanded');
-                replaceCheckbox.style.display = 'flex';
-                replaceButton.style.display = 'block';
-                replaceToggle.textContent = 'Hide';
-                replaceInput.focus();
-            }
-        }
         
-        function handleReplace() {
-            const searchTerm = document.getElementById('searchInput').value;
-            const replaceTerm = document.getElementById('replaceInput').value;
-            const useReplaceRegex = document.getElementById('replaceRegexCheckbox').checked;
-            
-            vscode.postMessage({
-                type: 'replace',
-                searchTerm: searchTerm,
-                replaceTerm: replaceTerm,
-                useReplaceRegex: useReplaceRegex
-            });
-        }
         
-        function handleAskAI() {
-            const question = document.getElementById('aiInput').value;
-            const model = document.getElementById('modelSelect').value;
-            
-            if (!question.trim()) {
-                alert('Please enter a question');
-                return;
-            }
-            
-            vscode.postMessage({
-                type: 'askAI',
-                question: question,
-                model: model
-            });
-        }
         
-        function toggleSettings() {
-            const settingsPanel = document.getElementById('settingsPanel');
-            if (settingsPanel.classList.contains('expanded')) {
-                closeSettings();
-            } else {
-                openSettings();
-            }
-        }
         
-        function openSettings() {
-            const settingsPanel = document.getElementById('settingsPanel');
-            settingsPanel.classList.add('expanded');
-            
-            // Load current API key
-            vscode.postMessage({
-                type: 'getApiKey'
-            });
-        }
-        
-        function closeSettings() {
-            const settingsPanel = document.getElementById('settingsPanel');
-            settingsPanel.classList.remove('expanded');
-        }
-        
-        function saveSettings() {
-            const apiKey = document.getElementById('openaiKeyInput').value;
-            vscode.postMessage({
-                type: 'saveApiKey',
-                apiKey: apiKey
-            });
-            closeSettings();
-        }
-        
-        function exportCSV() {
-            vscode.postMessage({
-                type: 'exportCSV'
-            });
-        }
-        
-        function toggleExportDropdown() {
-            const dropdown = document.getElementById('exportDropdown');
-            const isVisible = dropdown.style.display === 'block';
-            dropdown.style.display = isVisible ? 'none' : 'block';
-            
-            // Hide on click outside
-            if (!isVisible) {
-                setTimeout(() => {
-                    document.addEventListener('click', function hideExportDropdown() {
-                        dropdown.style.display = 'none';
-                        document.removeEventListener('click', hideExportDropdown);
-                    });
-                }, 0);
-            }
-        }
-        
-        function handleExportAction(event) {
-            const action = event.target.dataset.action;
-            if (!action) return;
-            
-            switch (action) {
-                case 'csv':
-                    vscode.postMessage({
-                        type: 'exportCSV'
-                    });
-                    break;
-                case 'jsonl':
-                    vscode.postMessage({
-                        type: 'exportJSONL'
-                    });
-                    break;
-            }
-            
-            document.getElementById('exportDropdown').style.display = 'none';
-        }
         
         function showContextMenu(event, columnPath) {
             event.preventDefault();
@@ -2053,20 +1606,12 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
             const loadingState = document.getElementById('loadingState');
             const loadingProgress = document.getElementById('loadingProgress');
             const searchContainer = document.getElementById('searchContainer');
-            const replaceContainer = document.getElementById('replaceContainer');
-            const aiContainer = document.getElementById('aiContainer');
-            const settingsButton = document.getElementById('settingsButton');
-            const exportContainer = document.getElementById('exportContainer');
             
             if (data.isIndexing) {
                 // Initial loading - show spinning logo and hide controls
                 logo.classList.add('loading');
                 loadingState.style.display = 'flex';
                 searchContainer.classList.add('controls-hidden');
-                replaceContainer.classList.add('controls-hidden');
-                aiContainer.classList.add('controls-hidden');
-                settingsButton.classList.add('controls-hidden');
-                exportContainer.classList.add('controls-hidden');
                 
                 // Don't show the indexing div since we have header loading state
                 document.getElementById('indexingDiv').style.display = 'none';
@@ -2079,10 +1624,6 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
                 logo.classList.add('loading');
                 loadingState.style.display = 'flex';
                 searchContainer.classList.add('controls-hidden');
-                replaceContainer.classList.add('controls-hidden');
-                aiContainer.classList.add('controls-hidden');
-                settingsButton.classList.add('controls-hidden');
-                exportContainer.classList.add('controls-hidden');
                 
                 const memoryInfo = data.loadingProgress.memoryOptimized ? 
                     \`<div style="font-size: 11px; color: var(--vscode-warningForeground); margin-top: 5px;">
@@ -2102,10 +1643,6 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
                 logo.classList.remove('loading');
                 loadingState.style.display = 'none';
                 searchContainer.classList.remove('controls-hidden');
-                replaceContainer.classList.remove('controls-hidden');
-                aiContainer.classList.remove('controls-hidden');
-                settingsButton.classList.remove('controls-hidden');
-                exportContainer.classList.remove('controls-hidden');
                 
                 document.getElementById('indexingDiv').style.display = 'none';
                 document.getElementById('dataTable').style.display = 'table';
@@ -2113,7 +1650,6 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
             
             // Update search inputs
             document.getElementById('searchInput').value = data.searchTerm;
-            document.getElementById('regexCheckbox').checked = data.useRegex;
             
             // Update error count
             const errorCountElement = document.getElementById('errorCount');
@@ -2138,23 +1674,6 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
             
             // Create header
             const headerRow = document.createElement('tr');
-            
-            // AI Response column - only show if there are AI responses
-            const hasAiResponses = data.rows.some(row => row._aiResponse && row._aiResponse.trim() !== '');
-            if (hasAiResponses) {
-                const aiHeader = document.createElement('th');
-                aiHeader.textContent = 'AI Response';
-                aiHeader.className = 'ai-response-header';
-                
-                // Add resize handle for AI Response column
-                const aiResizeHandle = document.createElement('div');
-                aiResizeHandle.className = 'resize-handle';
-                aiResizeHandle.addEventListener('mousedown', (e) => startResize(e, aiHeader, '_aiResponse'));
-                aiHeader.appendChild(aiResizeHandle);
-                
-                aiHeader.addEventListener('contextmenu', (e) => showContextMenu(e, '_aiResponse'));
-                headerRow.appendChild(aiHeader);
-            }
             
             // Data columns
             data.columns.forEach(column => {
@@ -2244,16 +1763,6 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
             // Create rows
             data.rows.forEach((row, rowIndex) => {
                 const tr = document.createElement('tr');
-                
-                // AI Response cell - only show if there are AI responses
-                if (hasAiResponses) {
-                    const aiCell = document.createElement('td');
-                    aiCell.textContent = row._aiResponse || '';
-                    aiCell.title = aiCell.textContent;
-                    aiCell.className = 'ai-response-column';
-                    aiCell.addEventListener('dblclick', (e) => editCell(e, aiCell, rowIndex, '_aiResponse'));
-                    tr.appendChild(aiCell);
-                }
                 
                 // Data cells
                 data.columns.forEach(column => {
@@ -2396,9 +1905,6 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
             switch (message.type) {
                 case 'update':
                     updateTable(message.data);
-                    break;
-                case 'apiKeyLoaded':
-                    document.getElementById('openaiKeyInput').value = message.apiKey;
                     break;
             }
         });
@@ -2716,21 +2222,6 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
 </html>`;
     }
 
-    private sendApiKey(webviewPanel: vscode.WebviewPanel) {
-        const config = vscode.workspace.getConfiguration('jsonl-gazelle');
-        const apiKey = config.get<string>('openaiApiKey') || '';
-        
-        webviewPanel.webview.postMessage({
-            type: 'apiKeyLoaded',
-            apiKey: apiKey
-        });
-    }
-    
-    private saveApiKey(apiKey: string) {
-        const config = vscode.workspace.getConfiguration('jsonl-gazelle');
-        config.update('openaiApiKey', apiKey, vscode.ConfigurationTarget.Global);
-        vscode.window.showInformationMessage('OpenAI API key saved successfully');
-    }
     
     private updateCell(rowIndex: number, columnPath: string, value: string) {
         if (rowIndex >= 0 && rowIndex < this.filteredRows.length) {
@@ -2794,7 +2285,4 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
         }
     }
 
-    public openSettings() {
-        vscode.commands.executeCommand('workbench.action.openSettings', 'jsonl-gazelle');
-    }
 }

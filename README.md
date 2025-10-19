@@ -22,10 +22,7 @@ A fast JSONL viewer / editor for VS Code with advanced features including table 
 - **Smart Column Detection**: Maps common subpaths of each JSONL row into table columns automatically
 - **Column Expansion**: Click ▼ to expand objects/arrays into separate columns (e.g., `user.name`, `orders[0]`)
 - **Column Management**: Right-click context menu on table headers to add, remove, or toggle column visibility
-- **Advanced Search**: Fast search with regex support and magnifying glass icon (🔍)
-- **Find & Replace**: Replace functionality with and without regex patterns
-- **AI Integration**: OpenAI API integration with field reference syntax `{{fieldname.subname[0]}}`
-- **CSV Export**: Export tables to CSV with all JSON paths flattened
+- **Advanced Search**: Fast search with magnifying glass icon (🔍)
 - **Indexing State**: Shows Gazelle icon during file loading/indexing
 - **View Switching Animation**: Spinning gazelle animation during tab/view switching delays
 - **Memory Efficient**: All processing happens in memory without creating separate files
@@ -34,12 +31,9 @@ A fast JSONL viewer / editor for VS Code with advanced features including table 
 
 1. Open any `.jsonl` file in VS Code
 2. The file will automatically open in the JSONL Gazelle viewer
-3. Use the search bar to filter rows (with regex support)
+3. Use the search bar to filter rows
 4. Click ▼ buttons in column headers or double-click expandable cells to expand objects/arrays into separate columns
 5. Right-click column headers to manage columns
-6. Set your OpenAI API key in settings for AI features
-7. Ask questions about specific rows using the AI input field
-8. Export filtered results to CSV
 
 ## Column Expansion
 
@@ -51,20 +45,9 @@ JSONL Gazelle automatically detects when columns contain objects or arrays and p
 - **Collapse**: Click ▶ to collapse expanded columns back to the original column
 - **Nested Expansion**: Sub-columns can be further expanded if they contain objects/arrays
 
-## AI Field References
-
-Use the following syntax in your AI questions to reference specific fields:
-
-- `{{name}}` - Reference the name field
-- `{{address.city}}` - Reference nested fields
-- `{{hobbies[0]}}` - Reference array elements
-
-Example: "What is the average age of users who live in {{address.city}}?"
-
 ## Keyboard Shortcuts
 
 - **Ctrl/Cmd + F**: Focus search input
-- **Ctrl/Cmd + R**: Focus replace input
 - **Right-click**: Open column context menu
 
 ## Installation
@@ -117,13 +100,12 @@ Can you adress the following items from the README:
 - [ ] Table view: Row deletion and addition - this should be on right-click on the row header, allow Delete, Insert above, and insert below
 - [ ] Table view: Allow hiding columns (and unhiding them) like Google Sheets - make sure there's an indicator that allows me to un-hide
 - [ ] Table view: Column deletion and addition - this should be a right-click on the column header, allow Delete, Insert before, insert after, 
-- [ ] Table view: Insert column with AI (pull up a prompt dialog, let me define how it should be filled by using {{row}} or {{row.fieldname[index]} type notation. Then parallelize the filling of the newly created column
-- [ ] Table view: Insert rows with AI- this should be a right-click on the row header, then choose how many of the previous rows to feed it (default to 10), and a prompt dialog that defaults to "generate more like these, but make it different from the lines below"
-- [ ] Detail view: delete - we should delete this view, it doesn't feel useful
-- [ ] JSONL view: rename to "Pretty Print"
-- [ ] Pretty print view: Allow edit to the lines
+- [ ] Table view: Insert column with AI (pull up a prompt dialog, let me define how it should be filled by using `{{row}}` or `{{row.fieldname[index]}}` type notation. Then parallelize the filling of the newly created column, show a proggress bar
+- [ ] Table view: Insert rows with AI: Right-click on the row header, then choose how many of the previous rows to feed it (default to 10), and a prompt dialog that defaults to "generate more like these, but make it different from the lines below"
+- [X] Pretty print view: Allow edit to the lines
 - [ ] Pretty print view: Link to view the same row in Table view, and vice versa
-- [ ] All views: Better search highlighting
+- [ ] Implement great Find / Replace / Replace All with Regex option and highlighting
+- [ ] Raw view: Line numbers and JSON syntax highlighting
 
 ## License
 
