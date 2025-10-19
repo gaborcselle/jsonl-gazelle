@@ -1,5 +1,0 @@
-{"id": 1, "name": "John Doe", "email": "john@example.com", "age": 30, "address": {"street": "123 Main St", "city": "New York", "zip": "10001"}, "hobbies": ["reading", "swimming"], "active": true}
-{"id": 2, "name": "Jane Smith", "email": "jane@example.com", "age": 25, "address": {"street": "456 Oak Ave", "city": "Los Angeles", "zip": "90210"}, "hobbies": ["cooking", "hiking"], "active": true}
-{"id": 3, "name": "Bob Johnson", "email": "bob@example.com", "age": 35, "address": {"street": "789 Pine Rd", "city": "Chicago", "zip": "60601"}, "hobbies": ["gaming", "photography"], "active": false}
-{"id": 4, "name": "Alice Brown", "email": "alice@example.com", "age": 28, "address": {"street": "321 Elm St", "city": "Boston", "zip": "02101"}, "hobbies": ["yoga", "painting"], "active": true}
-{"id": 5, "name": "Charlie Wilson", "email": "charlie@example.com", "age": 42, "address": {"street": "654 Maple Dr", "city": "Seattle", "zip": "98101"}, "hobbies": ["fishing", "gardening"], "active": true}

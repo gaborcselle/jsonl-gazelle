@@ -844,6 +844,11 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
             z-index: 10;
         }
         
+        #rawViewContainer {
+            height: 100%;
+            overflow: auto;
+        }
+        
         table {
             width: 100%;
             border-collapse: collapse;
@@ -1060,13 +1065,13 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
         }
         
         .raw-view {
+            height: 100%;
             font-family: var(--vscode-editor-font-family);
             font-size: var(--vscode-editor-font-size);
             line-height: 1.4;
             overflow: auto;
             background-color: var(--vscode-editor-background);
             padding: 0;
-            flex: 1;
         }
         
         .raw-textarea {
@@ -1941,6 +1946,11 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
         
         // View control functions
         function switchView(viewType) {
+            // Don't switch if already on the same view
+            if (currentView === viewType) {
+                return;
+            }
+            
             // Save current scroll position
             const tableContainer = document.getElementById('tableContainer');
             if (tableContainer) {
