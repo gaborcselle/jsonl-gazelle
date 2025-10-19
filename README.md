@@ -110,16 +110,17 @@ The generated file is automatically excluded from git via `.gitignore` to keep t
 
 - [X] Basic plugin working
 - [X] Improve UI for nested JSON (column expansion functionality)
-- [ ] Table view: Improving loading performance for large.jsonl (which you can generate per the instructions above)
-- [ ] Table view: Allow wrapping text
-- [ ] Table view: Row deletion and addition
-- [ ] Table view: Allow hiding columns (and unhiding them) like Google Sheets
-- [ ] Table view: Column deletion and addition
-- [ ] Table view: Synthesize new rows from existing rows via AI
-- [ ] Table view: Test and refine adding new columns by running LLM on each
-- [ ] Detail view: delete
+Can you adress the following items from the README:
+- [ ] Table view: Improving loading performance for large.jsonl (which you can generate per the instructions above) - please write a unit test for this too and benchmark it. I think we should implement a buffering approach: Only load what's visible and a bit more. Maybe keep an index of where in the original file each line starts? Keep it updated with edits
+- [ ] Table view: Allow wrapping text - add a checkbox in the top bar, and if it's checked, the line contents should wrap
+- [ ] Table view: Row deletion and addition - this should be on right-click on the row header, allow Delete, Insert above, and insert below
+- [ ] Table view: Allow hiding columns (and unhiding them) like Google Sheets - make sure there's an indicator that allows me to un-hide
+- [ ] Table view: Column deletion and addition - this should be a right-click on the column header, allow Delete, Insert before, insert after, 
+- [ ] Table view: Insert column with AI (pull up a prompt dialog, let me define how it should be filled by using {{row}} or {{row.fieldname[index]} type notation. Then parallelize the filling of the newly created column
+- [ ] Table view: Insert rows with AI- this should be a right-click on the row header, then choose how many of the previous rows to feed it (default to 10), and a prompt dialog that defaults to "generate more like these, but make it different from the lines below"
+- [ ] Detail view: delete - we should delete this view, it doesn't feel useful
 - [ ] JSONL view: rename to "Pretty Print"
-- [ ] Pretty print view: Allow edits
+- [ ] Pretty print view: Allow edit to the lines
 - [ ] Pretty print view: Link to view the same row in Table view, and vice versa
 - [ ] All views: Better search highlighting
 
