@@ -70,7 +70,7 @@ This will create `test-data/large.jsonl` with:
 The generated file is automatically excluded from git via `.gitignore` to keep the repository lightweight.
 
 ## What's next / Roadmap
-- [ ] Table view: Improving loading performance for large files such as large.jsonl (which you can generate per the instructions above). Might want to implement a buffering approach: Only load what's visible and a bit more. Maybe keep an index of where in the original file each line starts?
+- [X] Virtualize data loading
 - [ ] Table view: Allow wrapping text - add a checkbox in the top bar, and if it's checked, the line contents should wrap
 - [ ] Table view: Row deletion and addition - this should be on right-click on the row header, allow Delete, Insert above, and insert below
 - [ ] Table view: Allow hiding columns (and unhiding them) like Google Sheets - make sure there's an indicator that allows me to un-hide
