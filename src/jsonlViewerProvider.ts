@@ -77,10 +77,6 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
                                 this.filterRows();
                                 this.updateWebview(webviewPanel);
                                 break;
-                            case 'toggleColumn':
-                                this.toggleColumnVisibility(message.columnPath);
-                                this.updateWebview(webviewPanel);
-                                break;
                             case 'addColumn':
                                 this.addColumn(message.columnPath);
                                 this.updateWebview(webviewPanel);
@@ -430,13 +426,6 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
     }
 
 
-    private toggleColumnVisibility(columnPath: string) {
-        const column = this.columns.find(col => col.path === columnPath);
-        if (column) {
-            column.visible = !column.visible;
-        }
-    }
-
     private addColumn(columnPath: string) {
         if (!this.columns.find(col => col.path === columnPath)) {
             this.columns.push({
@@ -700,7 +689,7 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
             // Set flag to prevent recursive updates
             this.isUpdating = true;
 
-            const newRow: JsonRow = this.createEmptyRowFromTemplate(templateRow);
+            const newRow: JsonRow = this.createEmptyRow();
 
             // Insert the new row at the appropriate position
             const insertIndex = position === 'above' ? rowIndex : rowIndex + 1;
@@ -743,31 +732,9 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
         }
     }
 
-    private createEmptyRowFromTemplate(template: JsonRow): JsonRow {
-        const newRow: JsonRow = {};
-
-        // Copy the structure from the template row with empty/default values
-        for (const key in template) {
-            const value = template[key];
-
-            if (value === null || value === undefined) {
-                newRow[key] = null;
-            } else if (typeof value === 'string') {
-                newRow[key] = '';
-            } else if (typeof value === 'number') {
-                newRow[key] = 0;
-            } else if (typeof value === 'boolean') {
-                newRow[key] = false;
-            } else if (Array.isArray(value)) {
-                newRow[key] = [];
-            } else if (typeof value === 'object') {
-                newRow[key] = {};
-            } else {
-                newRow[key] = null;
-            }
-        }
-
-        return newRow;
+    private createEmptyRow(): JsonRow {
+        // Return an empty object - user can fill in values as needed
+        return {};
     }
 
     private updateWebview(webviewPanel: vscode.WebviewPanel) {
@@ -1583,7 +1550,6 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
     </div>
     
     <div class="context-menu" id="contextMenu">
-        <div class="context-menu-item" data-action="toggle">Toggle Column</div>
         <div class="context-menu-item" data-action="add">Add Column</div>
         <div class="context-menu-item" data-action="remove">Remove Column</div>
         <div class="context-menu-item" data-action="unstringify" id="unstringifyMenuItem" style="display: none;">Unstringify JSON in Column</div>
@@ -1849,12 +1815,6 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
             if (!action || !contextMenuColumn) return;
 
             switch (action) {
-                case 'toggle':
-                    vscode.postMessage({
-                        type: 'toggleColumn',
-                        columnPath: contextMenuColumn
-                    });
-                    break;
                 case 'add':
                     const newPath = prompt('Enter column path (e.g., user.name):');
                     if (newPath) {
@@ -2947,10 +2907,14 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
         if (typeof value !== 'string') {
             return false;
         }
-        
+
         const trimmed = value.trim();
+        // Skip empty strings
+        if (trimmed === '') {
+            return false;
+        }
         // Check if it starts with "[" or "{" and looks like JSON
-        return (trimmed.startsWith('[') || trimmed.startsWith('{')) && 
+        return (trimmed.startsWith('[') || trimmed.startsWith('{')) &&
                (trimmed.endsWith(']') || trimmed.endsWith('}'));
     }
 
