@@ -30,7 +30,7 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
     private parsedLines: ParsedLine[] = [];
     private rawContent: string = '';
     private errorCount: number = 0;
-    
+
     // Chunked loading properties
     private readonly CHUNK_SIZE = 100; // Lines per chunk
     private readonly INITIAL_CHUNKS = 3; // Load first 3 chunks immediately
@@ -42,6 +42,8 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
     private pathCounts: { [key: string]: number } = {};
     private currentWebviewPanel: vscode.WebviewPanel | null = null;
     private memoryOptimized: boolean = false;
+    private isUpdating: boolean = false; // Flag to prevent recursive updates
+    private pendingSaveTimeout: NodeJS.Timeout | null = null; // For debouncing saves
 
     constructor(private readonly context: vscode.ExtensionContext) {}
 
@@ -60,6 +62,7 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
             this.currentWebviewPanel = webviewPanel;
             webviewPanel.webview.options = {
                 enableScripts: true,
+                enableCommandUris: true
             };
 
             webviewPanel.webview.html = this.getHtmlForWebview(webviewPanel.webview);
@@ -74,10 +77,6 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
                                 this.filterRows();
                                 this.updateWebview(webviewPanel);
                                 break;
-                            case 'toggleColumn':
-                                this.toggleColumnVisibility(message.columnPath);
-                                this.updateWebview(webviewPanel);
-                                break;
                             case 'addColumn':
                                 this.addColumn(message.columnPath);
                                 this.updateWebview(webviewPanel);
@@ -87,8 +86,7 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
                                 this.updateWebview(webviewPanel);
                                 break;
                             case 'updateCell':
-                                this.updateCell(message.rowIndex, message.columnPath, message.value);
-                                this.updateWebview(webviewPanel);
+                                await this.updateCell(message.rowIndex, message.columnPath, message.value, webviewPanel, document);
                                 break;
                             case 'expandColumn':
                                 this.expandColumn(message.columnPath);
@@ -110,6 +108,12 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
                             case 'unstringifyColumn':
                                 await this.handleUnstringifyColumn(message.columnPath, webviewPanel);
                                 break;
+                            case 'deleteRow':
+                                await this.handleDeleteRow(message.rowIndex, webviewPanel, document);
+                                break;
+                            case 'insertRow':
+                                await this.handleInsertRow(message.rowIndex, message.position, webviewPanel, document);
+                                break;
                         }
                     } catch (error) {
                         console.error('Error handling webview message:', error);
@@ -120,7 +124,10 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
             // Handle document changes
             const changeDocumentSubscription = vscode.workspace.onDidChangeTextDocument(e => {
                 if (e.document.uri.toString() === document.uri.toString()) {
-                    this.loadJsonlFile(document);
+                    // Skip reload if we're currently updating the document
+                    if (!this.isUpdating) {
+                        this.loadJsonlFile(document);
+                    }
                 }
             });
 
@@ -419,13 +426,6 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
     }
 
 
-    private toggleColumnVisibility(columnPath: string) {
-        const column = this.columns.find(col => col.path === columnPath);
-        if (column) {
-            column.visible = !column.visible;
-        }
-    }
-
     private addColumn(columnPath: string) {
         if (!this.columns.find(col => col.path === columnPath)) {
             this.columns.push({
@@ -586,7 +586,7 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
         try {
             // Update the row data
             this.rows[rowIndex] = newData;
-            
+
             // Update the document content
             const jsonlContent = this.rows.map(row => JSON.stringify(row)).join('\n');
             const edit = new vscode.WorkspaceEdit();
@@ -596,7 +596,7 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
                 jsonlContent
             );
             await vscode.workspace.applyEdit(edit);
-            
+
             // Update the webview to reflect changes
             this.updateWebview(webviewPanel);
         } catch (error) {
@@ -606,14 +606,148 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
         }
     }
 
+    private async handleDeleteRow(rowIndex: number, webviewPanel: vscode.WebviewPanel, document: vscode.TextDocument) {
+        try {
+            if (rowIndex < 0 || rowIndex >= this.rows.length) {
+                vscode.window.showErrorMessage('Invalid row index');
+                return;
+            }
 
+            // Ask for confirmation
+            const confirm = await vscode.window.showWarningMessage(
+                `Are you sure you want to delete row ${rowIndex + 1}?`,
+                { modal: true },
+                'Delete'
+            );
+
+            if (confirm !== 'Delete') {
+                return;
+            }
+
+            // Set flag to prevent recursive updates
+            this.isUpdating = true;
+
+            // Remove the row from the arrays
+            this.rows.splice(rowIndex, 1);
+
+            // Also update parsedLines - need to rebuild from rows
+            this.parsedLines = this.rows.map((row, index) => ({
+                data: row,
+                lineNumber: index + 1,
+                rawLine: JSON.stringify(row)
+            }));
+
+            // Update filtered rows if search is active
+            this.filterRows();
+
+            // Update the raw content
+            this.rawContent = this.rows.map(row => JSON.stringify(row)).join('\n');
+
+            // Update the document content
+            const edit = new vscode.WorkspaceEdit();
+            edit.replace(
+                document.uri,
+                new vscode.Range(0, 0, document.lineCount, 0),
+                this.rawContent
+            );
+            await vscode.workspace.applyEdit(edit);
+
+            // Update the webview to reflect changes
+            this.updateWebview(webviewPanel);
+
+            vscode.window.showInformationMessage(`Row ${rowIndex + 1} deleted successfully`);
+        } catch (error) {
+            console.error('Error deleting row:', error);
+            const errorMessage = error instanceof Error ? error.message : String(error);
+            vscode.window.showErrorMessage('Failed to delete row: ' + errorMessage);
+        } finally {
+            setTimeout(() => {
+                this.isUpdating = false;
+            }, 100);
+        }
+    }
+
+    private async handleInsertRow(rowIndex: number, position: 'above' | 'below', webviewPanel: vscode.WebviewPanel, document: vscode.TextDocument) {
+        try {
+            if (rowIndex < 0 || rowIndex >= this.rows.length) {
+                console.error(`Invalid row index: ${rowIndex}, total rows: ${this.rows.length}`);
+                vscode.window.showErrorMessage(`Invalid row index: ${rowIndex}. Please try again.`);
+                return;
+            }
+
+            // Create a new row based on the structure of existing rows
+            // Try to copy the structure of the clicked row with empty/null values
+            const templateRow = this.rows[rowIndex];
+
+            // If template row is undefined or null, create a basic empty object
+            if (!templateRow) {
+                console.error(`Template row at index ${rowIndex} is undefined`);
+                vscode.window.showErrorMessage('Unable to create new row from template');
+                return;
+            }
+
+            // Set flag to prevent recursive updates
+            this.isUpdating = true;
+
+            const newRow: JsonRow = this.createEmptyRow();
+
+            // Insert the new row at the appropriate position
+            const insertIndex = position === 'above' ? rowIndex : rowIndex + 1;
+            this.rows.splice(insertIndex, 0, newRow);
+
+            // Rebuild parsedLines from rows
+            this.parsedLines = this.rows.map((row, index) => ({
+                data: row,
+                lineNumber: index + 1,
+                rawLine: JSON.stringify(row)
+            }));
+
+            // Update filtered rows if search is active
+            this.filterRows();
+
+            // Update the raw content
+            this.rawContent = this.rows.map(row => JSON.stringify(row)).join('\n');
+
+            // Update the document content
+            const edit = new vscode.WorkspaceEdit();
+            edit.replace(
+                document.uri,
+                new vscode.Range(0, 0, document.lineCount, 0),
+                this.rawContent
+            );
+            await vscode.workspace.applyEdit(edit);
+
+            // Update the webview to reflect changes
+            this.updateWebview(webviewPanel);
+
+            vscode.window.showInformationMessage(`New row inserted ${position} row ${rowIndex + 1}`);
+        } catch (error) {
+            console.error('Error inserting row:', error);
+            const errorMessage = error instanceof Error ? error.message : String(error);
+            vscode.window.showErrorMessage('Failed to insert row: ' + errorMessage);
+        } finally {
+            setTimeout(() => {
+                this.isUpdating = false;
+            }, 100);
+        }
+    }
+
+    private createEmptyRow(): JsonRow {
+        // Return an empty object - user can fill in values as needed
+        return {};
+    }
 
     private updateWebview(webviewPanel: vscode.WebviewPanel) {
         try {
+            // Create a mapping of filtered rows to their actual indices
+            const rowIndices = this.filteredRows.map(row => this.rows.indexOf(row));
+
             webviewPanel.webview.postMessage({
                 type: 'update',
                 data: {
                     rows: this.filteredRows,
+                    rowIndices: rowIndices, // Map filtered rows to actual indices
+                    allRows: this.rows, // Send the full array for index mapping
                     columns: this.columns,
                     isIndexing: this.isIndexing,
                     searchTerm: this.searchTerm,
@@ -899,7 +1033,27 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
         th:hover {
             background-color: var(--vscode-list-hoverBackground);
         }
-        
+
+        .row-header {
+            background-color: var(--vscode-editor-background);
+            color: var(--vscode-descriptionForeground);
+            padding: 6px 8px;
+            text-align: center;
+            border-bottom: 1px solid var(--vscode-panel-border);
+            border-right: 2px solid var(--vscode-panel-border);
+            cursor: context-menu;
+            user-select: none;
+            min-width: 40px;
+            font-weight: normal;
+            position: sticky;
+            left: 0;
+            z-index: 5;
+        }
+
+        .row-header:hover {
+            background-color: var(--vscode-list-hoverBackground);
+        }
+
         td {
             padding: 6px 8px;
             border-bottom: 1px solid var(--vscode-panel-border);
@@ -963,15 +1117,46 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
             z-index: 1000;
             display: none;
         }
-        
+
         .context-menu-item {
             padding: 5px 15px;
             cursor: pointer;
             color: var(--vscode-menu-foreground);
         }
-        
+
         .context-menu-item:hover {
             background-color: var(--vscode-menu-selectionBackground);
+        }
+
+        .row-context-menu {
+            position: absolute;
+            background-color: var(--vscode-menu-background);
+            border: 1px solid var(--vscode-menu-border);
+            border-radius: 3px;
+            padding: 5px 0;
+            z-index: 1000;
+            display: none;
+            min-width: 150px;
+        }
+
+        .row-context-menu-item {
+            padding: 8px 15px;
+            cursor: pointer;
+            color: var(--vscode-menu-foreground);
+            font-size: 12px;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .row-context-menu-item:hover {
+            background-color: var(--vscode-menu-selectionBackground);
+        }
+
+        .row-context-menu-separator {
+            height: 1px;
+            background-color: var(--vscode-menu-separatorBackground);
+            margin: 5px 0;
         }
         
         .settings-button {
@@ -1365,12 +1550,26 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
     </div>
     
     <div class="context-menu" id="contextMenu">
-        <div class="context-menu-item" data-action="toggle">Toggle Column</div>
         <div class="context-menu-item" data-action="add">Add Column</div>
         <div class="context-menu-item" data-action="remove">Remove Column</div>
         <div class="context-menu-item" data-action="unstringify" id="unstringifyMenuItem" style="display: none;">Unstringify JSON in Column</div>
     </div>
-    
+
+    <div class="row-context-menu" id="rowContextMenu">
+        <div class="row-context-menu-item" data-action="insertAbove">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg>
+            Insert Above
+        </div>
+        <div class="row-context-menu-item" data-action="insertBelow">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg>
+            Insert Below
+        </div>
+        <div class="row-context-menu-separator"></div>
+        <div class="row-context-menu-item" data-action="deleteRow" style="color: var(--vscode-errorForeground);">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path></svg>
+            Delete Row
+        </div>
+    </div>
 
     <script>
         const vscode = acquireVsCodeApi();
@@ -1381,6 +1580,8 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
         
         let currentData = {
             rows: [],
+            rowIndices: [], // Mapping of filtered row index to actual row index
+            allRows: [], // Full array for index mapping
             columns: [],
             isIndexing: true,
             searchTerm: '',
@@ -1390,6 +1591,7 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
         };
         
         let contextMenuColumn = null;
+        let contextMenuRow = null;
         let currentView = 'table';
         let isResizing = false;
         let resizeData = null;
@@ -1480,6 +1682,7 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
         // Context menu
         document.addEventListener('click', hideContextMenu);
         document.getElementById('contextMenu').addEventListener('click', handleContextMenu);
+        document.getElementById('rowContextMenu').addEventListener('click', handleRowContextMenu);
         
         function handleSearch() {
             const searchTerm = document.getElementById('searchInput').value;
@@ -1602,20 +1805,16 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
         
         function hideContextMenu() {
             document.getElementById('contextMenu').style.display = 'none';
+            document.getElementById('rowContextMenu').style.display = 'none';
             contextMenuColumn = null;
+            contextMenuRow = null;
         }
         
         function handleContextMenu(event) {
             const action = event.target.dataset.action;
             if (!action || !contextMenuColumn) return;
-            
+
             switch (action) {
-                case 'toggle':
-                    vscode.postMessage({
-                        type: 'toggleColumn',
-                        columnPath: contextMenuColumn
-                    });
-                    break;
                 case 'add':
                     const newPath = prompt('Enter column path (e.g., user.name):');
                     if (newPath) {
@@ -1638,7 +1837,50 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
                     });
                     break;
             }
-            
+
+            hideContextMenu();
+        }
+
+        function showRowContextMenu(event, rowIndex) {
+            event.preventDefault();
+            contextMenuRow = rowIndex;
+
+            const menu = document.getElementById('rowContextMenu');
+            menu.style.display = 'block';
+            menu.style.left = event.pageX + 'px';
+            menu.style.top = event.pageY + 'px';
+        }
+
+        function handleRowContextMenu(event) {
+            const action = event.target.closest('.row-context-menu-item')?.dataset.action;
+            if (!action || contextMenuRow === null) return;
+
+            console.log('handleRowContextMenu - action:', action, 'rowIndex:', contextMenuRow, 'total rows:', currentData.allRows.length);
+
+            switch (action) {
+                case 'insertAbove':
+                    vscode.postMessage({
+                        type: 'insertRow',
+                        rowIndex: contextMenuRow,
+                        position: 'above'
+                    });
+                    break;
+                case 'insertBelow':
+                    vscode.postMessage({
+                        type: 'insertRow',
+                        rowIndex: contextMenuRow,
+                        position: 'below'
+                    });
+                    break;
+                case 'deleteRow':
+                    // Send delete request directly - backend will handle confirmation if needed
+                    vscode.postMessage({
+                        type: 'deleteRow',
+                        rowIndex: contextMenuRow
+                    });
+                    break;
+            }
+
             hideContextMenu();
         }
         
@@ -1746,6 +1988,15 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
             thead.innerHTML = '';
             const headerRow = document.createElement('tr');
 
+            // Add row number header
+            const rowNumHeader = document.createElement('th');
+            rowNumHeader.textContent = '#';
+            rowNumHeader.style.minWidth = '40px';
+            rowNumHeader.style.textAlign = 'center';
+            rowNumHeader.classList.add('row-header');
+            headerRow.appendChild(rowNumHeader);
+
+            // Data columns
             data.columns.forEach(column => {
                 if (!column.visible) {
                     return;
@@ -1831,6 +2082,21 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
         function createTableRow(row, rowIndex) {
             const tr = document.createElement('tr');
 
+            // Get the actual index from the pre-computed mapping
+            // rowIndex here is the filtered index (0-based position in currentData.rows)
+            const actualRowIndex = currentData.rowIndices[rowIndex];
+
+            // Add row number cell
+            const rowNumCell = document.createElement('td');
+            // Display sequential number (1, 2, 3...) for visual ordering
+            rowNumCell.textContent = (rowIndex + 1).toString();
+            rowNumCell.classList.add('row-header');
+            // Tooltip shows the actual row number in the file
+            rowNumCell.title = 'Row ' + (actualRowIndex + 1) + ' in file';
+            rowNumCell.addEventListener('contextmenu', (e) => showRowContextMenu(e, actualRowIndex));
+            tr.appendChild(rowNumCell);
+
+            // Data cells
             currentData.columns.forEach(column => {
                 if (!column.visible) {
                     return;
@@ -1848,7 +2114,7 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
                     td.classList.add('expandable-cell');
                     td.textContent = valueStr;
                     td.title = valueStr;
-                    td.addEventListener('click', (e) => expandCell(e, td, rowIndex, column.path));
+                    td.addEventListener('click', (e) => expandCell(e, td, actualRowIndex, column.path));
                     td.addEventListener('dblclick', (e) => {
                         e.preventDefault();
                         e.stopPropagation();
@@ -1860,7 +2126,7 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
                 } else {
                     td.textContent = valueStr;
                     td.title = valueStr;
-                    td.addEventListener('dblclick', (e) => editCell(e, td, rowIndex, column.path));
+                    td.addEventListener('dblclick', (e) => editCell(e, td, actualRowIndex, column.path));
                 }
 
                 tr.appendChild(td);
@@ -2480,8 +2746,8 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
         function expandCell(event, td, rowIndex, columnPath) {
             event.preventDefault();
             event.stopPropagation();
-            
-            const value = getNestedValue(currentData.rows[rowIndex], columnPath);
+
+            const value = getNestedValue(currentData.allRows[rowIndex], columnPath);
             if (typeof value !== 'object' || value === null) return;
             
             // Create expanded content
@@ -2531,35 +2797,79 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
     }
 
     
-    private updateCell(rowIndex: number, columnPath: string, value: string) {
-        if (rowIndex >= 0 && rowIndex < this.filteredRows.length) {
-            const row = this.filteredRows[rowIndex];
-            
-            try {
-                // Try to parse as JSON first
-                let parsedValue: any = value;
-                if (value.trim() !== '') {
-                    try {
-                        parsedValue = JSON.parse(value);
-                    } catch {
-                        // If not valid JSON, treat as string
-                        parsedValue = value;
-                    }
-                } else {
-                    parsedValue = null;
+    private async updateCell(rowIndex: number, columnPath: string, value: string, webviewPanel: vscode.WebviewPanel, document: vscode.TextDocument) {
+        if (rowIndex < 0 || rowIndex >= this.rows.length) {
+            console.error(`Invalid row index for updateCell: ${rowIndex}, total rows: ${this.rows.length}`);
+            return;
+        }
+
+        try {
+            // Try to parse as JSON first
+            let parsedValue: any = value;
+            if (value.trim() !== '') {
+                try {
+                    parsedValue = JSON.parse(value);
+                } catch {
+                    // If not valid JSON, treat as string
+                    parsedValue = value;
                 }
-                
-                this.setNestedValue(row, columnPath, parsedValue);
-                
-                // Also update the original row in the main array
-                const originalIndex = this.rows.findIndex(r => r === row);
-                if (originalIndex >= 0) {
-                    this.setNestedValue(this.rows[originalIndex], columnPath, parsedValue);
-                }
-            } catch (error) {
-                console.error('Error updating cell:', error);
-                vscode.window.showErrorMessage('Failed to update cell value');
+            } else {
+                parsedValue = null;
             }
+
+            // Update the row in the main array
+            this.setNestedValue(this.rows[rowIndex], columnPath, parsedValue);
+
+            // Rebuild parsedLines
+            this.parsedLines = this.rows.map((row, index) => ({
+                data: row,
+                lineNumber: index + 1,
+                rawLine: JSON.stringify(row)
+            }));
+
+            // Update filtered rows
+            this.filterRows();
+
+            // Update raw content
+            this.rawContent = this.rows.map(row => JSON.stringify(row)).join('\n');
+
+            // Debounce the save operation
+            if (this.pendingSaveTimeout) {
+                clearTimeout(this.pendingSaveTimeout);
+            }
+
+            this.pendingSaveTimeout = setTimeout(async () => {
+                try {
+                    this.isUpdating = true;
+
+                    const fullRange = new vscode.Range(
+                        document.positionAt(0),
+                        document.positionAt(document.getText().length)
+                    );
+
+                    const edit = new vscode.WorkspaceEdit();
+                    edit.replace(document.uri, fullRange, this.rawContent);
+
+                    const success = await vscode.workspace.applyEdit(edit);
+
+                    if (!success) {
+                        console.error('Failed to apply workspace edit');
+                        vscode.window.showErrorMessage('Failed to save changes');
+                    }
+                } catch (saveError) {
+                    console.error('Error saving cell update:', saveError);
+                } finally {
+                    setTimeout(() => {
+                        this.isUpdating = false;
+                    }, 200);
+                }
+            }, 300); // Debounce for 300ms
+
+            // Update the webview immediately to show the change
+            this.updateWebview(webviewPanel);
+        } catch (error) {
+            console.error('Error updating cell:', error);
+            vscode.window.showErrorMessage('Failed to update cell value');
         }
     }
     
@@ -2597,10 +2907,14 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
         if (typeof value !== 'string') {
             return false;
         }
-        
+
         const trimmed = value.trim();
+        // Skip empty strings
+        if (trimmed === '') {
+            return false;
+        }
         // Check if it starts with "[" or "{" and looks like JSON
-        return (trimmed.startsWith('[') || trimmed.startsWith('{')) && 
+        return (trimmed.startsWith('[') || trimmed.startsWith('{')) &&
                (trimmed.endsWith(']') || trimmed.endsWith('}'));
     }
 
