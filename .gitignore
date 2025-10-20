@@ -3,3 +3,4 @@ node_modules
 *.vsix
 test-data/large.jsonl
 screenshot-*.png
+.DS_Store
