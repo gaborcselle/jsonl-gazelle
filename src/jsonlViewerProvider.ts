@@ -1409,6 +1409,19 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
             json: 0,
             raw: 0
         };
+        const TABLE_CHUNK_SIZE = 200;
+        const JSON_CHUNK_SIZE = 30;
+        const tableRenderState = {
+            renderedRows: 0,
+            totalRows: 0,
+            isRendering: false
+        };
+        const jsonRenderState = {
+            renderedRows: 0,
+            totalRows: 0,
+            isRendering: false
+        };
+        let containerScrollListenerAttached = false;
         
         // Column resize functionality
         function startResize(e, th, columnPath) {
@@ -1670,147 +1683,424 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
                 errorCountElement.style.display = 'none';
             }
             
-            // Build table
+            // Build table header and defer row rendering via virtualization
+            buildTableHeader(data);
+            renderTableChunk(true);
+
+            // Reset JSON rendering state when data updates
+            if (currentView === 'json') {
+                renderJsonChunk(true);
+                requestAnimationFrame(() => restoreScrollPosition('json'));
+            } else {
+                resetJsonRenderingState();
+            }
+
+            attachScrollListener();
+
+            if (currentView === 'table') {
+                requestAnimationFrame(ensureTableViewportFilled);
+            } else if (currentView === 'json') {
+                requestAnimationFrame(ensureJsonViewportFilled);
+            }
+        }
+
+        function buildTableHeader(data) {
             const thead = document.getElementById('tableHead');
-            const tbody = document.getElementById('tableBody');
-            
-            // Clear existing content
+            if (!thead) return;
+
             thead.innerHTML = '';
-            tbody.innerHTML = '';
-            
-            // Create header
             const headerRow = document.createElement('tr');
-            
-            // Data columns
+
             data.columns.forEach(column => {
-                if (column.visible) {
-                    const th = document.createElement('th');
-                    
-                    // Create header content wrapper
-                    const headerContent = document.createElement('span');
-                    headerContent.style.display = 'inline-block';
-                    headerContent.style.whiteSpace = 'nowrap';
-                    headerContent.style.overflow = 'hidden';
-                    headerContent.style.textOverflow = 'ellipsis';
-                    headerContent.style.maxWidth = '100%';
-                    
-                    // Add collapse button for subcolumns (columns with parentPath)
-                    if (column.parentPath) {
-                        const collapseButton = document.createElement('button');
-                        collapseButton.className = 'collapse-button';
-                        collapseButton.innerHTML = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="15,18 9,12 15,6"></polyline></svg>';
-                        collapseButton.title = 'Collapse to ' + column.parentPath;
-                        collapseButton.addEventListener('click', (e) => {
+                if (!column.visible) {
+                    return;
+                }
+
+                const th = document.createElement('th');
+                const headerContent = document.createElement('span');
+                headerContent.style.display = 'inline-block';
+                headerContent.style.whiteSpace = 'nowrap';
+                headerContent.style.overflow = 'hidden';
+                headerContent.style.textOverflow = 'ellipsis';
+                headerContent.style.maxWidth = '100%';
+
+                if (column.parentPath) {
+                    const collapseButton = document.createElement('button');
+                    collapseButton.className = 'collapse-button';
+                    collapseButton.innerHTML = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="15,18 9,12 15,6"></polyline></svg>';
+                    collapseButton.title = 'Collapse to ' + column.parentPath;
+                    collapseButton.addEventListener('click', (e) => {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        vscode.postMessage({
+                            type: 'collapseColumn',
+                            columnPath: column.parentPath
+                        });
+                    });
+                    headerContent.appendChild(collapseButton);
+                    headerContent.appendChild(document.createTextNode(column.displayName));
+
+                    const value = getSampleValue(data.rows, column.path);
+                    if (typeof value === 'object' && value !== null && !column.isExpanded) {
+                        const expandButton = document.createElement('button');
+                        expandButton.className = 'expand-button';
+                        expandButton.innerHTML = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6,9 12,15 18,9"></polyline></svg>';
+                        expandButton.title = 'Expand';
+                        expandButton.addEventListener('click', (e) => {
                             e.preventDefault();
                             e.stopPropagation();
                             vscode.postMessage({
-                                type: 'collapseColumn',
-                                columnPath: column.parentPath
+                                type: 'expandColumn',
+                                columnPath: column.path
                             });
                         });
-                        headerContent.appendChild(collapseButton);
-                        headerContent.appendChild(document.createTextNode(column.displayName));
-                        
-                        // Check if this subcolumn can be further expanded
-                        const value = getSampleValue(data.rows, column.path);
-                        if (typeof value === 'object' && value !== null && !column.isExpanded) {
-                            const expandButton = document.createElement('button');
-                            expandButton.className = 'expand-button';
-                            expandButton.innerHTML = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6,9 12,15 18,9"></polyline></svg>';
-                            expandButton.title = 'Expand';
-                            expandButton.addEventListener('click', (e) => {
-                                e.preventDefault();
-                                e.stopPropagation();
-                                vscode.postMessage({
-                                    type: 'expandColumn',
-                                    columnPath: column.path
-                                });
-                            });
-                            headerContent.appendChild(expandButton);
-                        }
-                        
-                        th.classList.add('subcolumn-header');
-                    } else {
-                        headerContent.appendChild(document.createTextNode(column.displayName));
-                        // Add expand button for parent columns (objects and arrays)
-                        const value = getSampleValue(data.rows, column.path);
-                        if (typeof value === 'object' && value !== null) {
-                            const button = document.createElement('button');
-                            button.className = 'expand-button';
-                            button.innerHTML = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6,9 12,15 18,9"></polyline></svg>';
-                            button.title = 'Expand';
-                            button.addEventListener('click', (e) => {
-                                e.preventDefault();
-                                e.stopPropagation();
-                                vscode.postMessage({
-                                    type: 'expandColumn',
-                                    columnPath: column.path
-                                });
-                            });
-                            headerContent.appendChild(button);
-                        }
+                        headerContent.appendChild(expandButton);
                     }
-                    
-                    th.appendChild(headerContent);
-                    
-                    // Add resize handle
-                    const resizeHandle = document.createElement('div');
-                    resizeHandle.className = 'resize-handle';
-                    resizeHandle.addEventListener('mousedown', (e) => startResize(e, th, column.path));
-                    th.appendChild(resizeHandle);
-                    
-                    th.addEventListener('contextmenu', (e) => showContextMenu(e, column.path));
-                    headerRow.appendChild(th);
-                }
-            });
-            
-            thead.appendChild(headerRow);
-            
-            // Create rows
-            data.rows.forEach((row, rowIndex) => {
-                const tr = document.createElement('tr');
-                
-                // Data cells
-                data.columns.forEach(column => {
-                    if (column.visible) {
-                        const td = document.createElement('td');
-                        const value = getNestedValue(row, column.path);
-                        const valueStr = value !== undefined ? JSON.stringify(value) : '';
-                        
-                        // Add styling for expanded columns
-                        if (column.isExpanded) {
-                            td.classList.add('expanded-column');
-                        }
-                        
-                        // Add expand functionality for objects and arrays (only if not expanded)
-                        if (typeof value === 'object' && value !== null && !column.isExpanded) {
-                            td.classList.add('expandable-cell');
-                            td.textContent = valueStr;
-                            td.title = valueStr;
-                            td.addEventListener('click', (e) => expandCell(e, td, rowIndex, column.path));
-                            // Double-click on expandable cells should expand the column
-                            td.addEventListener('dblclick', (e) => {
-                                e.preventDefault();
-                                e.stopPropagation();
-                                vscode.postMessage({
-                                    type: 'expandColumn',
-                                    columnPath: column.path
-                                });
+
+                    th.classList.add('subcolumn-header');
+                } else {
+                    headerContent.appendChild(document.createTextNode(column.displayName));
+
+                    const value = getSampleValue(data.rows, column.path);
+                    if (typeof value === 'object' && value !== null) {
+                        const button = document.createElement('button');
+                        button.className = 'expand-button';
+                        button.innerHTML = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6,9 12,15 18,9"></polyline></svg>';
+                        button.title = 'Expand';
+                        button.addEventListener('click', (e) => {
+                            e.preventDefault();
+                            e.stopPropagation();
+                            vscode.postMessage({
+                                type: 'expandColumn',
+                                columnPath: column.path
                             });
-                        } else {
-                            td.textContent = valueStr;
-                            td.title = valueStr;
-                            td.addEventListener('dblclick', (e) => editCell(e, td, rowIndex, column.path));
-                        }
-                        
-                        tr.appendChild(td);
+                        });
+                        headerContent.appendChild(button);
+                    }
+                }
+
+                th.appendChild(headerContent);
+
+                const resizeHandle = document.createElement('div');
+                resizeHandle.className = 'resize-handle';
+                resizeHandle.addEventListener('mousedown', (e) => startResize(e, th, column.path));
+                th.appendChild(resizeHandle);
+
+                th.addEventListener('contextmenu', (e) => showContextMenu(e, column.path));
+                headerRow.appendChild(th);
+            });
+
+            thead.appendChild(headerRow);
+        }
+
+        function createTableRow(row, rowIndex) {
+            const tr = document.createElement('tr');
+
+            currentData.columns.forEach(column => {
+                if (!column.visible) {
+                    return;
+                }
+
+                const td = document.createElement('td');
+                const value = getNestedValue(row, column.path);
+                const valueStr = value !== undefined ? JSON.stringify(value) : '';
+
+                if (column.isExpanded) {
+                    td.classList.add('expanded-column');
+                }
+
+                if (typeof value === 'object' && value !== null && !column.isExpanded) {
+                    td.classList.add('expandable-cell');
+                    td.textContent = valueStr;
+                    td.title = valueStr;
+                    td.addEventListener('click', (e) => expandCell(e, td, rowIndex, column.path));
+                    td.addEventListener('dblclick', (e) => {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        vscode.postMessage({
+                            type: 'expandColumn',
+                            columnPath: column.path
+                        });
+                    });
+                } else {
+                    td.textContent = valueStr;
+                    td.title = valueStr;
+                    td.addEventListener('dblclick', (e) => editCell(e, td, rowIndex, column.path));
+                }
+
+                tr.appendChild(td);
+            });
+
+            return tr;
+        }
+
+        function renderTableChunk(reset = false) {
+            const tbody = document.getElementById('tableBody');
+            if (!tbody) return;
+
+            if (reset) {
+                tableRenderState.totalRows = currentData.rows.length;
+                tableRenderState.renderedRows = 0;
+                tableRenderState.isRendering = false;
+                tbody.innerHTML = '';
+            }
+
+            if (tableRenderState.isRendering) return;
+            if (tableRenderState.renderedRows >= tableRenderState.totalRows) return;
+
+            tableRenderState.isRendering = true;
+
+            const fragment = document.createDocumentFragment();
+            const start = tableRenderState.renderedRows;
+            const end = Math.min(start + TABLE_CHUNK_SIZE, currentData.rows.length);
+
+            for (let rowIndex = start; rowIndex < end; rowIndex++) {
+                fragment.appendChild(createTableRow(currentData.rows[rowIndex], rowIndex));
+            }
+
+            tbody.appendChild(fragment);
+            tableRenderState.renderedRows = end;
+            tableRenderState.isRendering = false;
+
+            const searchTerm = document.getElementById('searchInput').value;
+            if (searchTerm) {
+                highlightTableResults(searchTerm);
+            }
+
+            if (currentView === 'table') {
+                requestAnimationFrame(ensureTableViewportFilled);
+            }
+        }
+
+        function ensureTableViewportFilled() {
+            if (currentView !== 'table') return;
+
+            const tableContainer = document.getElementById('tableContainer');
+            if (!tableContainer) return;
+
+            if (tableRenderState.renderedRows >= tableRenderState.totalRows) return;
+
+            if (tableContainer.scrollHeight <= tableContainer.clientHeight + 50) {
+                renderTableChunk();
+            }
+        }
+
+        function ensureTableScrollCapacity(targetScroll) {
+            const tableContainer = document.getElementById('tableContainer');
+            if (!tableContainer) return;
+
+            if (tableRenderState.renderedRows >= tableRenderState.totalRows) return;
+
+            const maxScroll = tableContainer.scrollHeight - tableContainer.clientHeight;
+            if (targetScroll > maxScroll - 50) {
+                renderTableChunk();
+                requestAnimationFrame(() => ensureTableScrollCapacity(targetScroll));
+            }
+        }
+
+        function resetJsonRenderingState() {
+            jsonRenderState.totalRows = currentData.rows.length;
+            jsonRenderState.renderedRows = 0;
+            jsonRenderState.isRendering = false;
+
+            if (currentView !== 'json') {
+                const jsonView = document.getElementById('jsonView');
+                if (jsonView) {
+                    jsonView.innerHTML = '';
+                }
+            }
+        }
+
+        function renderJsonChunk(reset = false) {
+            const jsonView = document.getElementById('jsonView');
+            if (!jsonView) return;
+
+            if (reset) {
+                jsonRenderState.totalRows = currentData.rows.length;
+                jsonRenderState.renderedRows = 0;
+                jsonRenderState.isRendering = false;
+                jsonView.innerHTML = '';
+            }
+
+            if (jsonRenderState.isRendering) return;
+            if (jsonRenderState.renderedRows >= jsonRenderState.totalRows) return;
+
+            jsonRenderState.isRendering = true;
+
+            const fragment = document.createDocumentFragment();
+            const start = jsonRenderState.renderedRows;
+            const end = Math.min(start + JSON_CHUNK_SIZE, currentData.rows.length);
+
+            for (let index = start; index < end; index++) {
+                const row = currentData.rows[index];
+                const lineDiv = document.createElement('div');
+                lineDiv.className = 'json-line';
+
+                const lineNumber = document.createElement('div');
+                lineNumber.className = 'line-number';
+                lineNumber.textContent = (index + 1).toString().padStart(4, ' ');
+
+                const jsonContent = document.createElement('textarea');
+                jsonContent.className = 'json-content-editable';
+                const jsonString = JSON.stringify(row, null, 2);
+                jsonContent.value = jsonString;
+                jsonContent.setAttribute('data-row-index', index);
+
+                function autoResize(textarea) {
+                    textarea.style.height = 'auto';
+                    textarea.style.height = textarea.scrollHeight + 'px';
+                }
+
+                setTimeout(() => {
+                    autoResize(jsonContent);
+                }, 10);
+
+                setTimeout(() => {
+                    if (jsonContent.scrollHeight > jsonContent.offsetHeight) {
+                        jsonContent.style.height = jsonContent.scrollHeight + 'px';
+                    }
+                }, 100);
+
+                jsonContent.addEventListener('input', function() {
+                    autoResize(this);
+                    try {
+                        const parsed = JSON.parse(this.value);
+                        this.classList.remove('json-error');
+                        this.classList.add('json-valid');
+                    } catch (e) {
+                        this.classList.remove('json-valid');
+                        this.classList.add('json-error');
                     }
                 });
-                
-                tbody.appendChild(tr);
-            });
+
+                jsonContent.addEventListener('blur', function() {
+                    const rowIndex = parseInt(this.getAttribute('data-row-index'));
+                    try {
+                        const parsed = JSON.parse(this.value);
+                        currentData.rows[rowIndex] = parsed;
+
+                        vscode.postMessage({
+                            type: 'documentChanged',
+                            rowIndex: rowIndex,
+                            newData: parsed
+                        });
+
+                        this.classList.remove('json-error');
+                        this.classList.add('json-valid');
+                    } catch (e) {
+                        console.error('Invalid JSON on line', rowIndex + 1, ':', e.message);
+                    }
+                });
+
+                lineDiv.addEventListener('dblclick', function(e) {
+                    e.stopPropagation();
+                });
+
+                lineDiv.addEventListener('click', function(e) {
+                    e.stopPropagation();
+                });
+
+                lineNumber.addEventListener('dblclick', function(e) {
+                    e.stopPropagation();
+                });
+
+                lineNumber.addEventListener('click', function(e) {
+                    e.stopPropagation();
+                });
+
+                jsonContent.addEventListener('dblclick', function(e) {
+                    e.stopPropagation();
+                });
+
+                jsonContent.addEventListener('click', function(e) {
+                    e.stopPropagation();
+                });
+
+                lineDiv.appendChild(lineNumber);
+                lineDiv.appendChild(jsonContent);
+                fragment.appendChild(lineDiv);
+            }
+
+            jsonView.appendChild(fragment);
+            jsonRenderState.renderedRows = end;
+            jsonRenderState.isRendering = false;
+
+            const searchTerm = document.getElementById('searchInput').value;
+            if (searchTerm) {
+                highlightJsonResults(searchTerm);
+            }
+
+            if (currentView === 'json') {
+                requestAnimationFrame(ensureJsonViewportFilled);
+            }
         }
-        
+
+        function ensureJsonViewportFilled() {
+            if (currentView !== 'json') return;
+
+            const tableContainer = document.getElementById('tableContainer');
+            if (!tableContainer) return;
+
+            if (jsonRenderState.renderedRows >= jsonRenderState.totalRows) return;
+
+            if (tableContainer.scrollHeight <= tableContainer.clientHeight + 50) {
+                renderJsonChunk();
+            }
+        }
+
+        function ensureJsonScrollCapacity(targetScroll) {
+            const tableContainer = document.getElementById('tableContainer');
+            if (!tableContainer) return;
+
+            if (jsonRenderState.renderedRows >= jsonRenderState.totalRows) return;
+
+            const maxScroll = tableContainer.scrollHeight - tableContainer.clientHeight;
+            if (targetScroll > maxScroll - 50) {
+                renderJsonChunk();
+                requestAnimationFrame(() => ensureJsonScrollCapacity(targetScroll));
+            }
+        }
+
+        function attachScrollListener() {
+            if (containerScrollListenerAttached) return;
+
+            const tableContainer = document.getElementById('tableContainer');
+            if (!tableContainer) return;
+
+            tableContainer.addEventListener('scroll', handleContainerScroll);
+            containerScrollListenerAttached = true;
+        }
+
+        function handleContainerScroll() {
+            const tableContainer = document.getElementById('tableContainer');
+            if (!tableContainer) return;
+
+            scrollPositions[currentView] = tableContainer.scrollTop;
+
+            const nearBottom = tableContainer.scrollTop + tableContainer.clientHeight >= tableContainer.scrollHeight - 200;
+            if (!nearBottom) return;
+
+            if (currentView === 'table') {
+                renderTableChunk();
+            } else if (currentView === 'json') {
+                renderJsonChunk();
+            }
+        }
+
+        function restoreScrollPosition(viewType) {
+            const tableContainer = document.getElementById('tableContainer');
+            if (!tableContainer) return;
+
+            const targetScroll = scrollPositions[viewType] || 0;
+            tableContainer.scrollTop = targetScroll;
+
+            if (viewType === 'table') {
+                ensureTableScrollCapacity(targetScroll);
+            } else if (viewType === 'json') {
+                ensureJsonScrollCapacity(targetScroll);
+            }
+        }
+
         function getNestedValue(obj, path) {
             const parts = path.split('.');
             let current = obj;
@@ -1984,6 +2274,7 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
                     // Hide loading state immediately for table view (already rendered)
                     logo.classList.remove('loading');
                     loadingState.style.display = 'none';
+                    requestAnimationFrame(ensureTableViewportFilled);
                     break;
                 case 'json':
                     document.getElementById('jsonViewContainer').style.display = 'block';
@@ -2024,128 +2315,15 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
             
             // Restore scroll position
             setTimeout(() => {
-                if (tableContainer) {
-                    tableContainer.scrollTop = scrollPositions[viewType] || 0;
-                }
+                restoreScrollPosition(viewType);
             }, 0);
         }
         
         function updateJsonView() {
-            const jsonView = document.getElementById('jsonView');
-            jsonView.innerHTML = '';
-            
-            console.log('updateJsonView called, currentData.rows length:', currentData.rows.length);
-            console.log('currentData.rows:', currentData.rows);
-            
-            currentData.rows.forEach((row, index) => {
-                const lineDiv = document.createElement('div');
-                lineDiv.className = 'json-line';
-                
-                const lineNumber = document.createElement('div');
-                lineNumber.className = 'line-number';
-                lineNumber.textContent = (index + 1).toString().padStart(4, ' ');
-                
-                const jsonContent = document.createElement('textarea');
-                jsonContent.className = 'json-content-editable';
-                const jsonString = JSON.stringify(row, null, 2);
-                jsonContent.value = jsonString;
-                jsonContent.setAttribute('data-row-index', index);
-                
-                console.log('Created textarea for row', index, 'with value:', jsonString);
-                
-                // Simple auto-resize function using basic measurement
-                function autoResize(textarea) {
-                    // Reset height to auto to get natural height
-                    textarea.style.height = 'auto';
-                    
-                    // Get the scroll height (the full content height)
-                    const scrollHeight = textarea.scrollHeight;
-                    
-                    // Set the height to the scroll height
-                    textarea.style.height = scrollHeight + 'px';
-                    
-                    console.log('Resized textarea to height:', scrollHeight);
-                }
-                
-                // Set initial height and auto-resize with delay to ensure DOM is ready
-                jsonContent.style.height = '100px'; // Set reasonable initial height
-                
-                // Use setTimeout to ensure the textarea is fully rendered
-                setTimeout(() => {
-                    autoResize(jsonContent);
-                }, 10);
-                
-                // Fallback: ensure textarea is properly sized
-                setTimeout(() => {
-                    if (jsonContent.scrollHeight > jsonContent.offsetHeight) {
-                        jsonContent.style.height = jsonContent.scrollHeight + 'px';
-                        console.log('Applied fallback resize to textarea, height:', jsonContent.scrollHeight);
-                    }
-                }, 100);
-                
-                // Add event listener for changes
-                jsonContent.addEventListener('input', function() {
-                    autoResize(this);
-                    try {
-                        const parsed = JSON.parse(this.value);
-                        this.classList.remove('json-error');
-                        this.classList.add('json-valid');
-                    } catch (e) {
-                        this.classList.remove('json-valid');
-                        this.classList.add('json-error');
-                    }
-                });
-                
-                // Add blur event to save changes
-                jsonContent.addEventListener('blur', function() {
-                    try {
-                        const parsed = JSON.parse(this.value);
-                        const rowIndex = parseInt(this.getAttribute('data-row-index'));
-                        currentData.rows[rowIndex] = parsed;
-                        
-                        // Notify VS Code that the document has changed
-                        vscode.postMessage({
-                            type: 'documentChanged',
-                            rowIndex: rowIndex,
-                            newData: parsed
-                        });
-                        
-                        this.classList.remove('json-error');
-                        this.classList.add('json-valid');
-                    } catch (e) {
-                        // Keep error styling if JSON is invalid
-                        console.error('Invalid JSON on line', rowIndex + 1, ':', e.message);
-                    }
-                });
-                
-                // Prevent event bubbling to avoid triggering table events
-                lineDiv.addEventListener('dblclick', function(e) {
-                    e.stopPropagation();
-                });
-                
-                lineDiv.addEventListener('click', function(e) {
-                    e.stopPropagation();
-                });
-                
-                lineNumber.addEventListener('dblclick', function(e) {
-                    e.stopPropagation();
-                });
-                
-                lineNumber.addEventListener('click', function(e) {
-                    e.stopPropagation();
-                });
-                
-                jsonContent.addEventListener('dblclick', function(e) {
-                    e.stopPropagation();
-                });
-                
-                jsonContent.addEventListener('click', function(e) {
-                    e.stopPropagation();
-                });
-                
-                lineDiv.appendChild(lineNumber);
-                lineDiv.appendChild(jsonContent);
-                jsonView.appendChild(lineDiv);
+            renderJsonChunk(true);
+            requestAnimationFrame(() => {
+                ensureJsonViewportFilled();
+                restoreScrollPosition('json');
             });
         }
         
