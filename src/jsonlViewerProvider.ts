@@ -107,6 +107,9 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
                             case 'rawContentChanged':
                                 await this.handleRawContentChange(message.newContent, webviewPanel, document);
                                 break;
+                            case 'unstringifyColumn':
+                                await this.handleUnstringifyColumn(message.columnPath, webviewPanel);
+                                break;
                         }
                     } catch (error) {
                         console.error('Error handling webview message:', error);
@@ -1365,6 +1368,7 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
         <div class="context-menu-item" data-action="toggle">Toggle Column</div>
         <div class="context-menu-item" data-action="add">Add Column</div>
         <div class="context-menu-item" data-action="remove">Remove Column</div>
+        <div class="context-menu-item" data-action="unstringify" id="unstringifyMenuItem" style="display: none;">Unstringify JSON in Column</div>
     </div>
     
 
@@ -1562,9 +1566,38 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
             contextMenuColumn = columnPath;
             
             const menu = document.getElementById('contextMenu');
+            const unstringifyMenuItem = document.getElementById('unstringifyMenuItem');
+            
+            // Check if this column contains stringified JSON
+            const hasStringifiedJson = checkColumnForStringifiedJson(columnPath);
+            unstringifyMenuItem.style.display = hasStringifiedJson ? 'block' : 'none';
+            
             menu.style.display = 'block';
             menu.style.left = event.pageX + 'px';
             menu.style.top = event.pageY + 'px';
+        }
+        
+        function checkColumnForStringifiedJson(columnPath) {
+            // Check a sample of rows to see if they contain stringified JSON
+            const sampleSize = Math.min(20, currentData.rows.length);
+            for (let i = 0; i < sampleSize; i++) {
+                const value = getNestedValue(currentData.rows[i], columnPath);
+                if (isStringifiedJson(value)) {
+                    return true;
+                }
+            }
+            return false;
+        }
+        
+        function isStringifiedJson(value) {
+            if (typeof value !== 'string') {
+                return false;
+            }
+            
+            const trimmed = value.trim();
+            // Check if it starts with "[" or "{" and looks like JSON
+            return (trimmed.startsWith('[') || trimmed.startsWith('{')) && 
+                   (trimmed.endsWith(']') || trimmed.endsWith('}'));
         }
         
         function hideContextMenu() {
@@ -1595,6 +1628,12 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
                 case 'remove':
                     vscode.postMessage({
                         type: 'removeColumn',
+                        columnPath: contextMenuColumn
+                    });
+                    break;
+                case 'unstringify':
+                    vscode.postMessage({
+                        type: 'unstringifyColumn',
                         columnPath: contextMenuColumn
                     });
                     break;
@@ -2551,6 +2590,127 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
             current[key][index] = value;
         } else {
             current[lastPart] = value;
+        }
+    }
+
+    private isStringifiedJson(value: any): boolean {
+        if (typeof value !== 'string') {
+            return false;
+        }
+        
+        const trimmed = value.trim();
+        // Check if it starts with "[" or "{" and looks like JSON
+        return (trimmed.startsWith('[') || trimmed.startsWith('{')) && 
+               (trimmed.endsWith(']') || trimmed.endsWith('}'));
+    }
+
+    private async handleUnstringifyColumn(columnPath: string, webviewPanel: vscode.WebviewPanel) {
+        try {
+            // First, check if the column contains stringified JSON
+            let hasStringifiedJson = false;
+            const totalRows = this.rows.length;
+            
+            // Check a sample of rows to see if they contain stringified JSON
+            const sampleSize = Math.min(100, totalRows);
+            for (let i = 0; i < sampleSize; i++) {
+                const value = this.getNestedValue(this.rows[i], columnPath);
+                if (this.isStringifiedJson(value)) {
+                    hasStringifiedJson = true;
+                    break;
+                }
+            }
+            
+            if (!hasStringifiedJson) {
+                vscode.window.showWarningMessage(`Column "${columnPath}" does not appear to contain stringified JSON data.`);
+                return;
+            }
+            
+            // Process rows in chunks to avoid blocking the UI
+            const chunkSize = 100;
+            let successCount = 0;
+            let errorCount = 0;
+            
+            if (totalRows > 1000) {
+                await vscode.window.withProgress({
+                    location: vscode.ProgressLocation.Notification,
+                    title: `Unstringifying JSON in column "${columnPath}"`,
+                    cancellable: false
+                }, async (progress) => {
+                    progress.report({ increment: 0, message: `Processing ${totalRows.toLocaleString()} rows...` });
+                    
+                    for (let i = 0; i < totalRows; i += chunkSize) {
+                        const endIndex = Math.min(i + chunkSize, totalRows);
+                        
+                        for (let j = i; j < endIndex; j++) {
+                            const row = this.rows[j];
+                            const value = this.getNestedValue(row, columnPath);
+                            
+                            if (this.isStringifiedJson(value)) {
+                                try {
+                                    const parsedValue = JSON.parse(value as string);
+                                    this.setNestedValue(row, columnPath, parsedValue);
+                                    successCount++;
+                                } catch (error) {
+                                    errorCount++;
+                                    console.warn(`Failed to parse JSON in row ${j + 1}, column "${columnPath}":`, error);
+                                }
+                            }
+                        }
+                        
+                        // Update progress for large files
+                        const progressPercent = Math.round((endIndex / totalRows) * 100);
+                        progress.report({ 
+                            increment: 0, 
+                            message: `Processed ${endIndex.toLocaleString()} of ${totalRows.toLocaleString()} rows (${progressPercent}%)` 
+                        });
+                        
+                        // Yield control to prevent blocking the UI
+                        if (i % (chunkSize * 10) === 0) {
+                            await new Promise(resolve => setTimeout(resolve, 0));
+                        }
+                    }
+                });
+            } else {
+                for (let i = 0; i < totalRows; i += chunkSize) {
+                    const endIndex = Math.min(i + chunkSize, totalRows);
+                    
+                    for (let j = i; j < endIndex; j++) {
+                        const row = this.rows[j];
+                        const value = this.getNestedValue(row, columnPath);
+                        
+                        if (this.isStringifiedJson(value)) {
+                            try {
+                                const parsedValue = JSON.parse(value as string);
+                                this.setNestedValue(row, columnPath, parsedValue);
+                                successCount++;
+                            } catch (error) {
+                                errorCount++;
+                                console.warn(`Failed to parse JSON in row ${j + 1}, column "${columnPath}":`, error);
+                            }
+                        }
+                    }
+                    
+                    // Yield control to prevent blocking the UI
+                    if (i % (chunkSize * 10) === 0) {
+                        await new Promise(resolve => setTimeout(resolve, 0));
+                    }
+                }
+            }
+            
+            // Update the webview to reflect changes
+            this.updateWebview(webviewPanel);
+            
+            // Show completion message
+            const message = `Successfully unstringified ${successCount.toLocaleString()} JSON values in column "${columnPath}".`;
+            if (errorCount > 0) {
+                vscode.window.showWarningMessage(`${message} ${errorCount.toLocaleString()} values could not be parsed.`);
+            } else {
+                vscode.window.showInformationMessage(message);
+            }
+            
+        } catch (error) {
+            console.error('Error unstringifying column:', error);
+            vscode.window.showErrorMessage(`Failed to unstringify column "${columnPath}": ${error instanceof Error ? error.message : 'Unknown error'}`);
         }
     }
 
