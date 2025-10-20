@@ -1,0 +1,5 @@
+{"id": 1, "name": "John Doe", "metadata": "{\"age\": 30, \"city\": \"New York\", \"hobbies\": [\"reading\", \"swimming\"]}", "tags": "[\"developer\", \"senior\", \"remote\"]"}
+{"id": 2, "name": "Jane Smith", "metadata": "{\"age\": 25, \"city\": \"San Francisco\", \"hobbies\": [\"hiking\", \"photography\"]}", "tags": "[\"designer\", \"junior\", \"onsite\"]"}
+{"id": 3, "name": "Bob Johnson", "metadata": "{\"age\": 35, \"city\": \"Chicago\", \"hobbies\": [\"cooking\", \"gardening\"]}", "tags": "[\"manager\", \"senior\", \"hybrid\"]"}
+{"id": 4, "name": "Alice Brown", "metadata": "{\"age\": 28, \"city\": \"Boston\", \"hobbies\": [\"yoga\", \"painting\"]}", "tags": "[\"analyst\", \"mid\", \"remote\"]"}
+{"id": 5, "name": "Charlie Wilson", "metadata": "{\"age\": 42, \"city\": \"Seattle\", \"hobbies\": [\"gaming\", \"coding\"]}", "tags": "[\"engineer\", \"lead\", \"onsite\"]"}
