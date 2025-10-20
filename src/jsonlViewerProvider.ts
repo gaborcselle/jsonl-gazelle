@@ -1074,31 +1074,16 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
             padding: 0;
         }
         
-        .raw-textarea {
-            width: 100%;
-            height: 100%;
+        .raw-content {
             font-family: var(--vscode-editor-font-family);
             font-size: var(--vscode-editor-font-size);
             line-height: 1.4;
             background-color: var(--vscode-editor-background);
             color: var(--vscode-editor-foreground);
-            border: none;
-            outline: none;
             padding: 10px;
-            resize: none;
-            box-sizing: border-box;
             white-space: pre;
-            overflow: auto;
             tab-size: 4;
-        }
-        
-        .raw-textarea:focus {
-            outline: none;
-        }
-        
-        .raw-content {
-            white-space: pre-wrap;
-            word-wrap: break-word;
+            min-height: 100%;
         }
         
         .raw-line {
@@ -1370,7 +1355,7 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
             <!-- Raw View Container -->
             <div class="view-container" id="rawViewContainer" style="display: none;">
                 <div class="raw-view" id="rawView">
-                    <textarea class="raw-textarea" id="rawTextarea"></textarea>
+                    <div class="raw-content" id="rawContent"></div>
                 </div>
             </div>
         </div>
@@ -1421,6 +1406,12 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
             totalRows: 0,
             isRendering: false
         };
+        const rawRenderState = {
+            renderedLines: 0,
+            totalLines: 0,
+            isRendering: false
+        };
+        const RAW_CHUNK_SIZE = 100;
         let containerScrollListenerAttached = false;
         
         // Column resize functionality
@@ -1545,25 +1536,20 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
         
         
         function highlightRawResults(searchTerm) {
-            const rawTextarea = document.getElementById('rawTextarea');
-            if (!rawTextarea) return;
-            
-            // For textarea, we can't easily highlight within the text
-            // Instead, we'll add a visual indicator if the content matches
-            const content = rawTextarea.value;
-            let hasMatch = false;
-            
-            if (searchTerm) {
-                hasMatch = content.toLowerCase().includes(searchTerm.toLowerCase());
-            }
-            
-            if (hasMatch) {
-                rawTextarea.style.borderColor = 'var(--vscode-editor-findMatchBackground)';
-                rawTextarea.style.boxShadow = '0 0 0 2px var(--vscode-editor-findMatchBackground)';
-            } else {
-                rawTextarea.style.borderColor = '';
-                rawTextarea.style.boxShadow = '';
-            }
+            const rawLines = document.querySelectorAll('.raw-line-content');
+            rawLines.forEach(lineContent => {
+                // Remove existing highlights
+                lineContent.classList.remove('search-highlight');
+                
+                if (!searchTerm) return;
+                
+                const text = lineContent.textContent;
+                const matches = text.toLowerCase().includes(searchTerm.toLowerCase());
+                
+                if (matches) {
+                    lineContent.classList.add('search-highlight');
+                }
+            });
         }
         
         
@@ -1695,12 +1681,22 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
                 resetJsonRenderingState();
             }
 
+            // Reset Raw rendering state when data updates
+            if (currentView === 'raw') {
+                renderRawChunk(true);
+                requestAnimationFrame(() => restoreScrollPosition('raw'));
+            } else {
+                resetRawRenderingState();
+            }
+
             attachScrollListener();
 
             if (currentView === 'table') {
                 requestAnimationFrame(ensureTableViewportFilled);
             } else if (currentView === 'json') {
                 requestAnimationFrame(ensureJsonViewportFilled);
+            } else if (currentView === 'raw') {
+                requestAnimationFrame(ensureRawViewportFilled);
             }
         }
 
@@ -2061,6 +2057,101 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
             }
         }
 
+        function resetRawRenderingState() {
+            rawRenderState.totalLines = currentData.parsedLines ? currentData.parsedLines.length : 0;
+            rawRenderState.renderedLines = 0;
+            rawRenderState.isRendering = false;
+
+            if (currentView !== 'raw') {
+                const rawContent = document.getElementById('rawContent');
+                if (rawContent) {
+                    rawContent.innerHTML = '';
+                }
+            }
+        }
+
+        function renderRawChunk(reset = false) {
+            const rawContent = document.getElementById('rawContent');
+            if (!rawContent) return;
+
+            if (reset) {
+                rawRenderState.totalLines = currentData.parsedLines ? currentData.parsedLines.length : 0;
+                rawRenderState.renderedLines = 0;
+                rawRenderState.isRendering = false;
+                rawContent.innerHTML = '';
+            }
+
+            if (rawRenderState.isRendering) return;
+            if (rawRenderState.renderedLines >= rawRenderState.totalLines) return;
+
+            rawRenderState.isRendering = true;
+
+            const fragment = document.createDocumentFragment();
+            const start = rawRenderState.renderedLines;
+            const end = Math.min(start + RAW_CHUNK_SIZE, rawRenderState.totalLines);
+
+            for (let index = start; index < end; index++) {
+                const line = currentData.parsedLines[index];
+                const lineDiv = document.createElement('div');
+                lineDiv.className = 'raw-line';
+                
+                if (line.error) {
+                    lineDiv.classList.add('error');
+                }
+
+                const lineNumber = document.createElement('div');
+                lineNumber.className = 'raw-line-number';
+                lineNumber.textContent = line.lineNumber.toString().padStart(4, ' ');
+
+                const lineContent = document.createElement('div');
+                lineContent.className = 'raw-line-content';
+                lineContent.textContent = line.rawLine || '';
+
+                lineDiv.appendChild(lineNumber);
+                lineDiv.appendChild(lineContent);
+                fragment.appendChild(lineDiv);
+            }
+
+            rawContent.appendChild(fragment);
+            rawRenderState.renderedLines = end;
+            rawRenderState.isRendering = false;
+
+            const searchTerm = document.getElementById('searchInput').value;
+            if (searchTerm) {
+                highlightRawResults(searchTerm);
+            }
+
+            if (currentView === 'raw') {
+                requestAnimationFrame(ensureRawViewportFilled);
+            }
+        }
+
+        function ensureRawViewportFilled() {
+            if (currentView !== 'raw') return;
+
+            const tableContainer = document.getElementById('tableContainer');
+            if (!tableContainer) return;
+
+            if (rawRenderState.renderedLines >= rawRenderState.totalLines) return;
+
+            if (tableContainer.scrollHeight <= tableContainer.clientHeight + 50) {
+                renderRawChunk();
+            }
+        }
+
+        function ensureRawScrollCapacity(targetScroll) {
+            const tableContainer = document.getElementById('tableContainer');
+            if (!tableContainer) return;
+
+            if (rawRenderState.renderedLines >= rawRenderState.totalLines) return;
+
+            const maxScroll = tableContainer.scrollHeight - tableContainer.clientHeight;
+            if (targetScroll > maxScroll - 50) {
+                renderRawChunk();
+                requestAnimationFrame(() => ensureRawScrollCapacity(targetScroll));
+            }
+        }
+
         function attachScrollListener() {
             if (containerScrollListenerAttached) return;
 
@@ -2084,6 +2175,8 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
                 renderTableChunk();
             } else if (currentView === 'json') {
                 renderJsonChunk();
+            } else if (currentView === 'raw') {
+                renderRawChunk();
             }
         }
 
@@ -2098,6 +2191,8 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
                 ensureTableScrollCapacity(targetScroll);
             } else if (viewType === 'json') {
                 ensureJsonScrollCapacity(targetScroll);
+            } else if (viewType === 'raw') {
+                ensureRawScrollCapacity(targetScroll);
             }
         }
 
@@ -2252,9 +2347,13 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
             // Show spinning gazelle during view switch
             const logo = document.getElementById('logo');
             const loadingState = document.getElementById('loadingState');
+            const searchContainer = document.getElementById('searchContainer');
             logo.classList.add('loading');
             loadingState.style.display = 'flex';
             loadingState.innerHTML = '<div>Switching view...</div>';
+            
+            // Hide search container during view switch
+            searchContainer.classList.add('controls-hidden');
             
             // Update segmented control
             document.querySelectorAll('.segmented-control button').forEach(button => {
@@ -2274,6 +2373,7 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
                     // Hide loading state immediately for table view (already rendered)
                     logo.classList.remove('loading');
                     loadingState.style.display = 'none';
+                    searchContainer.classList.remove('controls-hidden');
                     requestAnimationFrame(ensureTableViewportFilled);
                     break;
                 case 'json':
@@ -2297,6 +2397,7 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
                         // Hide loading state after JSON view is rendered
                         logo.classList.remove('loading');
                         loadingState.style.display = 'none';
+                        searchContainer.classList.remove('controls-hidden');
                     }, jsonDelay);
                     break;
                 case 'raw':
@@ -2309,6 +2410,7 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
                         // Hide loading state after raw view is rendered
                         logo.classList.remove('loading');
                         loadingState.style.display = 'none';
+                        searchContainer.classList.remove('controls-hidden');
                     }, rawDelay);
                     break;
             }
@@ -2328,33 +2430,11 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
         }
         
         function updateRawView() {
-            const rawTextarea = document.getElementById('rawTextarea');
-            if (!rawTextarea) return;
-            
-            // Set the raw content
-            rawTextarea.value = currentData.rawContent || '';
-            
-            // Add event listener for changes (only add once)
-            if (!rawTextarea.hasAttribute('data-listener-added')) {
-                rawTextarea.setAttribute('data-listener-added', 'true');
-                
-                rawTextarea.addEventListener('input', function() {
-                    // Notify VS Code that the document has changed
-                    vscode.postMessage({
-                        type: 'rawContentChanged',
-                        newContent: this.value
-                    });
-                });
-                
-                // Prevent event bubbling
-                rawTextarea.addEventListener('dblclick', function(e) {
-                    e.stopPropagation();
-                });
-                
-                rawTextarea.addEventListener('click', function(e) {
-                    e.stopPropagation();
-                });
-            }
+            renderRawChunk(true);
+            requestAnimationFrame(() => {
+                ensureRawViewportFilled();
+                restoreScrollPosition('raw');
+            });
         }
         
         
