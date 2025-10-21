@@ -126,8 +126,7 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
                                 await this.handleValidateClipboard(webviewPanel);
                                 break;
                             case 'reorderColumns':
-                                this.reorderColumns(message.fromIndex, message.toIndex);
-                                this.updateWebview(webviewPanel);
+                                await this.reorderColumns(message.fromIndex, message.toIndex, webviewPanel, document);
                                 break;
                             case 'toggleColumnVisibility':
                                 this.toggleColumnVisibility(message.columnPath);
@@ -695,7 +694,7 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
         this.columns = this.columns.filter(col => !col.parentPath || col.parentPath !== columnPath);
     }
 
-    private reorderColumns(fromIndex: number, toIndex: number) {
+    private async reorderColumns(fromIndex: number, toIndex: number, webviewPanel?: vscode.WebviewPanel, document?: vscode.TextDocument) {
         // Validate indices
         if (fromIndex < 0 || fromIndex >= this.columns.length || 
             toIndex < 0 || toIndex >= this.columns.length ||
@@ -708,6 +707,99 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
         
         // Insert it at the new position
         this.columns.splice(toIndex, 0, movedColumn);
+        
+        // Update position info for ALL manually added columns based on current order
+        if (document) {
+            this.columns.forEach((col, index) => {
+                if (col.isManuallyAdded) {
+                    // Find the previous non-manual column
+                    let refColumn = null;
+                    for (let i = index - 1; i >= 0; i--) {
+                        if (!this.columns[i].isManuallyAdded) {
+                            refColumn = this.columns[i].path;
+                            break;
+                        }
+                    }
+                    
+                    if (refColumn) {
+                        col.insertReferenceColumn = refColumn;
+                        col.insertPosition = 'after';
+                    } else if (index < this.columns.length - 1) {
+                        // No previous non-manual column, use next one with 'before'
+                        for (let i = index + 1; i < this.columns.length; i++) {
+                            if (!this.columns[i].isManuallyAdded) {
+                                col.insertReferenceColumn = this.columns[i].path;
+                                col.insertPosition = 'before';
+                                break;
+                            }
+                        }
+                    }
+                }
+            });
+            
+            // Save updated manual columns
+            const fileUri = document.uri.toString();
+            const manualColumns = this.columns.filter(col => col.isManuallyAdded);
+            this.manualColumnsPerFile.set(fileUri, manualColumns);
+        }
+        
+        // If document is provided, reorder keys in JSON and save
+        if (document && webviewPanel) {
+            try {
+                // Get new column order
+                const columnOrder = this.columns.map(col => col.path);
+                
+                // Reorder keys in all rows
+                this.rows.forEach(row => {
+                    if (typeof row !== 'object' || row === null) return;
+                    
+                    const newRow: JsonRow = {};
+                    
+                    // Add keys in new column order
+                    for (const colPath of columnOrder) {
+                        if (row.hasOwnProperty(colPath)) {
+                            newRow[colPath] = row[colPath];
+                        }
+                    }
+                    
+                    // Add any remaining keys not in columns (shouldn't happen, but just in case)
+                    for (const key of Object.keys(row)) {
+                        if (!newRow.hasOwnProperty(key)) {
+                            newRow[key] = row[key];
+                        }
+                    }
+                    
+                    // Replace row contents with reordered version
+                    Object.keys(row).forEach(key => delete row[key]);
+                    Object.assign(row, newRow);
+                });
+                
+                // Update parsedLines and rawContent
+                this.parsedLines = this.rows.map((row, index) => ({
+                    data: row,
+                    lineNumber: index + 1,
+                    rawLine: JSON.stringify(row)
+                }));
+                
+                this.rawContent = this.rows.map(row => JSON.stringify(row)).join('\n');
+                
+                // Save to document
+                this.isUpdating = true;
+                const edit = new vscode.WorkspaceEdit();
+                edit.replace(
+                    document.uri,
+                    new vscode.Range(0, 0, document.lineCount, 0),
+                    this.rawContent
+                );
+                await vscode.workspace.applyEdit(edit);
+                setTimeout(() => { this.isUpdating = false; }, 100);
+                
+                // Update webview after save
+                this.updateWebview(webviewPanel);
+            } catch (error) {
+                console.error('Error reordering columns:', error);
+            }
+        }
     }
 
     private toggleColumnVisibility(columnPath: string) {
