@@ -335,8 +335,13 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
                         rawLine: line
                     });
                     
-                    // Count paths for column detection
-                    this.countPaths(obj, '', this.pathCounts);
+                    // Count paths for column detection - with error handling
+                    try {
+                        this.countPaths(obj, '', this.pathCounts);
+                    } catch (countError) {
+                        console.warn(`Error counting paths for line ${globalIndex + 1}:`, countError);
+                        // Continue processing even if path counting fails
+                    }
                 } catch (error) {
                     this.errorCount++;
                     this.parsedLines.push({
@@ -411,6 +416,11 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
     }
 
     private countPaths(obj: any, prefix: string, counts: { [key: string]: number }) {
+        // Handle null/undefined objects
+        if (obj === null || obj === undefined) {
+            return;
+        }
+        
         // Handle case where the entire JSON line is just a string value
         if (typeof obj === 'string' && !prefix) {
             counts['(value)'] = (counts['(value)'] || 0) + 1;
@@ -431,20 +441,28 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
         
         // Handle objects with key-value pairs
         if (typeof obj === 'object' && obj !== null) {
-            for (const [key, value] of Object.entries(obj)) {
-                const fullPath = prefix ? `${prefix}.${key}` : key;
-                
-                if (value !== null && value !== undefined) {
-                    // Only count top-level fields initially
-                    // Subcolumns will be created through expansion
-                    if (!prefix) {
-                        counts[fullPath] = (counts[fullPath] || 0) + 1;
-                    }
+            try {
+                for (const [key, value] of Object.entries(obj)) {
+                    const fullPath = prefix ? `${prefix}.${key}` : key;
                     
-                    // Recursively count nested objects (but limit depth to avoid too many columns)
-                    if (typeof value === 'object' && !Array.isArray(value) && prefix.split('.').length < 2) {
-                        this.countPaths(value, fullPath, counts);
+                    if (value !== null && value !== undefined) {
+                        // Only count top-level fields initially
+                        // Subcolumns will be created through expansion
+                        if (!prefix) {
+                            counts[fullPath] = (counts[fullPath] || 0) + 1;
+                        }
+                        
+                        // Recursively count nested objects (but limit depth to avoid too many columns)
+                        if (typeof value === 'object' && !Array.isArray(value) && prefix.split('.').length < 2) {
+                            this.countPaths(value, fullPath, counts);
+                        }
                     }
+                }
+            } catch (error) {
+                console.warn('Error counting paths for object:', error);
+                // If there's an error with Object.entries, treat as primitive value
+                if (!prefix) {
+                    counts['(value)'] = (counts['(value)'] || 0) + 1;
                 }
             }
         }
@@ -640,6 +658,11 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
 
 
     private getNestedValue(obj: any, path: string): any {
+        // Handle null/undefined object
+        if (obj === null || obj === undefined) {
+            return undefined;
+        }
+        
         // Handle special case for primitive values with "(value)" path
         if (path === '(value)' && (typeof obj === 'string' || typeof obj === 'number' || typeof obj === 'boolean' || obj === null || Array.isArray(obj))) {
             return obj;
@@ -649,9 +672,16 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
         let current = obj;
         
         for (const part of parts) {
+            if (current === null || current === undefined) {
+                break;
+            }
+            
             if (part.includes('[') && part.includes(']')) {
                 const [key, indexStr] = part.split('[');
                 const index = parseInt(indexStr.replace(']', ''));
+                if (isNaN(index)) {
+                    return undefined;
+                }
                 current = current[key]?.[index];
             } else {
                 current = current[part];
@@ -3025,6 +3055,11 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
         function getNestedValue(obj, path) {
             if (!obj || !path) return undefined;
             
+            // Handle null/undefined object
+            if (obj === null || obj === undefined) {
+                return undefined;
+            }
+            
             // Handle special case for primitive values with "(value)" path
             if (path === '(value)' && (typeof obj === 'string' || typeof obj === 'number' || typeof obj === 'boolean' || obj === null || Array.isArray(obj))) {
                 return obj;
@@ -3034,8 +3069,8 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
             let current = obj;
             
             for (const part of parts) {
-                if (!current || typeof current !== 'object') {
-                    return undefined;
+                if (current === null || current === undefined) {
+                    break;
                 }
                 
                 if (part.includes('[') && part.includes(']')) {
