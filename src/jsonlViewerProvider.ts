@@ -413,6 +413,14 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
             return;
         }
         
+        // Detect column order from first row to preserve file order
+        const columnOrderMap = new Map<string, number>();
+        if (this.rows.length > 0 && typeof this.rows[0] === 'object') {
+            Object.keys(this.rows[0]).forEach((key, index) => {
+                columnOrderMap.set(key, index);
+            });
+        }
+        
         // Create auto-detected columns
         const newColumns: ColumnInfo[] = [];
         for (const [path, count] of Object.entries(this.pathCounts)) {
@@ -426,10 +434,22 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
             }
         }
         
-        // Sort only auto-detected columns
+        // Sort columns by their order in the first row, then alphabetically for nested
         newColumns.sort((a, b) => {
             if (a.path === '(value)') return -1;
             if (b.path === '(value)') return 1;
+            
+            const orderA = columnOrderMap.get(a.path);
+            const orderB = columnOrderMap.get(b.path);
+            
+            // Both have order from first row - use that order
+            if (orderA !== undefined && orderB !== undefined) {
+                return orderA - orderB;
+            }
+            // One has order, other doesn't - prioritize the one with order
+            if (orderA !== undefined) return -1;
+            if (orderB !== undefined) return 1;
+            // Neither has order - sort alphabetically
             return a.path.localeCompare(b.path);
         });
         
