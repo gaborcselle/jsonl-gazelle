@@ -101,13 +101,25 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
                                 await this.handleRawContentChange(message.newContent, webviewPanel, document);
                                 break;
                             case 'unstringifyColumn':
-                                await this.handleUnstringifyColumn(message.columnPath, webviewPanel);
+                                await this.handleUnstringifyColumn(message.columnPath, webviewPanel, document);
                                 break;
                             case 'deleteRow':
                                 await this.handleDeleteRow(message.rowIndex, webviewPanel, document);
                                 break;
                             case 'insertRow':
                                 await this.handleInsertRow(message.rowIndex, message.position, webviewPanel, document);
+                                break;
+                            case 'copyRow':
+                                await this.handleCopyRow(message.rowIndex, webviewPanel);
+                                break;
+                            case 'duplicateRow':
+                                await this.handleDuplicateRow(message.rowIndex, webviewPanel, document);
+                                break;
+                            case 'pasteRow':
+                                await this.handlePasteRow(message.rowIndex, message.position, webviewPanel, document);
+                                break;
+                            case 'validateClipboard':
+                                await this.handleValidateClipboard(webviewPanel);
                                 break;
                         }
                     } catch (error) {
@@ -363,6 +375,13 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
                 });
             }
         }
+        
+        // Sort columns to put "(value)" column first
+        this.columns.sort((a, b) => {
+            if (a.path === '(value)') return -1;
+            if (b.path === '(value)') return 1;
+            return a.path.localeCompare(b.path);
+        });
     }
     
     private addNewColumnsOnly() {
@@ -382,22 +401,50 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
                 });
             }
         }
+        
+        // Sort columns to put "(value)" column first
+        this.columns.sort((a, b) => {
+            if (a.path === '(value)') return -1;
+            if (b.path === '(value)') return 1;
+            return a.path.localeCompare(b.path);
+        });
     }
 
     private countPaths(obj: any, prefix: string, counts: { [key: string]: number }) {
-        for (const [key, value] of Object.entries(obj)) {
-            const fullPath = prefix ? `${prefix}.${key}` : key;
-            
-            if (value !== null && value !== undefined) {
-                // Only count top-level fields initially
-                // Subcolumns will be created through expansion
-                if (!prefix) {
-                    counts[fullPath] = (counts[fullPath] || 0) + 1;
-                }
+        // Handle case where the entire JSON line is just a string value
+        if (typeof obj === 'string' && !prefix) {
+            counts['(value)'] = (counts['(value)'] || 0) + 1;
+            return;
+        }
+        
+        // Handle case where the entire JSON line is a number, boolean, or null
+        if ((typeof obj === 'number' || typeof obj === 'boolean' || obj === null) && !prefix) {
+            counts['(value)'] = (counts['(value)'] || 0) + 1;
+            return;
+        }
+        
+        // Handle arrays at the root level
+        if (Array.isArray(obj) && !prefix) {
+            counts['(value)'] = (counts['(value)'] || 0) + 1;
+            return;
+        }
+        
+        // Handle objects with key-value pairs
+        if (typeof obj === 'object' && obj !== null) {
+            for (const [key, value] of Object.entries(obj)) {
+                const fullPath = prefix ? `${prefix}.${key}` : key;
                 
-                // Recursively count nested objects (but limit depth to avoid too many columns)
-                if (typeof value === 'object' && !Array.isArray(value) && prefix.split('.').length < 2) {
-                    this.countPaths(value, fullPath, counts);
+                if (value !== null && value !== undefined) {
+                    // Only count top-level fields initially
+                    // Subcolumns will be created through expansion
+                    if (!prefix) {
+                        counts[fullPath] = (counts[fullPath] || 0) + 1;
+                    }
+                    
+                    // Recursively count nested objects (but limit depth to avoid too many columns)
+                    if (typeof value === 'object' && !Array.isArray(value) && prefix.split('.').length < 2) {
+                        this.countPaths(value, fullPath, counts);
+                    }
                 }
             }
         }
@@ -593,6 +640,11 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
 
 
     private getNestedValue(obj: any, path: string): any {
+        // Handle special case for primitive values with "(value)" path
+        if (path === '(value)' && (typeof obj === 'string' || typeof obj === 'number' || typeof obj === 'boolean' || obj === null || Array.isArray(obj))) {
+            return obj;
+        }
+        
         const parts = path.split('.');
         let current = obj;
         
@@ -784,6 +836,171 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
             setTimeout(() => {
                 this.isUpdating = false;
             }, 100);
+        }
+    }
+
+    private async handleCopyRow(rowIndex: number, webviewPanel: vscode.WebviewPanel) {
+        try {
+            if (rowIndex < 0 || rowIndex >= this.rows.length) {
+                vscode.window.showErrorMessage('Invalid row index');
+                return;
+            }
+
+            const rowData = this.rows[rowIndex];
+            const jsonString = JSON.stringify(rowData, null, 2);
+            
+            await vscode.env.clipboard.writeText(jsonString);
+            vscode.window.showInformationMessage(`Row ${rowIndex + 1} copied to clipboard`);
+        } catch (error) {
+            console.error('Error copying row:', error);
+            const errorMessage = error instanceof Error ? error.message : String(error);
+            vscode.window.showErrorMessage('Failed to copy row: ' + errorMessage);
+        }
+    }
+
+    private async handleDuplicateRow(rowIndex: number, webviewPanel: vscode.WebviewPanel, document: vscode.TextDocument) {
+        try {
+            if (rowIndex < 0 || rowIndex >= this.rows.length) {
+                vscode.window.showErrorMessage('Invalid row index');
+                return;
+            }
+
+            // Set flag to prevent recursive updates
+            this.isUpdating = true;
+
+            // Deep clone the row to duplicate it
+            const originalRow = this.rows[rowIndex];
+            const duplicatedRow = JSON.parse(JSON.stringify(originalRow));
+
+            // Insert the duplicated row right after the original
+            this.rows.splice(rowIndex + 1, 0, duplicatedRow);
+
+            // Rebuild parsedLines from rows
+            this.parsedLines = this.rows.map((row, index) => ({
+                data: row,
+                lineNumber: index + 1,
+                rawLine: JSON.stringify(row)
+            }));
+
+            // Update filtered rows if search is active
+            this.filterRows();
+
+            // Update the raw content
+            this.rawContent = this.rows.map(row => JSON.stringify(row)).join('\n');
+
+            // Update the document content
+            const edit = new vscode.WorkspaceEdit();
+            edit.replace(
+                document.uri,
+                new vscode.Range(0, 0, document.lineCount, 0),
+                this.rawContent
+            );
+            await vscode.workspace.applyEdit(edit);
+
+            // Update the webview to reflect changes
+            this.updateWebview(webviewPanel);
+
+            vscode.window.showInformationMessage(`Row ${rowIndex + 1} duplicated`);
+        } catch (error) {
+            console.error('Error duplicating row:', error);
+            const errorMessage = error instanceof Error ? error.message : String(error);
+            vscode.window.showErrorMessage('Failed to duplicate row: ' + errorMessage);
+        } finally {
+            setTimeout(() => {
+                this.isUpdating = false;
+            }, 100);
+        }
+    }
+
+    private async handlePasteRow(rowIndex: number, position: 'above' | 'below', webviewPanel: vscode.WebviewPanel, document: vscode.TextDocument) {
+        try {
+            if (rowIndex < 0 || rowIndex >= this.rows.length) {
+                vscode.window.showErrorMessage('Invalid row index');
+                return;
+            }
+
+            // Get clipboard content
+            const clipboardText = await vscode.env.clipboard.readText();
+            
+            // Try to parse as JSON
+            let parsedData: any;
+            try {
+                parsedData = JSON.parse(clipboardText);
+            } catch (parseError) {
+                vscode.window.showErrorMessage('Clipboard does not contain valid JSON');
+                return;
+            }
+
+            // Set flag to prevent recursive updates
+            this.isUpdating = true;
+
+            // Insert the pasted row at the appropriate position
+            const insertIndex = position === 'above' ? rowIndex : rowIndex + 1;
+            this.rows.splice(insertIndex, 0, parsedData);
+
+            // Rebuild parsedLines from rows
+            this.parsedLines = this.rows.map((row, index) => ({
+                data: row,
+                lineNumber: index + 1,
+                rawLine: JSON.stringify(row)
+            }));
+
+            // Update filtered rows if search is active
+            this.filterRows();
+
+            // Update the raw content
+            this.rawContent = this.rows.map(row => JSON.stringify(row)).join('\n');
+
+            // Update the document content
+            const edit = new vscode.WorkspaceEdit();
+            edit.replace(
+                document.uri,
+                new vscode.Range(0, 0, document.lineCount, 0),
+                this.rawContent
+            );
+            await vscode.workspace.applyEdit(edit);
+
+            // Update the webview to reflect changes
+            this.updateWebview(webviewPanel);
+
+            vscode.window.showInformationMessage(`Row pasted ${position} row ${rowIndex + 1}`);
+        } catch (error) {
+            console.error('Error pasting row:', error);
+            const errorMessage = error instanceof Error ? error.message : String(error);
+            vscode.window.showErrorMessage('Failed to paste row: ' + errorMessage);
+        } finally {
+            setTimeout(() => {
+                this.isUpdating = false;
+            }, 100);
+        }
+    }
+
+    private async handleValidateClipboard(webviewPanel: vscode.WebviewPanel) {
+        try {
+            const clipboardText = await vscode.env.clipboard.readText();
+            let isValidJson = false;
+            
+            if (clipboardText) {
+                try {
+                    JSON.parse(clipboardText);
+                    isValidJson = true;
+                } catch (parseError) {
+                    isValidJson = false;
+                }
+            }
+            
+            // Send validation result back to webview
+            webviewPanel.webview.postMessage({
+                type: 'clipboardValidationResult',
+                isValidJson: isValidJson
+            });
+        } catch (error) {
+            console.error('Error validating clipboard:', error);
+            // Send false result on error
+            webviewPanel.webview.postMessage({
+                type: 'clipboardValidationResult',
+                isValidJson: false
+            });
         }
     }
 
@@ -1216,6 +1433,16 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
         .row-context-menu-item:hover {
             background-color: var(--vscode-menu-selectionBackground);
         }
+        
+        .row-context-menu-item.disabled {
+            color: var(--vscode-disabledForeground);
+            opacity: 0.6;
+            cursor: not-allowed;
+        }
+        
+        .row-context-menu-item.disabled:hover {
+            background-color: transparent;
+        }
 
         .row-context-menu-separator {
             height: 1px;
@@ -1622,6 +1849,11 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
     </div>
 
     <div class="row-context-menu" id="rowContextMenu">
+        <div class="row-context-menu-item" data-action="copyRow">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
+            Copy
+        </div>
+        <div class="row-context-menu-separator"></div>
         <div class="row-context-menu-item" data-action="insertAbove">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg>
             Insert Above
@@ -1630,10 +1862,23 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg>
             Insert Below
         </div>
+        <div class="row-context-menu-item" data-action="duplicateRow">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path><path d="M9 9h6v6"></path></svg>
+            Duplicate
+        </div>
+        <div class="row-context-menu-separator"></div>
+        <div class="row-context-menu-item" data-action="pasteAbove" id="pasteAboveMenuItem">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="8" y="2" width="8" height="4" rx="1" ry="1"></rect><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"></path></svg>
+            Paste Above
+        </div>
+        <div class="row-context-menu-item" data-action="pasteBelow" id="pasteBelowMenuItem">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="8" y="2" width="8" height="4" rx="1" ry="1"></rect><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"></path></svg>
+            Paste Below
+        </div>
         <div class="row-context-menu-separator"></div>
         <div class="row-context-menu-item" data-action="deleteRow" style="color: var(--vscode-errorForeground);">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path></svg>
-            Delete Row
+            Delete
         </div>
     </div>
 
@@ -1661,6 +1906,7 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
         let currentView = 'table';
         let isResizing = false;
         let resizeData = null;
+        let isNavigating = false; // Flag to prevent re-render during navigation
         let scrollPositions = {
             table: 0,
             json: 0,
@@ -1903,6 +2149,20 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
             contextMenuRow = rowIndex;
 
             const menu = document.getElementById('rowContextMenu');
+            const pasteAboveMenuItem = document.getElementById('pasteAboveMenuItem');
+            const pasteBelowMenuItem = document.getElementById('pasteBelowMenuItem');
+            
+            // Initially show paste options as disabled while validating
+            pasteAboveMenuItem.style.display = 'block';
+            pasteBelowMenuItem.style.display = 'block';
+            pasteAboveMenuItem.classList.add('disabled');
+            pasteBelowMenuItem.classList.add('disabled');
+            
+            // Request clipboard validation from backend
+            vscode.postMessage({
+                type: 'validateClipboard'
+            });
+
             menu.style.display = 'block';
             menu.style.left = event.pageX + 'px';
             menu.style.top = event.pageY + 'px';
@@ -1912,9 +2172,21 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
             const action = event.target.closest('.row-context-menu-item')?.dataset.action;
             if (!action || contextMenuRow === null) return;
 
+            // Check if the clicked item is disabled
+            const clickedItem = event.target.closest('.row-context-menu-item');
+            if (clickedItem && clickedItem.classList.contains('disabled')) {
+                return; // Don't execute action for disabled items
+            }
+
             console.log('handleRowContextMenu - action:', action, 'rowIndex:', contextMenuRow, 'total rows:', currentData.allRows.length);
 
             switch (action) {
+                case 'copyRow':
+                    vscode.postMessage({
+                        type: 'copyRow',
+                        rowIndex: contextMenuRow
+                    });
+                    break;
                 case 'insertAbove':
                     vscode.postMessage({
                         type: 'insertRow',
@@ -1925,6 +2197,26 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
                 case 'insertBelow':
                     vscode.postMessage({
                         type: 'insertRow',
+                        rowIndex: contextMenuRow,
+                        position: 'below'
+                    });
+                    break;
+                case 'duplicateRow':
+                    vscode.postMessage({
+                        type: 'duplicateRow',
+                        rowIndex: contextMenuRow
+                    });
+                    break;
+                case 'pasteAbove':
+                    vscode.postMessage({
+                        type: 'pasteRow',
+                        rowIndex: contextMenuRow,
+                        position: 'above'
+                    });
+                    break;
+                case 'pasteBelow':
+                    vscode.postMessage({
+                        type: 'pasteRow',
                         rowIndex: contextMenuRow,
                         position: 'below'
                     });
@@ -2396,8 +2688,144 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
                     e.stopPropagation();
                 });
 
+                // Add cursor-based navigation for JSON textareas
+                jsonContent.addEventListener('keydown', function(e) {
+                    // Only handle arrow keys when not in the middle of editing
+                    if (e.key === 'ArrowUp' || e.key === 'ArrowDown') {
+                        const cursorPosition = this.selectionStart;
+                        const textLength = this.value.length;
+                        
+                        // Check if cursor is at the beginning (for Up arrow) or end (for Down arrow)
+                        const isAtBeginning = cursorPosition === 0;
+                        const isAtEnd = cursorPosition === textLength;
+                        
+                        if ((e.key === 'ArrowUp' && isAtBeginning) || (e.key === 'ArrowDown' && isAtEnd)) {
+                            e.preventDefault();
+                            
+                            const currentRowIndex = parseInt(this.getAttribute('data-row-index'));
+                            console.log('Navigation triggered:', e.key, 'from row', currentRowIndex);
+                            
+                            // Temporarily disable navigation flag to test focus
+                            // isNavigating = true;
+                            
+                            const jsonView = document.getElementById('jsonView');
+                            
+                            let targetRowIndex;
+                            if (e.key === 'ArrowUp') {
+                                // Go to previous row
+                                targetRowIndex = Math.max(0, currentRowIndex - 1);
+                            } else {
+                                // Go to next row
+                                targetRowIndex = Math.min(currentData.rows.length - 1, currentRowIndex + 1);
+                            }
+                            
+                            console.log('Target row index:', targetRowIndex);
+                            
+                            // Find the target textarea by its data-row-index attribute
+                            const targetTextarea = jsonView.querySelector('.json-content-editable[data-row-index="' + targetRowIndex + '"]');
+                            
+                            console.log('Target textarea found:', !!targetTextarea);
+                            
+                            if (targetTextarea) {
+                                console.log('Focusing target textarea');
+                                
+                                // Try multiple focus methods to ensure it works
+                                setTimeout(() => {
+                                    // Method 1: Standard focus
+                                    targetTextarea.focus();
+                                    
+                                    // Method 2: Force focus with click simulation
+                                    targetTextarea.click();
+                                    
+                                    // Method 3: Set focus with explicit tabIndex
+                                    targetTextarea.tabIndex = 0;
+                                    targetTextarea.focus();
+                                    
+                                    // Position cursor at the beginning for Up arrow, end for Down arrow
+                                    if (e.key === 'ArrowUp') {
+                                        targetTextarea.setSelectionRange(targetTextarea.value.length, targetTextarea.value.length);
+                                    } else {
+                                        targetTextarea.setSelectionRange(0, 0);
+                                    }
+                                    
+                                    console.log('Focus completed, cursor position:', targetTextarea.selectionStart);
+                                    console.log('Active element:', document.activeElement);
+                                    console.log('Target element:', targetTextarea);
+                                    console.log('Are they the same?', document.activeElement === targetTextarea);
+                                    
+                                    // Simple scroll to make sure target is visible
+                                    targetTextarea.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+                                }, 10);
+                                
+                                // Temporarily disable navigation flag clearing
+                                // setTimeout(() => {
+                                //     isNavigating = false;
+                                // }, 100);
+                            } else {
+                                console.log('Target not found, trying fallback rendering');
+                                // Target row not rendered yet, ensure it's rendered and try again
+                                const jsonView = document.getElementById('jsonView');
+                                
+                                // Force render more chunks to ensure target row is available
+                                while (jsonRenderState.renderedRows <= targetRowIndex && jsonRenderState.renderedRows < jsonRenderState.totalRows) {
+                                    renderJsonChunk();
+                                }
+                                
+                                console.log('Rendered rows after fallback:', jsonRenderState.renderedRows);
+                                
+                                // Use requestAnimationFrame for better timing with DOM updates
+                                requestAnimationFrame(() => {
+                                    const updatedTargetTextarea = jsonView.querySelector('.json-content-editable[data-row-index="' + targetRowIndex + '"]');
+                                    
+                                    console.log('Fallback target textarea found:', !!updatedTargetTextarea);
+                                    
+                                    if (updatedTargetTextarea) {
+                                        // Temporarily disable navigation flag clearing
+                                        // isNavigating = false;
+                                        
+                                        console.log('Focusing fallback target textarea');
+                                        // Focus the textarea
+                                        updatedTargetTextarea.focus();
+                                        
+                                        // Position cursor at the beginning for Up arrow, end for Down arrow
+                                        if (e.key === 'ArrowUp') {
+                                            updatedTargetTextarea.setSelectionRange(updatedTargetTextarea.value.length, updatedTargetTextarea.value.length);
+                                        } else {
+                                            updatedTargetTextarea.setSelectionRange(0, 0);
+                                        }
+                                        
+                                        // Only scroll if the target is not visible in the viewport
+                                        const targetRect = updatedTargetTextarea.parentElement.getBoundingClientRect();
+                                        const jsonViewRect = jsonView.getBoundingClientRect();
+                                        
+                                        if (targetRect.top < jsonViewRect.top || targetRect.bottom > jsonViewRect.bottom) {
+                                            // Target is not visible, scroll it into view gently
+                                            updatedTargetTextarea.parentElement.scrollIntoView({
+                                                behavior: 'smooth',
+                                                block: 'nearest',
+                                                inline: 'nearest'
+                                            });
+                                        }
+                                    } else {
+                                        // If still not found, try one more time
+                                        // isNavigating = false;
+                                        console.warn('Target textarea not found after rendering for row', targetRowIndex);
+                                    }
+                                });
+                            }
+                        }
+                    }
+                });
+
                 jsonContent.addEventListener('click', function(e) {
                     e.stopPropagation();
+                });
+
+                // Add context menu support for Pretty Print view
+                lineDiv.addEventListener('contextmenu', function(e) {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    showRowContextMenu(e, index);
                 });
 
                 lineDiv.appendChild(lineNumber);
@@ -2495,6 +2923,13 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
                 lineContent.className = 'raw-line-content';
                 lineContent.textContent = line.rawLine || '';
 
+                // Add context menu support for Raw view
+                lineDiv.addEventListener('contextmenu', function(e) {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    showRowContextMenu(e, index);
+                });
+
                 lineDiv.appendChild(lineNumber);
                 lineDiv.appendChild(lineContent);
                 fragment.appendChild(lineDiv);
@@ -2556,6 +2991,9 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
 
             scrollPositions[currentView] = tableContainer.scrollTop;
 
+            // Don't trigger re-render during navigation
+            if (isNavigating) return;
+
             const nearBottom = tableContainer.scrollTop + tableContainer.clientHeight >= tableContainer.scrollHeight - 200;
             if (!nearBottom) return;
 
@@ -2586,6 +3024,11 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
 
         function getNestedValue(obj, path) {
             if (!obj || !path) return undefined;
+            
+            // Handle special case for primitive values with "(value)" path
+            if (path === '(value)' && (typeof obj === 'string' || typeof obj === 'number' || typeof obj === 'boolean' || obj === null || Array.isArray(obj))) {
+                return obj;
+            }
             
             const parts = path.split('.');
             let current = obj;
@@ -2696,6 +3139,17 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
             switch (message.type) {
                 case 'update':
                     updateTable(message.data);
+                    break;
+                case 'clipboardValidationResult':
+                    const pasteAboveMenuItem = document.getElementById('pasteAboveMenuItem');
+                    const pasteBelowMenuItem = document.getElementById('pasteBelowMenuItem');
+                    if (message.isValidJson) {
+                        pasteAboveMenuItem.classList.remove('disabled');
+                        pasteBelowMenuItem.classList.remove('disabled');
+                    } else {
+                        pasteAboveMenuItem.classList.add('disabled');
+                        pasteBelowMenuItem.classList.add('disabled');
+                    }
                     break;
             }
         });
@@ -3013,7 +3467,7 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
                (trimmed.endsWith(']') || trimmed.endsWith('}'));
     }
 
-    private async handleUnstringifyColumn(columnPath: string, webviewPanel: vscode.WebviewPanel) {
+    private async handleUnstringifyColumn(columnPath: string, webviewPanel: vscode.WebviewPanel, document: vscode.TextDocument) {
         try {
             // First, check if the column contains stringified JSON
             let hasStringifiedJson = false;
@@ -3104,6 +3558,24 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
                         await new Promise(resolve => setTimeout(resolve, 0));
                     }
                 }
+            }
+            
+            // Update raw content and save changes
+            this.rawContent = this.rows.map(row => JSON.stringify(row)).join('\n');
+            
+            // Save the changes to the file
+            const fullRange = new vscode.Range(
+                document.positionAt(0),
+                document.positionAt(document.getText().length)
+            );
+            
+            const edit = new vscode.WorkspaceEdit();
+            edit.replace(document.uri, fullRange, this.rawContent);
+            
+            const success = await vscode.workspace.applyEdit(edit);
+            if (!success) {
+                vscode.window.showErrorMessage('Failed to save unstringified changes to file.');
+                return;
             }
             
             // Update the webview to reflect changes

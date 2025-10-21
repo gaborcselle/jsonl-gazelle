@@ -1,0 +1,6 @@
+"hello world"
+{"name": "John", "age": 30}
+"another string"
+{"id": 1, "data": "test"}
+"final string"
+{"nested": {"key": "value"}}
