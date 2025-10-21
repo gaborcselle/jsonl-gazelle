@@ -1872,6 +1872,33 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
             flex-shrink: 0;
         }
         
+        /* Wrap Text Control */
+        .wrap-text-control {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            cursor: pointer;
+            padding: 8px 12px;
+            border-radius: 5px;
+            font-size: 13px;
+            user-select: none;
+            transition: background-color 0.2s;
+        }
+        
+        .wrap-text-control:hover {
+            background-color: var(--vscode-list-hoverBackground);
+        }
+        
+        .wrap-text-control input[type="checkbox"] {
+            cursor: pointer;
+            width: 16px;
+            height: 16px;
+        }
+        
+        .wrap-text-control span {
+            color: var(--vscode-foreground);
+        }
+        
         /* Column Manager Modal */
         .column-manager-modal {
             display: none;
@@ -2023,6 +2050,20 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
             cursor: grabbing;
         }
         
+        /* Text Wrapping */
+        #dataTable.text-wrap td {
+            white-space: pre-wrap;
+            word-wrap: break-word;
+            word-break: break-word;
+            overflow-wrap: break-word;
+        }
+        
+        #dataTable:not(.text-wrap) td {
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+        
     </style>
 </head>
 <body>
@@ -2050,6 +2091,10 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
                 <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3h7a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-7m0-18H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h7m0-18v18"></path></svg>
                 Manage Columns
             </button>
+            <label class="wrap-text-control" title="Wrap text in table cells">
+                <input type="checkbox" id="wrapTextCheckbox">
+                <span>Wrap Text</span>
+            </label>
         </div>
         
         <div class="table-container" id="tableContainer">
@@ -2256,6 +2301,16 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
         document.getElementById('columnManagerModal').addEventListener('click', (e) => {
             if (e.target.id === 'columnManagerModal') {
                 closeColumnManager();
+            }
+        });
+        
+        // Wrap Text Toggle
+        document.getElementById('wrapTextCheckbox').addEventListener('change', (e) => {
+            const table = document.getElementById('dataTable');
+            if (e.target.checked) {
+                table.classList.add('text-wrap');
+            } else {
+                table.classList.remove('text-wrap');
             }
         });
         
