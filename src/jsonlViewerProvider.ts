@@ -77,13 +77,8 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
                                 this.filterRows();
                                 this.updateWebview(webviewPanel);
                                 break;
-                            case 'addColumn':
-                                this.addColumn(message.columnPath);
-                                this.updateWebview(webviewPanel);
-                                break;
                             case 'removeColumn':
-                                this.removeColumn(message.columnPath);
-                                this.updateWebview(webviewPanel);
+                                await this.removeColumn(message.columnPath, webviewPanel, document);
                                 break;
                             case 'updateCell':
                                 await this.updateCell(message.rowIndex, message.columnPath, message.value, webviewPanel, document);
@@ -433,19 +428,72 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
     }
 
 
-    private addColumn(columnPath: string) {
-        if (!this.columns.find(col => col.path === columnPath)) {
-            this.columns.push({
-                path: columnPath,
-                displayName: this.getDisplayName(columnPath),
-                visible: true,
-                isExpanded: false
+    private async removeColumn(columnPath: string, webviewPanel: vscode.WebviewPanel, document: vscode.TextDocument) {
+        try {
+            // Remove column from columns array
+            this.columns = this.columns.filter(col => col.path !== columnPath);
+            
+            // Actually remove the field from all rows
+            this.rows.forEach(row => {
+                this.deleteNestedProperty(row, columnPath);
             });
+            
+            // Update filtered rows if search is active
+            this.filterRows();
+            
+            // Update parsedLines to reflect the changes
+            this.parsedLines = this.rows.map((row, index) => ({
+                data: row,
+                lineNumber: index + 1,
+                rawLine: JSON.stringify(row)
+            }));
+            
+            // Update raw content
+            this.rawContent = this.rows.map(row => JSON.stringify(row)).join('\n');
+            
+            // Update the document content
+            const edit = new vscode.WorkspaceEdit();
+            edit.replace(
+                document.uri,
+                new vscode.Range(0, 0, document.lineCount, 0),
+                this.rawContent
+            );
+            await vscode.workspace.applyEdit(edit);
+            
+            // Update the webview to reflect changes
+            this.updateWebview(webviewPanel);
+            
+            vscode.window.showInformationMessage(`Column "${columnPath}" deleted successfully`);
+        } catch (error) {
+            console.error('Error removing column:', error);
+            const errorMessage = error instanceof Error ? error.message : String(error);
+            vscode.window.showErrorMessage('Failed to delete column: ' + errorMessage);
         }
     }
-
-    private removeColumn(columnPath: string) {
-        this.columns = this.columns.filter(col => col.path !== columnPath);
+    
+    private deleteNestedProperty(obj: any, path: string): void {
+        const parts = path.split('.');
+        if (parts.length === 1) {
+            // Top-level property
+            delete obj[path];
+        } else {
+            // Nested property
+            const parentPath = parts.slice(0, -1);
+            const propertyName = parts[parts.length - 1];
+            
+            let current = obj;
+            for (const part of parentPath) {
+                if (current && typeof current === 'object' && part in current) {
+                    current = current[part];
+                } else {
+                    return; // Path doesn't exist
+                }
+            }
+            
+            if (current && typeof current === 'object') {
+                delete current[propertyName];
+            }
+        }
     }
 
     private expandColumn(columnPath: string) {
@@ -1566,8 +1614,10 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
     </div>
     
     <div class="context-menu" id="contextMenu">
-        <div class="context-menu-item" data-action="add">Add Column</div>
-        <div class="context-menu-item" data-action="remove">Remove Column</div>
+        <div class="context-menu-item" data-action="remove" style="color: var(--vscode-errorForeground);">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path></svg>
+            Delete Column
+        </div>
         <div class="context-menu-item" data-action="unstringify" id="unstringifyMenuItem" style="display: none;">Unstringify JSON in Column</div>
     </div>
 
@@ -1831,15 +1881,6 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
             if (!action || !contextMenuColumn) return;
 
             switch (action) {
-                case 'add':
-                    const newPath = prompt('Enter column path (e.g., user.name):');
-                    if (newPath) {
-                        vscode.postMessage({
-                            type: 'addColumn',
-                            columnPath: newPath
-                        });
-                    }
-                    break;
                 case 'remove':
                     vscode.postMessage({
                         type: 'removeColumn',
