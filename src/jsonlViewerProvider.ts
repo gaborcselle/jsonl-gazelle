@@ -18,6 +18,9 @@ interface ColumnInfo {
     visible: boolean;
     isExpanded?: boolean;
     parentPath?: string;
+    isManuallyAdded?: boolean;  // Flag for manually added columns
+    insertPosition?: 'before' | 'after';  // Position relative to reference
+    insertReferenceColumn?: string;  // Reference column for insertion
 }
 
 export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
@@ -44,6 +47,7 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
     private memoryOptimized: boolean = false;
     private isUpdating: boolean = false; // Flag to prevent recursive updates
     private pendingSaveTimeout: NodeJS.Timeout | null = null; // For debouncing saves
+    private manualColumnsPerFile: Map<string, ColumnInfo[]> = new Map(); // Store manual columns per file
 
     constructor(private readonly context: vscode.ExtensionContext) {}
 
@@ -121,6 +125,16 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
                             case 'validateClipboard':
                                 await this.handleValidateClipboard(webviewPanel);
                                 break;
+                            case 'reorderColumns':
+                                await this.reorderColumns(message.fromIndex, message.toIndex, webviewPanel, document);
+                                break;
+                            case 'toggleColumnVisibility':
+                                this.toggleColumnVisibility(message.columnPath);
+                                this.updateWebview(webviewPanel);
+                                break;
+                            case 'addColumn':
+                                await this.handleAddColumn(message.columnName, message.position, message.referenceColumn, webviewPanel, document);
+                                break;
                         }
                     } catch (error) {
                         console.error('Error handling webview message:', error);
@@ -194,7 +208,18 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
             this.loadedLines = 0;
             this.rows = [];
             this.parsedLines = [];
-            this.columns = []; // Clear columns from previous file
+            
+            // Get file URI for per-file column storage
+            const fileUri = document.uri.toString();
+            
+            // Save currently displayed manual columns to file-specific storage
+            const currentManualColumns = this.columns.filter(col => col.isManuallyAdded);
+            if (currentManualColumns.length > 0) {
+                this.manualColumnsPerFile.set(fileUri, currentManualColumns);
+            }
+            
+            this.columns = []; // Clear columns
+            
             this.errorCount = 0;
             this.pathCounts = {};
             this.memoryOptimized = false;
@@ -214,6 +239,13 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
             this.processChunk(lines, 0);
             this.loadedLines = this.totalLines;
             this.updateColumns();
+            
+            // Restore manually added columns to their original positions
+            const savedManualColumns = this.manualColumnsPerFile.get(fileUri) || [];
+            if (savedManualColumns.length > 0) {
+                this.restoreManualColumns(savedManualColumns);
+            }
+            
             this.filteredRows = this.rows; // Point to same array for small files
             this.isIndexing = false;
             
@@ -238,6 +270,13 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
         
         // Update UI with initial data
         this.updateColumns();
+        
+        // Restore manually added columns to their original positions
+        const savedManualColumns = this.manualColumnsPerFile.get(fileUri) || [];
+        if (savedManualColumns.length > 0) {
+            this.restoreManualColumns(savedManualColumns);
+        }
+        
         this.filteredRows = this.rows; // Point to same array initially
         this.isIndexing = false;
         
@@ -367,12 +406,25 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
         const totalRows = this.rows.length;
         const threshold = Math.max(1, Math.floor(totalRows * 0.1)); // At least 10% of rows
         
-        // Create a set of existing column paths to avoid duplicates
-        const existingPaths = new Set(this.columns.map(col => col.path));
+        // If we already have columns (e.g., after adding manually), just add missing ones
+        if (this.columns.length > 0) {
+            this.addNewColumnsOnly();
+            return;
+        }
         
+        // Detect column order from first row to preserve file order
+        const columnOrderMap = new Map<string, number>();
+        if (this.rows.length > 0 && typeof this.rows[0] === 'object') {
+            Object.keys(this.rows[0]).forEach((key, index) => {
+                columnOrderMap.set(key, index);
+            });
+        }
+        
+        // Create auto-detected columns
+        const newColumns: ColumnInfo[] = [];
         for (const [path, count] of Object.entries(this.pathCounts)) {
-            if (count >= threshold && !existingPaths.has(path)) {
-                this.columns.push({
+            if (count >= threshold) {
+                newColumns.push({
                     path,
                     displayName: this.getDisplayName(path),
                     visible: true,
@@ -381,12 +433,26 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
             }
         }
         
-        // Sort columns to put "(value)" column first
-        this.columns.sort((a, b) => {
+        // Sort columns by their order in the first row, then alphabetically for nested
+        newColumns.sort((a, b) => {
             if (a.path === '(value)') return -1;
             if (b.path === '(value)') return 1;
+            
+            const orderA = columnOrderMap.get(a.path);
+            const orderB = columnOrderMap.get(b.path);
+            
+            // Both have order from first row - use that order
+            if (orderA !== undefined && orderB !== undefined) {
+                return orderA - orderB;
+            }
+            // One has order, other doesn't - prioritize the one with order
+            if (orderA !== undefined) return -1;
+            if (orderB !== undefined) return 1;
+            // Neither has order - sort alphabetically
             return a.path.localeCompare(b.path);
         });
+        
+        this.columns = newColumns;
     }
     
     private addNewColumnsOnly() {
@@ -396,9 +462,10 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
         // Create a set of existing column paths to avoid duplicates
         const existingPaths = new Set(this.columns.map(col => col.path));
         
+        const newColumns: ColumnInfo[] = [];
         for (const [path, count] of Object.entries(this.pathCounts)) {
             if (count >= threshold && !existingPaths.has(path)) {
-                this.columns.push({
+                newColumns.push({
                     path,
                     displayName: this.getDisplayName(path),
                     visible: true,
@@ -407,12 +474,15 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
             }
         }
         
-        // Sort columns to put "(value)" column first
-        this.columns.sort((a, b) => {
+        // Sort only new auto-detected columns
+        newColumns.sort((a, b) => {
             if (a.path === '(value)') return -1;
             if (b.path === '(value)') return 1;
             return a.path.localeCompare(b.path);
         });
+        
+        // Add new columns while preserving manually added ones
+        this.columns.push(...newColumns);
     }
 
     private countPaths(obj: any, prefix: string, counts: { [key: string]: number }) {
@@ -622,6 +692,266 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
 
         // Remove all child columns
         this.columns = this.columns.filter(col => !col.parentPath || col.parentPath !== columnPath);
+    }
+
+    private async reorderColumns(fromIndex: number, toIndex: number, webviewPanel?: vscode.WebviewPanel, document?: vscode.TextDocument) {
+        // Validate indices
+        if (fromIndex < 0 || fromIndex >= this.columns.length || 
+            toIndex < 0 || toIndex >= this.columns.length ||
+            fromIndex === toIndex) {
+            return;
+        }
+
+        // Remove the column from its current position
+        const [movedColumn] = this.columns.splice(fromIndex, 1);
+        
+        // Insert it at the new position
+        this.columns.splice(toIndex, 0, movedColumn);
+        
+        // Update position info for ALL manually added columns based on current order
+        if (document) {
+            this.columns.forEach((col, index) => {
+                if (col.isManuallyAdded) {
+                    // Find the previous non-manual column
+                    let refColumn = null;
+                    for (let i = index - 1; i >= 0; i--) {
+                        if (!this.columns[i].isManuallyAdded) {
+                            refColumn = this.columns[i].path;
+                            break;
+                        }
+                    }
+                    
+                    if (refColumn) {
+                        col.insertReferenceColumn = refColumn;
+                        col.insertPosition = 'after';
+                    } else if (index < this.columns.length - 1) {
+                        // No previous non-manual column, use next one with 'before'
+                        for (let i = index + 1; i < this.columns.length; i++) {
+                            if (!this.columns[i].isManuallyAdded) {
+                                col.insertReferenceColumn = this.columns[i].path;
+                                col.insertPosition = 'before';
+                                break;
+                            }
+                        }
+                    }
+                }
+            });
+            
+            // Save updated manual columns
+            const fileUri = document.uri.toString();
+            const manualColumns = this.columns.filter(col => col.isManuallyAdded);
+            this.manualColumnsPerFile.set(fileUri, manualColumns);
+        }
+        
+        // If document is provided, reorder keys in JSON and save
+        if (document && webviewPanel) {
+            try {
+                // Get new column order
+                const columnOrder = this.columns.map(col => col.path);
+                
+                // Reorder keys in all rows
+                this.rows.forEach(row => {
+                    if (typeof row !== 'object' || row === null) return;
+                    
+                    const newRow: JsonRow = {};
+                    
+                    // Add keys in new column order
+                    for (const colPath of columnOrder) {
+                        if (row.hasOwnProperty(colPath)) {
+                            newRow[colPath] = row[colPath];
+                        }
+                    }
+                    
+                    // Add any remaining keys not in columns (shouldn't happen, but just in case)
+                    for (const key of Object.keys(row)) {
+                        if (!newRow.hasOwnProperty(key)) {
+                            newRow[key] = row[key];
+                        }
+                    }
+                    
+                    // Replace row contents with reordered version
+                    Object.keys(row).forEach(key => delete row[key]);
+                    Object.assign(row, newRow);
+                });
+                
+                // Update parsedLines and rawContent
+                this.parsedLines = this.rows.map((row, index) => ({
+                    data: row,
+                    lineNumber: index + 1,
+                    rawLine: JSON.stringify(row)
+                }));
+                
+                this.rawContent = this.rows.map(row => JSON.stringify(row)).join('\n');
+                
+                // Save to document
+                this.isUpdating = true;
+                const edit = new vscode.WorkspaceEdit();
+                edit.replace(
+                    document.uri,
+                    new vscode.Range(0, 0, document.lineCount, 0),
+                    this.rawContent
+                );
+                await vscode.workspace.applyEdit(edit);
+                setTimeout(() => { this.isUpdating = false; }, 100);
+                
+                // Update webview after save
+                this.updateWebview(webviewPanel);
+            } catch (error) {
+                console.error('Error reordering columns:', error);
+            }
+        }
+    }
+
+    private toggleColumnVisibility(columnPath: string) {
+        const column = this.columns.find(col => col.path === columnPath);
+        if (!column) return;
+
+        // Toggle the visibility
+        column.visible = !column.visible;
+    }
+
+    private restoreManualColumns(savedColumns: ColumnInfo[]) {
+        // Only restore manual columns that actually exist in the data
+        const validSavedColumns = savedColumns.filter(col => {
+            // Check if this column exists in any row
+            return this.rows.some(row => row.hasOwnProperty(col.path));
+        });
+        
+        // Insert saved manual columns back at their positions
+        for (const col of validSavedColumns) {
+            // If we have position info, use it
+            if (col.insertReferenceColumn && col.insertPosition) {
+                const refIndex = this.columns.findIndex(c => c.path === col.insertReferenceColumn);
+                if (refIndex !== -1) {
+                    const insertAt = col.insertPosition === 'before' ? refIndex : refIndex + 1;
+                    this.columns.splice(insertAt, 0, col);
+                    continue;
+                }
+            }
+            
+            // Otherwise add at the end
+            this.columns.push(col);
+        }
+    }
+
+    private async handleAddColumn(
+        columnName: string,
+        position: 'before' | 'after',
+        referenceColumn: string,
+        webviewPanel: vscode.WebviewPanel,
+        document: vscode.TextDocument
+    ) {
+        try {
+            // Validate column name length
+            if (columnName.length > 100) {
+                vscode.window.showErrorMessage('Column name is too long. Maximum length is 100 characters.');
+                return;
+            }
+            
+            // Check if data contains objects (not primitives)
+            if (this.rows.length > 0 && typeof this.rows[0] !== 'object') {
+                vscode.window.showErrorMessage('Cannot add columns to primitive values. File must contain JSON objects.');
+                return;
+            }
+            
+            // Check if column with this name already exists in this file
+            const columnExists = this.columns.some(col => col.path === columnName) ||
+                                 this.rows.some(row => row.hasOwnProperty(columnName));
+            
+            if (columnExists) {
+                vscode.window.showErrorMessage(`Column "${columnName}" already exists in this file.`);
+                return;
+            }
+            
+            // Find the reference column
+            const refColumnIndex = this.columns.findIndex(col => col.path === referenceColumn);
+            if (refColumnIndex === -1) return;
+
+            // Create new column with position info
+            const newColumn: ColumnInfo = {
+                path: columnName,
+                displayName: columnName,
+                visible: true,
+                isExpanded: false,
+                isManuallyAdded: true,  // Mark as manually added
+                insertPosition: position,  // 'before' or 'after'
+                insertReferenceColumn: referenceColumn  // Which column to insert relative to
+            };
+
+            // Insert column at the right position
+            const insertIndex = position === 'before' ? refColumnIndex : refColumnIndex + 1;
+            this.columns.splice(insertIndex, 0, newColumn);
+
+            // Add null values to all rows for the new column at the correct position
+            this.rows.forEach(row => {
+                // Create new object with keys in the right order
+                const newRow: JsonRow = {};
+                let inserted = false;
+                
+                for (const key of Object.keys(row)) {
+                    // Insert new column before or after reference column
+                    if (key === referenceColumn && position === 'before' && !inserted) {
+                        newRow[columnName] = null;
+                        inserted = true;
+                    }
+                    
+                    newRow[key] = row[key];
+                    
+                    if (key === referenceColumn && position === 'after' && !inserted) {
+                        newRow[columnName] = null;
+                        inserted = true;
+                    }
+                }
+                
+                // If column wasn't inserted (shouldn't happen), add at end
+                if (!inserted) {
+                    newRow[columnName] = null;
+                }
+                
+                // Replace row contents with ordered keys
+                Object.keys(row).forEach(key => delete row[key]);
+                Object.assign(row, newRow);
+            });
+
+            // Update filtered rows
+            this.filterRows();
+
+            // Update parsedLines to reflect the changes
+            this.parsedLines = this.rows.map((row, index) => ({
+                data: row,
+                lineNumber: index + 1,
+                rawLine: JSON.stringify(row)
+            }));
+
+            // Update raw content
+            this.rawContent = this.rows.map(row => JSON.stringify(row)).join('\n');
+
+            // Update the document content (set flag to prevent reload)
+            this.isUpdating = true;
+            const edit = new vscode.WorkspaceEdit();
+            edit.replace(
+                document.uri,
+                new vscode.Range(0, 0, document.lineCount, 0),
+                this.rawContent
+            );
+            await vscode.workspace.applyEdit(edit);
+            
+            // Wait a bit for the edit to complete, then reset flag
+            setTimeout(() => { this.isUpdating = false; }, 100);
+
+            // Update webview
+            this.updateWebview(webviewPanel);
+            
+            // Save manual columns for this file
+            const fileUri = document.uri.toString();
+            const manualColumns = this.columns.filter(col => col.isManuallyAdded);
+            this.manualColumnsPerFile.set(fileUri, manualColumns);
+
+            vscode.window.showInformationMessage(`Column "${columnName}" added successfully`);
+        } catch (error) {
+            vscode.window.showErrorMessage(`Failed to add column: ${error instanceof Error ? error.message : 'Unknown error'}`);
+            console.error('Error adding column:', error);
+        }
     }
 
     private getSampleValue(columnPath: string): any {
@@ -1438,6 +1768,12 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
         .context-menu-item:hover {
             background-color: var(--vscode-menu-selectionBackground);
         }
+        
+        .context-menu-separator {
+            height: 1px;
+            background-color: var(--vscode-menu-separatorBackground, rgba(128, 128, 128, 0.35));
+            margin: 5px 0;
+        }
 
         .row-context-menu {
             position: absolute;
@@ -1818,6 +2154,278 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
             color: var(--vscode-editor-findMatchForeground);
         }
         
+        /* Column Manager Button */
+        .column-manager-btn {
+            background-color: var(--vscode-button-background);
+            color: var(--vscode-button-foreground);
+            border: none;
+            padding: 8px 16px;
+            border-radius: 5px;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            font-size: 13px;
+            margin-left: auto;
+        }
+        
+        .column-manager-btn:hover {
+            background-color: var(--vscode-button-hoverBackground);
+        }
+        
+        .column-manager-btn svg {
+            flex-shrink: 0;
+        }
+        
+        /* Wrap Text Control */
+        .wrap-text-control {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            cursor: pointer;
+            padding: 8px 12px;
+            border-radius: 5px;
+            font-size: 13px;
+            user-select: none;
+            transition: background-color 0.2s;
+        }
+        
+        .wrap-text-control:hover {
+            background-color: var(--vscode-list-hoverBackground);
+        }
+        
+        .wrap-text-control input[type="checkbox"] {
+            cursor: pointer;
+            width: 16px;
+            height: 16px;
+        }
+        
+        .wrap-text-control span {
+            color: var(--vscode-foreground);
+        }
+        
+        /* Column Manager Modal */
+        .column-manager-modal {
+            display: none;
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background-color: rgba(0, 0, 0, 0.5);
+            z-index: 10000;
+            align-items: center;
+            justify-content: center;
+        }
+        
+        .column-manager-modal.show {
+            display: flex;
+        }
+        
+        .modal-content {
+            background-color: var(--vscode-editor-background);
+            border: 1px solid var(--vscode-panel-border);
+            border-radius: 6px;
+            width: 400px;
+            max-height: 80vh;
+            display: flex;
+            flex-direction: column;
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+        }
+        
+        .add-column-modal {
+            width: 450px;
+        }
+        
+        .modal-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 16px;
+            border-bottom: 1px solid var(--vscode-panel-border);
+        }
+        
+        .modal-header h3 {
+            margin: 0;
+            font-size: 16px;
+            font-weight: 600;
+        }
+        
+        .modal-close {
+            background: none;
+            border: none;
+            color: var(--vscode-foreground);
+            font-size: 24px;
+            cursor: pointer;
+            padding: 0;
+            width: 24px;
+            height: 24px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            opacity: 0.7;
+        }
+        
+        .modal-close:hover {
+            opacity: 1;
+        }
+        
+        .modal-body {
+            padding: 16px;
+            overflow-y: auto;
+            flex: 1;
+        }
+        
+        .modal-hint {
+            padding: 12px;
+            background-color: var(--vscode-textBlockQuote-background);
+            border-left: 3px solid var(--vscode-focusBorder);
+            border-radius: 4px;
+            margin-bottom: 16px;
+            font-size: 13px;
+            color: var(--vscode-foreground);
+            opacity: 0.9;
+        }
+        
+        .column-list {
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+        }
+        
+        .column-item {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            padding: 10px;
+            background-color: var(--vscode-list-inactiveSelectionBackground);
+            border-radius: 4px;
+            cursor: grab;
+            border: 1px solid transparent;
+        }
+        
+        .column-item:hover {
+            background-color: var(--vscode-list-hoverBackground);
+        }
+        
+        .column-item.dragging {
+            opacity: 0.5;
+            cursor: grabbing;
+        }
+        
+        .column-item.drag-over {
+            border-top: 2px solid var(--vscode-focusBorder);
+        }
+        
+        .column-drag-handle {
+            cursor: grab;
+            color: var(--vscode-foreground);
+            opacity: 0.5;
+            display: flex;
+            align-items: center;
+        }
+        
+        .column-item:active .column-drag-handle {
+            cursor: grabbing;
+        }
+        
+        .column-checkbox {
+            margin: 0;
+            cursor: pointer;
+        }
+        
+        .column-name {
+            flex: 1;
+            font-size: 13px;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+        
+        /* Drag and Drop for Table Headers */
+        th.dragging-header {
+            opacity: 0.5;
+        }
+        
+        th.drag-over-header {
+            border-left: 3px solid var(--vscode-focusBorder);
+        }
+        
+        th {
+            cursor: grab;
+        }
+        
+        th:active {
+            cursor: grabbing;
+        }
+        
+        /* Text Wrapping */
+        #dataTable.text-wrap td {
+            white-space: pre-wrap;
+            word-wrap: break-word;
+            word-break: break-word;
+            overflow-wrap: break-word;
+            vertical-align: top;
+        }
+        
+        #dataTable:not(.text-wrap) td {
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+        
+        /* Add Column Modal Styles */
+        .column-name-input {
+            width: 100%;
+            padding: 8px 12px;
+            font-size: 13px;
+            background-color: var(--vscode-input-background);
+            color: var(--vscode-input-foreground);
+            border: 1px solid var(--vscode-input-border);
+            border-radius: 4px;
+            outline: none;
+            font-family: var(--vscode-font-family);
+            margin-bottom: 16px;
+        }
+        
+        .column-name-input:focus {
+            border-color: var(--vscode-focusBorder);
+        }
+        
+        .modal-actions {
+            display: flex;
+            gap: 10px;
+            justify-content: flex-end;
+            margin-top: 8px;
+        }
+        
+        .modal-button {
+            padding: 8px 16px;
+            border: none;
+            border-radius: 4px;
+            font-size: 13px;
+            cursor: pointer;
+            font-family: var(--vscode-font-family);
+        }
+        
+        .modal-button-primary {
+            background-color: var(--vscode-button-background);
+            color: var(--vscode-button-foreground);
+        }
+        
+        .modal-button-primary:hover {
+            background-color: var(--vscode-button-hoverBackground);
+        }
+        
+        .modal-button-secondary {
+            background-color: var(--vscode-button-secondaryBackground);
+            color: var(--vscode-button-secondaryForeground);
+        }
+        
+        .modal-button-secondary:hover {
+            background-color: var(--vscode-button-secondaryHoverBackground);
+        }
+        
     </style>
 </head>
 <body>
@@ -1841,6 +2449,14 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
                 <button data-view="raw"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"></path><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"></path></svg> Raw</button>
                 <div class="error-count" id="errorCount" style="display: none;"></div>
             </div>
+            <button class="column-manager-btn" id="columnManagerBtn" title="Show/hide columns and reorder them">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3h7a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-7m0-18H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h7m0-18v18"></path></svg>
+                Columns
+            </button>
+            <label class="wrap-text-control" title="Wrap text in table cells">
+                <input type="checkbox" id="wrapTextCheckbox">
+                <span>Wrap Text</span>
+            </label>
         </div>
         
         <div class="table-container" id="tableContainer">
@@ -1851,6 +2467,7 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
             <!-- Table View Container -->
             <div class="view-container" id="tableViewContainer">
                 <table id="dataTable" style="display: none;">
+                    <colgroup id="tableColgroup"></colgroup>
                     <thead id="tableHead"></thead>
                     <tbody id="tableBody"></tbody>
                 </table>
@@ -1871,11 +2488,25 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
     </div>
     
     <div class="context-menu" id="contextMenu">
+        <div class="context-menu-item" data-action="hideColumn">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"></path><line x1="1" y1="1" x2="23" y2="23"></line></svg>
+            Hide Column
+        </div>
+        <div class="context-menu-separator"></div>
+        <div class="context-menu-item" data-action="insertBefore">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg>
+            Insert Column Before
+        </div>
+        <div class="context-menu-item" data-action="insertAfter">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg>
+            Insert Column After
+        </div>
+        <div class="context-menu-separator"></div>
+        <div class="context-menu-item" data-action="unstringify" id="unstringifyMenuItem" style="display: none;">Unstringify JSON in Column</div>
         <div class="context-menu-item" data-action="remove" style="color: var(--vscode-errorForeground);">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path></svg>
             Delete Column
         </div>
-        <div class="context-menu-item" data-action="unstringify" id="unstringifyMenuItem" style="display: none;">Unstringify JSON in Column</div>
     </div>
 
     <div class="row-context-menu" id="rowContextMenu">
@@ -1912,6 +2543,38 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
         </div>
     </div>
 
+    <div class="column-manager-modal" id="columnManagerModal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3>Manage Columns</h3>
+                <button class="modal-close" id="modalCloseBtn">&times;</button>
+            </div>
+            <div class="modal-body">
+                <div class="modal-hint">
+                    💡 Check/uncheck to show/hide columns. Drag items to reorder.
+                </div>
+                <div class="column-list" id="columnList"></div>
+            </div>
+        </div>
+    </div>
+
+    <div class="column-manager-modal" id="addColumnModal">
+        <div class="modal-content add-column-modal">
+            <div class="modal-header">
+                <h3>Add New Column</h3>
+                <button class="modal-close" id="addColumnCloseBtn">&times;</button>
+            </div>
+            <div class="modal-body">
+                <label for="newColumnName" style="display: block; margin-bottom: 8px; font-weight: 500;">Column Name:</label>
+                <input type="text" id="newColumnName" class="column-name-input" placeholder="e.g., status, total, category" />
+                <div class="modal-actions">
+                    <button class="modal-button modal-button-primary" id="addColumnConfirmBtn">Add Column</button>
+                    <button class="modal-button modal-button-secondary" id="addColumnCancelBtn">Cancel</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
     <script>
         const vscode = acquireVsCodeApi();
         
@@ -1942,6 +2605,7 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
             json: 0,
             raw: 0
         };
+        let savedColumnWidths = {}; // Store column widths by column path
         const TABLE_CHUNK_SIZE = 200;
         const JSON_CHUNK_SIZE = 30;
         const tableRenderState = {
@@ -1967,6 +2631,31 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
             e.preventDefault();
             e.stopPropagation();
             
+            // Enable fixed layout when user starts resizing
+            const table = document.getElementById('dataTable');
+            if (table.style.tableLayout !== 'fixed') {
+                // Freeze all current widths before switching to fixed layout
+                const colgroup = document.getElementById('tableColgroup');
+                const thead = table.querySelector('thead tr');
+                if (colgroup && thead) {
+                    const headers = thead.querySelectorAll('th');
+                    const cols = colgroup.querySelectorAll('col');
+                    headers.forEach((header, index) => {
+                        if (cols[index] && !cols[index].style.width) {
+                            const width = header.getBoundingClientRect().width;
+                            cols[index].style.width = width + 'px';
+                            
+                            // Save width for persistence
+                            const columnPath = cols[index].dataset.columnPath;
+                            if (columnPath) {
+                                savedColumnWidths[columnPath] = width + 'px';
+                            }
+                        }
+                    });
+                }
+                table.style.tableLayout = 'fixed';
+            }
+            
             isResizing = true;
             resizeData = {
                 th: th,
@@ -1989,9 +2678,25 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
             // Update the column width
             resizeData.th.style.width = newWidth + 'px';
             
-            // Update all cells in this column
+            // Update the corresponding col element in colgroup (if exists)
             const columnIndex = Array.from(resizeData.th.parentNode.children).indexOf(resizeData.th);
             const table = document.getElementById('dataTable');
+            const colgroup = document.getElementById('tableColgroup');
+            
+            if (colgroup) {
+                const cols = colgroup.querySelectorAll('col');
+                if (cols[columnIndex]) {
+                    cols[columnIndex].style.width = newWidth + 'px';
+                    
+                    // Save this width for persistence
+                    const columnPath = cols[columnIndex].dataset.columnPath;
+                    if (columnPath) {
+                        savedColumnWidths[columnPath] = newWidth + 'px';
+                    }
+                }
+            }
+            
+            // Update all cells in this column (if not using fixed layout)
             const rows = table.querySelectorAll('tr');
             
             rows.forEach(row => {
@@ -2025,6 +2730,231 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
         document.addEventListener('click', hideContextMenu);
         document.getElementById('contextMenu').addEventListener('click', handleContextMenu);
         document.getElementById('rowContextMenu').addEventListener('click', handleRowContextMenu);
+        
+        // Column Manager Modal
+        document.getElementById('columnManagerBtn').addEventListener('click', openColumnManager);
+        document.getElementById('modalCloseBtn').addEventListener('click', closeColumnManager);
+        document.getElementById('columnManagerModal').addEventListener('click', (e) => {
+            if (e.target.id === 'columnManagerModal') {
+                closeColumnManager();
+            }
+        });
+        
+        // Wrap Text Toggle
+        document.getElementById('wrapTextCheckbox').addEventListener('change', (e) => {
+            const table = document.getElementById('dataTable');
+            const colgroup = document.getElementById('tableColgroup');
+            const thead = table.querySelector('thead tr');
+            
+            if (e.target.checked) {
+                // Freeze current column widths before applying wrap
+                if (colgroup && thead) {
+                    const headers = thead.querySelectorAll('th');
+                    const cols = colgroup.querySelectorAll('col');
+                    
+                    // Measure and freeze ALL column widths
+                    headers.forEach((th, index) => {
+                        if (cols[index]) {
+                            // Always set width to current actual width
+                            const width = th.getBoundingClientRect().width;
+                            cols[index].style.width = width + 'px';
+                            
+                            // Save width for persistence
+                            const columnPath = cols[index].dataset.columnPath;
+                            if (columnPath) {
+                                savedColumnWidths[columnPath] = width + 'px';
+                            }
+                        }
+                    });
+                }
+                
+                // Apply fixed layout to prevent recalculation
+                table.style.tableLayout = 'fixed';
+                
+                // Add wrap class
+                table.classList.add('text-wrap');
+            } else {
+                // Remove wrap but KEEP widths and fixed layout
+                table.classList.remove('text-wrap');
+                // Note: We intentionally do NOT remove table-layout or col widths
+                // so the column sizes remain stable
+            }
+        });
+        
+        function openColumnManager() {
+            const modal = document.getElementById('columnManagerModal');
+            const columnList = document.getElementById('columnList');
+            columnList.innerHTML = '';
+            
+            currentData.columns.forEach((column, index) => {
+                const columnItem = document.createElement('div');
+                columnItem.className = 'column-item';
+                columnItem.draggable = true;
+                columnItem.dataset.columnIndex = index;
+                columnItem.dataset.columnPath = column.path;
+                
+                // Drag handle
+                const dragHandle = document.createElement('div');
+                dragHandle.className = 'column-drag-handle';
+                dragHandle.innerHTML = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="4" y1="8" x2="20" y2="8"></line><line x1="4" y1="16" x2="20" y2="16"></line></svg>';
+                
+                // Checkbox
+                const checkbox = document.createElement('input');
+                checkbox.type = 'checkbox';
+                checkbox.className = 'column-checkbox';
+                checkbox.checked = column.visible;
+                checkbox.addEventListener('change', () => {
+                    vscode.postMessage({
+                        type: 'toggleColumnVisibility',
+                        columnPath: column.path
+                    });
+                });
+                
+                // Column name
+                const columnName = document.createElement('span');
+                columnName.className = 'column-name';
+                columnName.textContent = column.displayName;
+                columnName.title = column.displayName;
+                
+                columnItem.appendChild(dragHandle);
+                columnItem.appendChild(checkbox);
+                columnItem.appendChild(columnName);
+                
+                // Drag events for modal
+                columnItem.addEventListener('dragstart', handleModalDragStart);
+                columnItem.addEventListener('dragend', handleModalDragEnd);
+                columnItem.addEventListener('dragover', handleModalDragOver);
+                columnItem.addEventListener('drop', handleModalDrop);
+                
+                columnList.appendChild(columnItem);
+            });
+            
+            modal.classList.add('show');
+        }
+        
+        function closeColumnManager() {
+            const modal = document.getElementById('columnManagerModal');
+            modal.classList.remove('show');
+        }
+        
+        // Add Column Modal
+        let addColumnPosition = null;
+        let addColumnReferenceColumn = null;
+        
+        function openAddColumnModal(position, referenceColumn) {
+            addColumnPosition = position;
+            addColumnReferenceColumn = referenceColumn;
+            
+            const modal = document.getElementById('addColumnModal');
+            const input = document.getElementById('newColumnName');
+            input.value = '';
+            modal.classList.add('show');
+            
+            // Focus input
+            setTimeout(() => input.focus(), 100);
+        }
+        
+        function closeAddColumnModal() {
+            const modal = document.getElementById('addColumnModal');
+            modal.classList.remove('show');
+            addColumnPosition = null;
+            addColumnReferenceColumn = null;
+        }
+        
+        function confirmAddColumn() {
+            const input = document.getElementById('newColumnName');
+            const columnName = input.value.trim();
+            
+            if (!columnName) {
+                return; // Don't add empty column name
+            }
+            
+            vscode.postMessage({
+                type: 'addColumn',
+                columnName: columnName,
+                position: addColumnPosition,
+                referenceColumn: addColumnReferenceColumn
+            });
+            
+            closeAddColumnModal();
+        }
+        
+        // Add Column Modal event listeners
+        document.getElementById('addColumnCloseBtn').addEventListener('click', closeAddColumnModal);
+        document.getElementById('addColumnCancelBtn').addEventListener('click', closeAddColumnModal);
+        document.getElementById('addColumnConfirmBtn').addEventListener('click', confirmAddColumn);
+        document.getElementById('addColumnModal').addEventListener('click', (e) => {
+            if (e.target.id === 'addColumnModal') {
+                closeAddColumnModal();
+            }
+        });
+        document.getElementById('newColumnName').addEventListener('keydown', (e) => {
+            if (e.key === 'Enter') {
+                confirmAddColumn();
+            } else if (e.key === 'Escape') {
+                closeAddColumnModal();
+            }
+        });
+        
+        // Modal drag and drop
+        let draggedModalItem = null;
+        
+        function handleModalDragStart(e) {
+            draggedModalItem = e.target;
+            e.target.classList.add('dragging');
+            e.dataTransfer.effectAllowed = 'move';
+        }
+        
+        function handleModalDragEnd(e) {
+            e.target.classList.remove('dragging');
+            document.querySelectorAll('.column-item').forEach(item => {
+                item.classList.remove('drag-over');
+            });
+        }
+        
+        function handleModalDragOver(e) {
+            e.preventDefault();
+            e.dataTransfer.dropEffect = 'move';
+            
+            const target = e.target.closest('.column-item');
+            if (target && target !== draggedModalItem) {
+                document.querySelectorAll('.column-item').forEach(item => {
+                    item.classList.remove('drag-over');
+                });
+                target.classList.add('drag-over');
+            }
+        }
+        
+        function handleModalDrop(e) {
+            e.preventDefault();
+            
+            const target = e.target.closest('.column-item');
+            if (target && target !== draggedModalItem) {
+                const fromIndex = parseInt(draggedModalItem.dataset.columnIndex);
+                const toIndex = parseInt(target.dataset.columnIndex);
+                
+                vscode.postMessage({
+                    type: 'reorderColumns',
+                    fromIndex: fromIndex,
+                    toIndex: toIndex
+                });
+                
+                // Visual reorder
+                const columnList = document.getElementById('columnList');
+                if (fromIndex < toIndex) {
+                    columnList.insertBefore(draggedModalItem, target.nextSibling);
+                } else {
+                    columnList.insertBefore(draggedModalItem, target);
+                }
+                
+                // Update indices
+                Array.from(columnList.children).forEach((item, index) => {
+                    item.dataset.columnIndex = index;
+                });
+            }
+            
+            target.classList.remove('drag-over');
+        }
         
         function handleSearch() {
             const searchTerm = document.getElementById('searchInput').value;
@@ -2153,10 +3083,22 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
         }
         
         function handleContextMenu(event) {
-            const action = event.target.dataset.action;
+            const action = event.target.closest('.context-menu-item')?.dataset.action;
             if (!action || !contextMenuColumn) return;
 
             switch (action) {
+                case 'hideColumn':
+                    vscode.postMessage({
+                        type: 'toggleColumnVisibility',
+                        columnPath: contextMenuColumn
+                    });
+                    break;
+                case 'insertBefore':
+                    openAddColumnModal('before', contextMenuColumn);
+                    break;
+                case 'insertAfter':
+                    openAddColumnModal('after', contextMenuColumn);
+                    break;
                 case 'remove':
                     vscode.postMessage({
                         type: 'removeColumn',
@@ -2382,10 +3324,20 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
 
         function buildTableHeader(data) {
             const thead = document.getElementById('tableHead');
+            const colgroup = document.getElementById('tableColgroup');
             if (!thead) return;
 
             thead.innerHTML = '';
+            if (colgroup) colgroup.innerHTML = '';
+            
             const headerRow = document.createElement('tr');
+
+            // Add col for row number column
+            if (colgroup) {
+                const col = document.createElement('col');
+                col.style.width = '40px';
+                colgroup.appendChild(col);
+            }
 
             // Add row number header
             const rowNumHeader = document.createElement('th');
@@ -2399,6 +3351,13 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
             data.columns.forEach(column => {
                 if (!column.visible) {
                     return;
+                }
+
+                // Add col element for this column
+                if (colgroup) {
+                    const col = document.createElement('col');
+                    col.dataset.columnPath = column.path;
+                    colgroup.appendChild(col);
                 }
 
                 const th = document.createElement('th');
@@ -2472,10 +3431,102 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
                 th.appendChild(resizeHandle);
 
                 th.addEventListener('contextmenu', (e) => showContextMenu(e, column.path));
+                
+                // Add drag and drop for column reordering
+                th.draggable = true;
+                th.dataset.columnPath = column.path;
+                th.title = 'Drag to reorder • Right-click for options';
+                th.addEventListener('dragstart', handleHeaderDragStart);
+                th.addEventListener('dragend', handleHeaderDragEnd);
+                th.addEventListener('dragover', handleHeaderDragOver);
+                th.addEventListener('drop', handleHeaderDrop);
+                
                 headerRow.appendChild(th);
             });
 
             thead.appendChild(headerRow);
+            
+            // Restore saved column widths after rebuilding table
+            if (colgroup && Object.keys(savedColumnWidths).length > 0) {
+                const cols = colgroup.querySelectorAll('col');
+                cols.forEach(col => {
+                    const columnPath = col.dataset.columnPath;
+                    if (columnPath && savedColumnWidths[columnPath]) {
+                        col.style.width = savedColumnWidths[columnPath];
+                    }
+                });
+                
+                // Restore table layout if widths were saved
+                const table = document.getElementById('dataTable');
+                if (table) {
+                    table.style.tableLayout = 'fixed';
+                }
+            }
+        }
+        
+        // Table header drag and drop
+        let draggedHeader = null;
+        let draggedHeaderIndex = null;
+        
+        function handleHeaderDragStart(e) {
+            const th = e.target.closest('th');
+            if (!th || th.classList.contains('row-header')) return;
+            
+            draggedHeader = th;
+            th.classList.add('dragging-header');
+            e.dataTransfer.effectAllowed = 'move';
+            
+            // Find the index of this column (excluding row header)
+            const headers = Array.from(th.parentNode.children).filter(el => !el.classList.contains('row-header'));
+            draggedHeaderIndex = headers.indexOf(th);
+        }
+        
+        function handleHeaderDragEnd(e) {
+            const th = e.target.closest('th');
+            if (th) {
+                th.classList.remove('dragging-header');
+            }
+            document.querySelectorAll('th').forEach(header => {
+                header.classList.remove('drag-over-header');
+            });
+            draggedHeader = null;
+            draggedHeaderIndex = null;
+        }
+        
+        function handleHeaderDragOver(e) {
+            e.preventDefault();
+            e.dataTransfer.dropEffect = 'move';
+            
+            const th = e.target.closest('th');
+            if (th && !th.classList.contains('row-header') && th !== draggedHeader) {
+                document.querySelectorAll('th').forEach(header => {
+                    header.classList.remove('drag-over-header');
+                });
+                th.classList.add('drag-over-header');
+            }
+        }
+        
+        function handleHeaderDrop(e) {
+            e.preventDefault();
+            
+            const targetTh = e.target.closest('th');
+            if (!targetTh || targetTh.classList.contains('row-header') || targetTh === draggedHeader) {
+                return;
+            }
+            
+            // Find the index of target column (excluding row header)
+            const headers = Array.from(targetTh.parentNode.children).filter(el => !el.classList.contains('row-header'));
+            const targetIndex = headers.indexOf(targetTh);
+            
+            if (draggedHeaderIndex !== null && draggedHeaderIndex !== targetIndex) {
+                vscode.postMessage({
+                    type: 'reorderColumns',
+                    fromIndex: draggedHeaderIndex,
+                    toIndex: targetIndex
+                });
+            }
+            
+            targetTh.classList.remove('drag-over-header');
         }
 
         function createTableRow(row, rowIndex) {
@@ -3254,11 +4305,18 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
             document.getElementById('jsonViewContainer').style.display = 'none';
             document.getElementById('rawViewContainer').style.display = 'none';
             
+            // Show/hide column manager and wrap text controls based on view
+            const columnManagerBtn = document.getElementById('columnManagerBtn');
+            const wrapTextControl = document.querySelector('.wrap-text-control');
+            
             // Show selected view container
             switch (viewType) {
                 case 'table':
                     document.getElementById('tableViewContainer').style.display = 'block';
                     document.getElementById('dataTable').style.display = 'table';
+                    // Show column controls for table view
+                    columnManagerBtn.style.display = 'flex';
+                    wrapTextControl.style.display = 'flex';
                     // Hide loading state immediately for table view (already rendered)
                     logo.classList.remove('loading');
                     loadingState.style.display = 'none';
@@ -3268,6 +4326,9 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
                 case 'json':
                     document.getElementById('jsonViewContainer').style.display = 'block';
                     document.getElementById('jsonViewContainer').classList.add('isolated');
+                    // Hide column controls for json view
+                    columnManagerBtn.style.display = 'none';
+                    wrapTextControl.style.display = 'none';
                     
                     // Add event isolation to prevent bubbling
                     const jsonContainer = document.getElementById('jsonViewContainer');
@@ -3291,6 +4352,9 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
                     break;
                 case 'raw':
                     document.getElementById('rawViewContainer').style.display = 'block';
+                    // Hide column controls for raw view
+                    columnManagerBtn.style.display = 'none';
+                    wrapTextControl.style.display = 'none';
                     // Use setTimeout to allow the loading animation to show before rendering
                     // Longer delay for larger datasets to ensure smooth animation
                     const rawDelay = currentData.rawContent && currentData.rawContent.length > 100000 ? 100 : 50;
