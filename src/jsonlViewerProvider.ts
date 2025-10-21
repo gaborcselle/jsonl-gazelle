@@ -271,12 +271,19 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
             // Memory optimization: keep only recent rows for very large files
             if (this.memoryOptimized && this.rows.length > this.MAX_MEMORY_ROWS) {
                 const keepRows = Math.floor(this.MAX_MEMORY_ROWS * 0.8); // Keep 80% of max
+                const oldLength = this.rows.length;
                 this.rows = this.rows.slice(-keepRows);
                 this.parsedLines = this.parsedLines.slice(-keepRows);
                 
                 // Recalculate path counts for remaining rows
                 this.pathCounts = {};
-                this.rows.forEach(row => this.countPaths(row, '', this.pathCounts));
+                this.rows.forEach(row => {
+                    if (row && typeof row === 'object') {
+                        this.countPaths(row, '', this.pathCounts);
+                    }
+                });
+                
+                console.log(`Memory optimization: Kept ${this.rows.length} most recent rows (removed ${oldLength - this.rows.length} rows)`);
             }
             
             // Update columns progressively - only add new columns, don't re-expand
@@ -739,20 +746,29 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
 
     private updateWebview(webviewPanel: vscode.WebviewPanel) {
         try {
+            // Ensure data consistency before sending to webview
+            if (!this.rows || !this.columns) {
+                console.warn('updateWebview: rows or columns not initialized');
+                return;
+            }
+
             // Create a mapping of filtered rows to their actual indices
-            const rowIndices = this.filteredRows.map(row => this.rows.indexOf(row));
+            const rowIndices = this.filteredRows.map(row => {
+                const index = this.rows.indexOf(row);
+                return index >= 0 ? index : this.filteredRows.indexOf(row);
+            });
 
             webviewPanel.webview.postMessage({
                 type: 'update',
                 data: {
-                    rows: this.filteredRows,
+                    rows: this.filteredRows || [],
                     rowIndices: rowIndices, // Map filtered rows to actual indices
-                    allRows: this.rows, // Send the full array for index mapping
-                    columns: this.columns,
+                    allRows: this.rows || [], // Send the full array for index mapping
+                    columns: this.columns || [],
                     isIndexing: this.isIndexing,
                     searchTerm: this.searchTerm,
-                    parsedLines: this.parsedLines,
-                    rawContent: this.rawContent,
+                    parsedLines: this.parsedLines || [],
+                    rawContent: this.rawContent || '',
                     errorCount: this.errorCount,
                     loadingProgress: {
                         loadedLines: this.loadedLines,
@@ -1885,6 +1901,26 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
         }
         
         function updateTable(data) {
+            // Validate data structure before processing
+            if (!data || typeof data !== 'object') {
+                console.error('updateTable: Invalid data received');
+                return;
+            }
+            
+            // Ensure required arrays exist
+            if (!Array.isArray(data.rows)) {
+                console.warn('updateTable: data.rows is not an array, initializing');
+                data.rows = [];
+            }
+            if (!Array.isArray(data.columns)) {
+                console.warn('updateTable: data.columns is not an array, initializing');
+                data.columns = [];
+            }
+            if (!Array.isArray(data.rowIndices)) {
+                console.warn('updateTable: data.rowIndices is not an array, initializing');
+                data.rowIndices = data.rows.map((_, index) => index);
+            }
+            
             currentData = data;
             
             // Handle loading state in header
@@ -2084,7 +2120,9 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
 
             // Get the actual index from the pre-computed mapping
             // rowIndex here is the filtered index (0-based position in currentData.rows)
-            const actualRowIndex = currentData.rowIndices[rowIndex];
+            const actualRowIndex = currentData.rowIndices && currentData.rowIndices[rowIndex] !== undefined 
+                ? currentData.rowIndices[rowIndex] 
+                : rowIndex; // Fallback to filtered index if mapping is unavailable
 
             // Add row number cell
             const rowNumCell = document.createElement('td');
@@ -2140,7 +2178,7 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
             if (!tbody) return;
 
             if (reset) {
-                tableRenderState.totalRows = currentData.rows.length;
+                tableRenderState.totalRows = currentData.rows ? currentData.rows.length : 0;
                 tableRenderState.renderedRows = 0;
                 tableRenderState.isRendering = false;
                 tbody.innerHTML = '';
@@ -2148,6 +2186,7 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
 
             if (tableRenderState.isRendering) return;
             if (tableRenderState.renderedRows >= tableRenderState.totalRows) return;
+            if (!currentData.rows || currentData.rows.length === 0) return;
 
             tableRenderState.isRendering = true;
 
@@ -2156,7 +2195,10 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
             const end = Math.min(start + TABLE_CHUNK_SIZE, currentData.rows.length);
 
             for (let rowIndex = start; rowIndex < end; rowIndex++) {
-                fragment.appendChild(createTableRow(currentData.rows[rowIndex], rowIndex));
+                const row = currentData.rows[rowIndex];
+                if (row) { // Ensure row exists before creating table row
+                    fragment.appendChild(createTableRow(row, rowIndex));
+                }
             }
 
             tbody.appendChild(fragment);
@@ -2502,19 +2544,31 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
         }
 
         function getNestedValue(obj, path) {
+            if (!obj || !path) return undefined;
+            
             const parts = path.split('.');
             let current = obj;
             
             for (const part of parts) {
+                if (!current || typeof current !== 'object') {
+                    return undefined;
+                }
+                
                 if (part.includes('[') && part.includes(']')) {
                     const [key, indexStr] = part.split('[');
                     const index = parseInt(indexStr.replace(']', ''));
-                    current = current[key]?.[index];
+                    if (isNaN(index)) return undefined;
+                    current = current[key];
+                    if (Array.isArray(current)) {
+                        current = current[index];
+                    } else {
+                        return undefined;
+                    }
                 } else {
                     current = current[part];
                 }
                 
-                if (current === undefined) break;
+                if (current === undefined || current === null) break;
             }
             
             return current;
