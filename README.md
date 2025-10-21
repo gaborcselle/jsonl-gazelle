@@ -74,14 +74,14 @@ The generated file is automatically excluded from git via `.gitignore` to keep t
 - [X] Table view: Row deletion and addition - this should be on right-click on the row header, allow Delete, Insert above, and insert below
 - [X] Table view: Allow re-ordering columns, allow hiding /unhiding columns - like Google Sheets
 - [X] Table view: Allow wrapping text - add a checkbox in the top bar, and if it's checked, the line contents should wrap
-- [ ] Table view: Column addition - this should be a right-click on the column header, Insert before, insert after. (Prompt for the name of the new column) 
+- [X] Table view: Column addition - this should be a right-click on the column header, Insert before, insert after. (Prompt for the name of the new column) 
 - [ ] Table view: Insert column with AI: Pull up a prompt dialog, let me define how it should be filled by using `{{row}}` or `{{row.fieldname[index]}}`, {{row_number}}, {{rows_before}}, {{rows_after}} notation. Then parallelize the filling of the newly created column, show a progress bar.
 - [ ] Table view: Insert rows with AI: Right-click on the row header, then choose how many of the previous rows to feed it (default to 10), and a prompt dialog that defaults to "generate more like these, but make it different from the lines below"
 - [ ] Settings: A settings dialog to enter your OpenAI key and select a model (default to gpt-4.1-mini) for the above AI features
 - [X] Pretty print view: Insert before and after
 - [ ] Pretty print view: Resolve the layouting bug where the lines initially appear in a container that's too small
 - [ ] Pretty print view: Resolve the bug where multiple lines can look selected at the same time
-- [ ] Raw view: Add JSON syntax highlighting
+- [X] Raw view: Add JSON syntax highlighting
 - [ ] Find / Replace: Implement great Find / Replace / Replace All with Regex option and highlighting
 
 ## License
