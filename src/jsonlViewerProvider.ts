@@ -2365,6 +2365,7 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
             word-wrap: break-word;
             word-break: break-word;
             overflow-wrap: break-word;
+            vertical-align: top;
         }
         
         #dataTable:not(.text-wrap) td {
@@ -2450,7 +2451,7 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
             </div>
             <button class="column-manager-btn" id="columnManagerBtn" title="Show/hide columns and reorder them">
                 <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3h7a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-7m0-18H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h7m0-18v18"></path></svg>
-                Manage Columns
+                Columns
             </button>
             <label class="wrap-text-control" title="Wrap text in table cells">
                 <input type="checkbox" id="wrapTextCheckbox">
@@ -2466,6 +2467,7 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
             <!-- Table View Container -->
             <div class="view-container" id="tableViewContainer">
                 <table id="dataTable" style="display: none;">
+                    <colgroup id="tableColgroup"></colgroup>
                     <thead id="tableHead"></thead>
                     <tbody id="tableBody"></tbody>
                 </table>
@@ -2486,6 +2488,11 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
     </div>
     
     <div class="context-menu" id="contextMenu">
+        <div class="context-menu-item" data-action="hideColumn">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"></path><line x1="1" y1="1" x2="23" y2="23"></line></svg>
+            Hide Column
+        </div>
+        <div class="context-menu-separator"></div>
         <div class="context-menu-item" data-action="insertBefore">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg>
             Insert Column Before
@@ -2598,6 +2605,7 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
             json: 0,
             raw: 0
         };
+        let savedColumnWidths = {}; // Store column widths by column path
         const TABLE_CHUNK_SIZE = 200;
         const JSON_CHUNK_SIZE = 30;
         const tableRenderState = {
@@ -2623,6 +2631,31 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
             e.preventDefault();
             e.stopPropagation();
             
+            // Enable fixed layout when user starts resizing
+            const table = document.getElementById('dataTable');
+            if (table.style.tableLayout !== 'fixed') {
+                // Freeze all current widths before switching to fixed layout
+                const colgroup = document.getElementById('tableColgroup');
+                const thead = table.querySelector('thead tr');
+                if (colgroup && thead) {
+                    const headers = thead.querySelectorAll('th');
+                    const cols = colgroup.querySelectorAll('col');
+                    headers.forEach((header, index) => {
+                        if (cols[index] && !cols[index].style.width) {
+                            const width = header.getBoundingClientRect().width;
+                            cols[index].style.width = width + 'px';
+                            
+                            // Save width for persistence
+                            const columnPath = cols[index].dataset.columnPath;
+                            if (columnPath) {
+                                savedColumnWidths[columnPath] = width + 'px';
+                            }
+                        }
+                    });
+                }
+                table.style.tableLayout = 'fixed';
+            }
+            
             isResizing = true;
             resizeData = {
                 th: th,
@@ -2645,9 +2678,25 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
             // Update the column width
             resizeData.th.style.width = newWidth + 'px';
             
-            // Update all cells in this column
+            // Update the corresponding col element in colgroup (if exists)
             const columnIndex = Array.from(resizeData.th.parentNode.children).indexOf(resizeData.th);
             const table = document.getElementById('dataTable');
+            const colgroup = document.getElementById('tableColgroup');
+            
+            if (colgroup) {
+                const cols = colgroup.querySelectorAll('col');
+                if (cols[columnIndex]) {
+                    cols[columnIndex].style.width = newWidth + 'px';
+                    
+                    // Save this width for persistence
+                    const columnPath = cols[columnIndex].dataset.columnPath;
+                    if (columnPath) {
+                        savedColumnWidths[columnPath] = newWidth + 'px';
+                    }
+                }
+            }
+            
+            // Update all cells in this column (if not using fixed layout)
             const rows = table.querySelectorAll('tr');
             
             rows.forEach(row => {
@@ -2694,10 +2743,41 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
         // Wrap Text Toggle
         document.getElementById('wrapTextCheckbox').addEventListener('change', (e) => {
             const table = document.getElementById('dataTable');
+            const colgroup = document.getElementById('tableColgroup');
+            const thead = table.querySelector('thead tr');
+            
             if (e.target.checked) {
+                // Freeze current column widths before applying wrap
+                if (colgroup && thead) {
+                    const headers = thead.querySelectorAll('th');
+                    const cols = colgroup.querySelectorAll('col');
+                    
+                    // Measure and freeze ALL column widths
+                    headers.forEach((th, index) => {
+                        if (cols[index]) {
+                            // Always set width to current actual width
+                            const width = th.getBoundingClientRect().width;
+                            cols[index].style.width = width + 'px';
+                            
+                            // Save width for persistence
+                            const columnPath = cols[index].dataset.columnPath;
+                            if (columnPath) {
+                                savedColumnWidths[columnPath] = width + 'px';
+                            }
+                        }
+                    });
+                }
+                
+                // Apply fixed layout to prevent recalculation
+                table.style.tableLayout = 'fixed';
+                
+                // Add wrap class
                 table.classList.add('text-wrap');
             } else {
+                // Remove wrap but KEEP widths and fixed layout
                 table.classList.remove('text-wrap');
+                // Note: We intentionally do NOT remove table-layout or col widths
+                // so the column sizes remain stable
             }
         });
         
@@ -3007,6 +3087,12 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
             if (!action || !contextMenuColumn) return;
 
             switch (action) {
+                case 'hideColumn':
+                    vscode.postMessage({
+                        type: 'toggleColumnVisibility',
+                        columnPath: contextMenuColumn
+                    });
+                    break;
                 case 'insertBefore':
                     openAddColumnModal('before', contextMenuColumn);
                     break;
@@ -3238,10 +3324,20 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
 
         function buildTableHeader(data) {
             const thead = document.getElementById('tableHead');
+            const colgroup = document.getElementById('tableColgroup');
             if (!thead) return;
 
             thead.innerHTML = '';
+            if (colgroup) colgroup.innerHTML = '';
+            
             const headerRow = document.createElement('tr');
+
+            // Add col for row number column
+            if (colgroup) {
+                const col = document.createElement('col');
+                col.style.width = '40px';
+                colgroup.appendChild(col);
+            }
 
             // Add row number header
             const rowNumHeader = document.createElement('th');
@@ -3255,6 +3351,13 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
             data.columns.forEach(column => {
                 if (!column.visible) {
                     return;
+                }
+
+                // Add col element for this column
+                if (colgroup) {
+                    const col = document.createElement('col');
+                    col.dataset.columnPath = column.path;
+                    colgroup.appendChild(col);
                 }
 
                 const th = document.createElement('th');
@@ -3342,6 +3445,23 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
             });
 
             thead.appendChild(headerRow);
+            
+            // Restore saved column widths after rebuilding table
+            if (colgroup && Object.keys(savedColumnWidths).length > 0) {
+                const cols = colgroup.querySelectorAll('col');
+                cols.forEach(col => {
+                    const columnPath = col.dataset.columnPath;
+                    if (columnPath && savedColumnWidths[columnPath]) {
+                        col.style.width = savedColumnWidths[columnPath];
+                    }
+                });
+                
+                // Restore table layout if widths were saved
+                const table = document.getElementById('dataTable');
+                if (table) {
+                    table.style.tableLayout = 'fixed';
+                }
+            }
         }
         
         // Table header drag and drop
@@ -4185,11 +4305,18 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
             document.getElementById('jsonViewContainer').style.display = 'none';
             document.getElementById('rawViewContainer').style.display = 'none';
             
+            // Show/hide column manager and wrap text controls based on view
+            const columnManagerBtn = document.getElementById('columnManagerBtn');
+            const wrapTextControl = document.querySelector('.wrap-text-control');
+            
             // Show selected view container
             switch (viewType) {
                 case 'table':
                     document.getElementById('tableViewContainer').style.display = 'block';
                     document.getElementById('dataTable').style.display = 'table';
+                    // Show column controls for table view
+                    columnManagerBtn.style.display = 'flex';
+                    wrapTextControl.style.display = 'flex';
                     // Hide loading state immediately for table view (already rendered)
                     logo.classList.remove('loading');
                     loadingState.style.display = 'none';
@@ -4199,6 +4326,9 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
                 case 'json':
                     document.getElementById('jsonViewContainer').style.display = 'block';
                     document.getElementById('jsonViewContainer').classList.add('isolated');
+                    // Hide column controls for json view
+                    columnManagerBtn.style.display = 'none';
+                    wrapTextControl.style.display = 'none';
                     
                     // Add event isolation to prevent bubbling
                     const jsonContainer = document.getElementById('jsonViewContainer');
@@ -4222,6 +4352,9 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
                     break;
                 case 'raw':
                     document.getElementById('rawViewContainer').style.display = 'block';
+                    // Hide column controls for raw view
+                    columnManagerBtn.style.display = 'none';
+                    wrapTextControl.style.display = 'none';
                     // Use setTimeout to allow the loading animation to show before rendering
                     // Longer delay for larger datasets to ensure smooth animation
                     const rawDelay = currentData.rawContent && currentData.rawContent.length > 100000 ? 100 : 50;
