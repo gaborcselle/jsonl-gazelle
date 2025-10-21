@@ -121,6 +121,14 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
                             case 'validateClipboard':
                                 await this.handleValidateClipboard(webviewPanel);
                                 break;
+                            case 'reorderColumns':
+                                this.reorderColumns(message.fromIndex, message.toIndex);
+                                this.updateWebview(webviewPanel);
+                                break;
+                            case 'toggleColumnVisibility':
+                                this.toggleColumnVisibility(message.columnPath);
+                                this.updateWebview(webviewPanel);
+                                break;
                         }
                     } catch (error) {
                         console.error('Error handling webview message:', error);
@@ -622,6 +630,29 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
 
         // Remove all child columns
         this.columns = this.columns.filter(col => !col.parentPath || col.parentPath !== columnPath);
+    }
+
+    private reorderColumns(fromIndex: number, toIndex: number) {
+        // Validate indices
+        if (fromIndex < 0 || fromIndex >= this.columns.length || 
+            toIndex < 0 || toIndex >= this.columns.length ||
+            fromIndex === toIndex) {
+            return;
+        }
+
+        // Remove the column from its current position
+        const [movedColumn] = this.columns.splice(fromIndex, 1);
+        
+        // Insert it at the new position
+        this.columns.splice(toIndex, 0, movedColumn);
+    }
+
+    private toggleColumnVisibility(columnPath: string) {
+        const column = this.columns.find(col => col.path === columnPath);
+        if (!column) return;
+
+        // Toggle the visibility
+        column.visible = !column.visible;
     }
 
     private getSampleValue(columnPath: string): any {
@@ -1818,6 +1849,180 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
             color: var(--vscode-editor-findMatchForeground);
         }
         
+        /* Column Manager Button */
+        .column-manager-btn {
+            background-color: var(--vscode-button-background);
+            color: var(--vscode-button-foreground);
+            border: none;
+            padding: 8px 16px;
+            border-radius: 5px;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            font-size: 13px;
+            margin-left: auto;
+        }
+        
+        .column-manager-btn:hover {
+            background-color: var(--vscode-button-hoverBackground);
+        }
+        
+        .column-manager-btn svg {
+            flex-shrink: 0;
+        }
+        
+        /* Column Manager Modal */
+        .column-manager-modal {
+            display: none;
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background-color: rgba(0, 0, 0, 0.5);
+            z-index: 10000;
+            align-items: center;
+            justify-content: center;
+        }
+        
+        .column-manager-modal.show {
+            display: flex;
+        }
+        
+        .modal-content {
+            background-color: var(--vscode-editor-background);
+            border: 1px solid var(--vscode-panel-border);
+            border-radius: 6px;
+            width: 400px;
+            max-height: 80vh;
+            display: flex;
+            flex-direction: column;
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+        }
+        
+        .modal-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 16px;
+            border-bottom: 1px solid var(--vscode-panel-border);
+        }
+        
+        .modal-header h3 {
+            margin: 0;
+            font-size: 16px;
+            font-weight: 600;
+        }
+        
+        .modal-close {
+            background: none;
+            border: none;
+            color: var(--vscode-foreground);
+            font-size: 24px;
+            cursor: pointer;
+            padding: 0;
+            width: 24px;
+            height: 24px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            opacity: 0.7;
+        }
+        
+        .modal-close:hover {
+            opacity: 1;
+        }
+        
+        .modal-body {
+            padding: 16px;
+            overflow-y: auto;
+            flex: 1;
+        }
+        
+        .modal-hint {
+            padding: 12px;
+            background-color: var(--vscode-textBlockQuote-background);
+            border-left: 3px solid var(--vscode-focusBorder);
+            border-radius: 4px;
+            margin-bottom: 16px;
+            font-size: 13px;
+            color: var(--vscode-foreground);
+            opacity: 0.9;
+        }
+        
+        .column-list {
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+        }
+        
+        .column-item {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            padding: 10px;
+            background-color: var(--vscode-list-inactiveSelectionBackground);
+            border-radius: 4px;
+            cursor: grab;
+            border: 1px solid transparent;
+        }
+        
+        .column-item:hover {
+            background-color: var(--vscode-list-hoverBackground);
+        }
+        
+        .column-item.dragging {
+            opacity: 0.5;
+            cursor: grabbing;
+        }
+        
+        .column-item.drag-over {
+            border-top: 2px solid var(--vscode-focusBorder);
+        }
+        
+        .column-drag-handle {
+            cursor: grab;
+            color: var(--vscode-foreground);
+            opacity: 0.5;
+            display: flex;
+            align-items: center;
+        }
+        
+        .column-item:active .column-drag-handle {
+            cursor: grabbing;
+        }
+        
+        .column-checkbox {
+            margin: 0;
+            cursor: pointer;
+        }
+        
+        .column-name {
+            flex: 1;
+            font-size: 13px;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+        
+        /* Drag and Drop for Table Headers */
+        th.dragging-header {
+            opacity: 0.5;
+        }
+        
+        th.drag-over-header {
+            border-left: 3px solid var(--vscode-focusBorder);
+        }
+        
+        th {
+            cursor: grab;
+        }
+        
+        th:active {
+            cursor: grabbing;
+        }
+        
     </style>
 </head>
 <body>
@@ -1841,6 +2046,10 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
                 <button data-view="raw"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"></path><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"></path></svg> Raw</button>
                 <div class="error-count" id="errorCount" style="display: none;"></div>
             </div>
+            <button class="column-manager-btn" id="columnManagerBtn" title="Show/hide columns and reorder them">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3h7a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-7m0-18H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h7m0-18v18"></path></svg>
+                Manage Columns
+            </button>
         </div>
         
         <div class="table-container" id="tableContainer">
@@ -1909,6 +2118,21 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
         <div class="row-context-menu-item" data-action="deleteRow" style="color: var(--vscode-errorForeground);">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path></svg>
             Delete
+        </div>
+    </div>
+
+    <div class="column-manager-modal" id="columnManagerModal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3>Manage Columns</h3>
+                <button class="modal-close" id="modalCloseBtn">&times;</button>
+            </div>
+            <div class="modal-body">
+                <div class="modal-hint">
+                    💡 Check/uncheck to show/hide columns. Drag items to reorder.
+                </div>
+                <div class="column-list" id="columnList"></div>
+            </div>
         </div>
     </div>
 
@@ -2025,6 +2249,131 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
         document.addEventListener('click', hideContextMenu);
         document.getElementById('contextMenu').addEventListener('click', handleContextMenu);
         document.getElementById('rowContextMenu').addEventListener('click', handleRowContextMenu);
+        
+        // Column Manager Modal
+        document.getElementById('columnManagerBtn').addEventListener('click', openColumnManager);
+        document.getElementById('modalCloseBtn').addEventListener('click', closeColumnManager);
+        document.getElementById('columnManagerModal').addEventListener('click', (e) => {
+            if (e.target.id === 'columnManagerModal') {
+                closeColumnManager();
+            }
+        });
+        
+        function openColumnManager() {
+            const modal = document.getElementById('columnManagerModal');
+            const columnList = document.getElementById('columnList');
+            columnList.innerHTML = '';
+            
+            currentData.columns.forEach((column, index) => {
+                const columnItem = document.createElement('div');
+                columnItem.className = 'column-item';
+                columnItem.draggable = true;
+                columnItem.dataset.columnIndex = index;
+                columnItem.dataset.columnPath = column.path;
+                
+                // Drag handle
+                const dragHandle = document.createElement('div');
+                dragHandle.className = 'column-drag-handle';
+                dragHandle.innerHTML = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="4" y1="8" x2="20" y2="8"></line><line x1="4" y1="16" x2="20" y2="16"></line></svg>';
+                
+                // Checkbox
+                const checkbox = document.createElement('input');
+                checkbox.type = 'checkbox';
+                checkbox.className = 'column-checkbox';
+                checkbox.checked = column.visible;
+                checkbox.addEventListener('change', () => {
+                    vscode.postMessage({
+                        type: 'toggleColumnVisibility',
+                        columnPath: column.path
+                    });
+                });
+                
+                // Column name
+                const columnName = document.createElement('span');
+                columnName.className = 'column-name';
+                columnName.textContent = column.displayName;
+                columnName.title = column.displayName;
+                
+                columnItem.appendChild(dragHandle);
+                columnItem.appendChild(checkbox);
+                columnItem.appendChild(columnName);
+                
+                // Drag events for modal
+                columnItem.addEventListener('dragstart', handleModalDragStart);
+                columnItem.addEventListener('dragend', handleModalDragEnd);
+                columnItem.addEventListener('dragover', handleModalDragOver);
+                columnItem.addEventListener('drop', handleModalDrop);
+                
+                columnList.appendChild(columnItem);
+            });
+            
+            modal.classList.add('show');
+        }
+        
+        function closeColumnManager() {
+            const modal = document.getElementById('columnManagerModal');
+            modal.classList.remove('show');
+        }
+        
+        // Modal drag and drop
+        let draggedModalItem = null;
+        
+        function handleModalDragStart(e) {
+            draggedModalItem = e.target;
+            e.target.classList.add('dragging');
+            e.dataTransfer.effectAllowed = 'move';
+        }
+        
+        function handleModalDragEnd(e) {
+            e.target.classList.remove('dragging');
+            document.querySelectorAll('.column-item').forEach(item => {
+                item.classList.remove('drag-over');
+            });
+        }
+        
+        function handleModalDragOver(e) {
+            e.preventDefault();
+            e.dataTransfer.dropEffect = 'move';
+            
+            const target = e.target.closest('.column-item');
+            if (target && target !== draggedModalItem) {
+                document.querySelectorAll('.column-item').forEach(item => {
+                    item.classList.remove('drag-over');
+                });
+                target.classList.add('drag-over');
+            }
+        }
+        
+        function handleModalDrop(e) {
+            e.preventDefault();
+            
+            const target = e.target.closest('.column-item');
+            if (target && target !== draggedModalItem) {
+                const fromIndex = parseInt(draggedModalItem.dataset.columnIndex);
+                const toIndex = parseInt(target.dataset.columnIndex);
+                
+                vscode.postMessage({
+                    type: 'reorderColumns',
+                    fromIndex: fromIndex,
+                    toIndex: toIndex
+                });
+                
+                // Visual reorder
+                const columnList = document.getElementById('columnList');
+                if (fromIndex < toIndex) {
+                    columnList.insertBefore(draggedModalItem, target.nextSibling);
+                } else {
+                    columnList.insertBefore(draggedModalItem, target);
+                }
+                
+                // Update indices
+                Array.from(columnList.children).forEach((item, index) => {
+                    item.dataset.columnIndex = index;
+                });
+            }
+            
+            target.classList.remove('drag-over');
+        }
         
         function handleSearch() {
             const searchTerm = document.getElementById('searchInput').value;
@@ -2472,10 +2821,85 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
                 th.appendChild(resizeHandle);
 
                 th.addEventListener('contextmenu', (e) => showContextMenu(e, column.path));
+                
+                // Add drag and drop for column reordering
+                th.draggable = true;
+                th.dataset.columnPath = column.path;
+                th.title = 'Drag to reorder • Right-click for options';
+                th.addEventListener('dragstart', handleHeaderDragStart);
+                th.addEventListener('dragend', handleHeaderDragEnd);
+                th.addEventListener('dragover', handleHeaderDragOver);
+                th.addEventListener('drop', handleHeaderDrop);
+                
                 headerRow.appendChild(th);
             });
 
             thead.appendChild(headerRow);
+        }
+        
+        // Table header drag and drop
+        let draggedHeader = null;
+        let draggedHeaderIndex = null;
+        
+        function handleHeaderDragStart(e) {
+            const th = e.target.closest('th');
+            if (!th || th.classList.contains('row-header')) return;
+            
+            draggedHeader = th;
+            th.classList.add('dragging-header');
+            e.dataTransfer.effectAllowed = 'move';
+            
+            // Find the index of this column (excluding row header)
+            const headers = Array.from(th.parentNode.children).filter(el => !el.classList.contains('row-header'));
+            draggedHeaderIndex = headers.indexOf(th);
+        }
+        
+        function handleHeaderDragEnd(e) {
+            const th = e.target.closest('th');
+            if (th) {
+                th.classList.remove('dragging-header');
+            }
+            document.querySelectorAll('th').forEach(header => {
+                header.classList.remove('drag-over-header');
+            });
+            draggedHeader = null;
+            draggedHeaderIndex = null;
+        }
+        
+        function handleHeaderDragOver(e) {
+            e.preventDefault();
+            e.dataTransfer.dropEffect = 'move';
+            
+            const th = e.target.closest('th');
+            if (th && !th.classList.contains('row-header') && th !== draggedHeader) {
+                document.querySelectorAll('th').forEach(header => {
+                    header.classList.remove('drag-over-header');
+                });
+                th.classList.add('drag-over-header');
+            }
+        }
+        
+        function handleHeaderDrop(e) {
+            e.preventDefault();
+            
+            const targetTh = e.target.closest('th');
+            if (!targetTh || targetTh.classList.contains('row-header') || targetTh === draggedHeader) {
+                return;
+            }
+            
+            // Find the index of target column (excluding row header)
+            const headers = Array.from(targetTh.parentNode.children).filter(el => !el.classList.contains('row-header'));
+            const targetIndex = headers.indexOf(targetTh);
+            
+            if (draggedHeaderIndex !== null && draggedHeaderIndex !== targetIndex) {
+                vscode.postMessage({
+                    type: 'reorderColumns',
+                    fromIndex: draggedHeaderIndex,
+                    toIndex: targetIndex
+                });
+            }
+            
+            targetTh.classList.remove('drag-over-header');
         }
 
         function createTableRow(row, rowIndex) {
