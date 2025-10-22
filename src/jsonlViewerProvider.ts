@@ -4571,22 +4571,23 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
             // First, check if the column contains stringified JSON
             let hasStringifiedJson = false;
             const totalRows = this.rows.length;
-            
+            const isRootLevelString = columnPath === '(value)';
+
             // Check a sample of rows to see if they contain stringified JSON
             const sampleSize = Math.min(100, totalRows);
             for (let i = 0; i < sampleSize; i++) {
-                const value = this.getNestedValue(this.rows[i], columnPath);
+                const value = isRootLevelString ? this.rows[i] : this.getNestedValue(this.rows[i], columnPath);
                 if (this.isStringifiedJson(value)) {
                     hasStringifiedJson = true;
                     break;
                 }
             }
-            
+
             if (!hasStringifiedJson) {
                 vscode.window.showWarningMessage(`Column "${columnPath}" does not appear to contain stringified JSON data.`);
                 return;
             }
-            
+
             // Process rows in chunks to avoid blocking the UI
             const chunkSize = 100;
             let successCount = 0;
@@ -4602,15 +4603,20 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
                     
                     for (let i = 0; i < totalRows; i += chunkSize) {
                         const endIndex = Math.min(i + chunkSize, totalRows);
-                        
+
                         for (let j = i; j < endIndex; j++) {
                             const row = this.rows[j];
-                            const value = this.getNestedValue(row, columnPath);
-                            
+                            const value = isRootLevelString ? row : this.getNestedValue(row, columnPath);
+
                             if (this.isStringifiedJson(value)) {
                                 try {
                                     const parsedValue = JSON.parse(value as string);
-                                    this.setNestedValue(row, columnPath, parsedValue);
+                                    if (isRootLevelString) {
+                                        // Replace the entire row with the parsed object
+                                        this.rows[j] = parsedValue;
+                                    } else {
+                                        this.setNestedValue(row, columnPath, parsedValue);
+                                    }
                                     successCount++;
                                 } catch (error) {
                                     errorCount++;
@@ -4638,12 +4644,17 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
                     
                     for (let j = i; j < endIndex; j++) {
                         const row = this.rows[j];
-                        const value = this.getNestedValue(row, columnPath);
-                        
+                        const value = isRootLevelString ? row : this.getNestedValue(row, columnPath);
+
                         if (this.isStringifiedJson(value)) {
                             try {
                                 const parsedValue = JSON.parse(value as string);
-                                this.setNestedValue(row, columnPath, parsedValue);
+                                if (isRootLevelString) {
+                                    // Replace the entire row with the parsed object
+                                    this.rows[j] = parsedValue;
+                                } else {
+                                    this.setNestedValue(row, columnPath, parsedValue);
+                                }
                                 successCount++;
                             } catch (error) {
                                 errorCount++;
@@ -4658,25 +4669,39 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
                     }
                 }
             }
-            
+
+            // If we unstringified root-level strings, we need to recalculate columns
+            if (isRootLevelString && successCount > 0) {
+                // Recalculate path counts for the new object structure
+                this.pathCounts = {};
+                this.rows.forEach(row => {
+                    if (row && typeof row === 'object') {
+                        this.countPaths(row, '', this.pathCounts);
+                    }
+                });
+
+                // Update columns to reflect the new structure
+                this.updateColumns();
+            }
+
             // Update raw content and save changes
             this.rawContent = this.rows.map(row => JSON.stringify(row)).join('\n');
-            
+
             // Save the changes to the file
             const fullRange = new vscode.Range(
                 document.positionAt(0),
                 document.positionAt(document.getText().length)
             );
-            
+
             const edit = new vscode.WorkspaceEdit();
             edit.replace(document.uri, fullRange, this.rawContent);
-            
+
             const success = await vscode.workspace.applyEdit(edit);
             if (!success) {
                 vscode.window.showErrorMessage('Failed to save unstringified changes to file.');
                 return;
             }
-            
+
             // Update the webview to reflect changes
             this.updateWebview(webviewPanel);
             
