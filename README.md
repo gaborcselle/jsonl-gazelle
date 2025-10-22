@@ -51,7 +51,7 @@ npm run watch
 
 ## Test Data Generation
 
-For testing with large datasets, you can generate a comprehensive test file with 10,000 lines (~64MB) containing varied fields and nested structures:
+For testing with large datasets, you can generate a comprehensive test file with 45,000 lines (~64MB) containing varied fields and nested structures:
 
 ```bash
 # Generate large test data file
@@ -75,7 +75,7 @@ The generated file is automatically excluded from git via `.gitignore` to keep t
 - [X] Table view: Allow re-ordering columns, allow hiding /unhiding columns - like Google Sheets
 - [X] Table view: Allow wrapping text - add a checkbox in the top bar, and if it's checked, the line contents should wrap
 - [X] Table view: Column addition - this should be a right-click on the column header, Insert before, insert after. (Prompt for the name of the new column) 
-- [ ] Table view: Fix "unstringify column" for `escaped-json.jsonl` - it should create those columns
+- [X] Table view: Fix "unstringify column" for `escaped-json.jsonl` - it should create those columns
 - [ ] Table view: Insert column with AI: Pull up a prompt dialog, let me define how it should be filled by using `{{row}}` or `{{row.fieldname[index]}}`, `{{row_number}}`, `{{rows_before}}`, {{rows_after}} notation. Then parallelize the filling of the newly created column, show a progress bar.
 - [ ] Table view: Insert rows with AI: Right-click on the row header, then choose how many of the previous rows to feed it (default to 10), and a prompt dialog that defaults to "generate more like these, but make it different from the lines below"
 - [ ] Settings: A settings dialog to enter your OpenAI key and select a model (default to gpt-4.1-mini) for the above AI features
@@ -85,6 +85,8 @@ The generated file is automatically excluded from git via `.gitignore` to keep t
 - [ ] Raw view: Allow editing the raw view
 - [ ] Raw view: Add JSON syntax highlighting
 - [ ] Find / Replace: Implement great Find / Replace / Replace All with Regex option and highlighting
+- [ ] Large files: Generate a file with `generate-large.js`, loading fails above 100 MB with "Assertion Failed: Argument is `undefined` or `null`."
+- [ ] Split codebase: Figure out how to split
 
 ## License
 

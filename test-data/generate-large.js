@@ -14,7 +14,7 @@ const fs = require('fs');
 const path = require('path');
 
 // Configuration
-const TARGET_LINES = 10000;
+const TARGET_LINES = 45000;
 const TARGET_SIZE_MB = 64;
 const OUTPUT_FILE = path.join(__dirname, 'large.jsonl');
 
