@@ -104,6 +104,9 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
                             case 'rawContentChanged':
                                 await this.handleRawContentChange(message.newContent, webviewPanel, document);
                                 break;
+                            case 'rawContentSave':
+                                await this.handleRawContentSave(message.newContent, webviewPanel, document);
+                                break;
                             case 'unstringifyColumn':
                                 await this.handleUnstringifyColumn(message.columnPath, webviewPanel, document);
                                 break;
@@ -1643,9 +1646,22 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
     }
 
     private async handleRawContentChange(newContent: string, webviewPanel: vscode.WebviewPanel, document: vscode.TextDocument) {
+        await this.updateRawContent(newContent, webviewPanel, document, false);
+    }
+
+    private async handleRawContentSave(newContent: string, webviewPanel: vscode.WebviewPanel, document: vscode.TextDocument) {
+        await this.updateRawContent(newContent, webviewPanel, document, true);
+    }
+
+    private async updateRawContent(newContent: string, webviewPanel: vscode.WebviewPanel, document: vscode.TextDocument, isSave: boolean) {
         try {
             // Update the raw content
             this.rawContent = newContent;
+            
+            // Set updating flag to prevent document change handler from reloading (only for change events)
+            if (!isSave) {
+                this.isUpdating = true;
+            }
             
             // Update the document content
             const edit = new vscode.WorkspaceEdit();
@@ -1654,17 +1670,80 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
                 new vscode.Range(0, 0, document.lineCount, 0),
                 newContent
             );
-            await vscode.workspace.applyEdit(edit);
+            const success = await vscode.workspace.applyEdit(edit);
             
-            // Reload the file to update parsed data
-            await this.loadJsonlFile(document);
+            if (success) {
+                // Save the document to update dirty state indicator (only for save events)
+                if (isSave) {
+                    await document.save();
+                }
+                
+                // Only update internal data structures when saving, not on content changes
+                if (isSave) {
+                    // Parse the new content to update internal data without full reload
+                    const lines = newContent.split('\n');
+                    this.totalLines = lines.length;
+                    this.loadedLines = 0;
+                    this.rows = [];
+                    this.parsedLines = [];
+                    
+                    // Parse lines to update rows and columns
+                    for (let i = 0; i < lines.length; i++) {
+                        const line = lines[i].trim();
+                        if (line) {
+                            try {
+                                const parsed = JSON.parse(line);
+                                this.rows.push(parsed);
+                                this.parsedLines.push({
+                                    data: parsed,
+                                    lineNumber: i + 1,
+                                    rawLine: line,
+                                    error: undefined
+                                });
+                            } catch (error) {
+                                this.parsedLines.push({
+                                    data: null,
+                                    lineNumber: i + 1,
+                                    rawLine: line,
+                                    error: error instanceof Error ? error.message : String(error)
+                                });
+                            }
+                        }
+                    }
+                    
+                    this.loadedLines = this.rows.length;
+                    this.filteredRows = this.rows;
+                    
+                    // Update columns based on new data
+                    this.updateColumns();
+                }
+                
+                // Update the webview to reflect changes
+                this.updateWebview(webviewPanel);
+                
+                // Show success message only for save events
+                if (isSave) {
+                    vscode.window.showInformationMessage('File saved successfully');
+                }
+            } else {
+                const errorMsg = isSave ? 'Failed to save file' : 'Failed to save raw content changes';
+                vscode.window.showErrorMessage(errorMsg);
+            }
             
-            // Update the webview to reflect changes
-            this.updateWebview(webviewPanel);
+            // Reset updating flag after a short delay (only for change events)
+            if (!isSave) {
+                setTimeout(() => { this.isUpdating = false; }, 100);
+            }
         } catch (error) {
-            console.error('Error handling raw content change:', error);
+            console.error('Error handling raw content:', error);
             const errorMessage = error instanceof Error ? error.message : String(error);
-            vscode.window.showErrorMessage('Failed to save raw content changes: ' + errorMessage);
+            const errorMsg = isSave ? 'Failed to save file: ' + errorMessage : 'Failed to save raw content changes: ' + errorMessage;
+            vscode.window.showErrorMessage(errorMsg);
+            
+            // Reset updating flag on error (only for change events)
+            if (!isSave) {
+                setTimeout(() => { this.isUpdating = false; }, 100);
+            }
         }
     }
 
@@ -5477,7 +5556,7 @@ Available variables:
                 // Handle Ctrl+S
                 rawEditor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyS, () => {
                     vscode.postMessage({
-                        type: 'rawContentChanged',
+                        type: 'rawContentSave',
                         newContent: rawEditor.getValue()
                     });
                 });
