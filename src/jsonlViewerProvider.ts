@@ -5542,6 +5542,19 @@ Available variables:
                     fontFamily: 'Consolas, "Courier New", monospace'
                 });
                 
+                // Disable JSON validation for JSONL files
+                monaco.languages.json.jsonDefaults.setDiagnosticsOptions({
+                    validate: false,
+                    allowComments: true,
+                    schemas: []
+                });
+                
+                // Additionally disable validation for current model
+                const model = rawEditor.getModel();
+                if (model) {
+                    monaco.editor.setModelMarkers(model, 'json', []);
+                }
+                
                 // Handle content changes
                 rawEditor.onDidChangeModelContent(() => {
                     clearTimeout(window.rawEditTimeout);
