@@ -107,6 +107,9 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
                             case 'rawContentSave':
                                 await this.handleRawContentSave(message.newContent, webviewPanel, document);
                                 break;
+                            case 'forceSave':
+                                await document.save();
+                                break;
                             case 'unstringifyColumn':
                                 await this.handleUnstringifyColumn(message.columnPath, webviewPanel, document);
                                 break;
@@ -5402,6 +5405,13 @@ Available variables:
             // Don't switch if already on the same view
             if (currentView === viewType) {
                 return;
+            }
+            
+            // Force save when switching away from raw view
+            if (currentView === 'raw' && viewType !== 'raw') {
+                vscode.postMessage({
+                    type: 'forceSave'
+                });
             }
             
             // Save current scroll position
