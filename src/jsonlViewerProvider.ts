@@ -5414,7 +5414,7 @@ Available variables:
                         loadingState.style.display = 'none';
                         searchContainer.classList.remove('controls-hidden');
                         
-                        // Автоматически открыть файл в редакторе VS Code
+                        // Automatically open file in VS Code editor
                         vscode.postMessage({
                             type: 'openInEditor'
                         });
@@ -5442,7 +5442,7 @@ Available variables:
             const editorContainer = document.getElementById('rawEditor');
             if (!editorContainer) return;
             
-            // Инициализировать Monaco Editor
+            // Initialize Monaco Editor
             require.config({ paths: { 'vs': 'https://cdn.jsdelivr.net/npm/monaco-editor@0.44.0/min/vs' } });
             require(['vs/editor/editor.main'], function () {
                 if (rawEditor) {
@@ -5463,7 +5463,7 @@ Available variables:
                     fontFamily: 'Consolas, "Courier New", monospace'
                 });
                 
-                // Обработчик изменений
+                // Handle content changes
                 rawEditor.onDidChangeModelContent(() => {
                     clearTimeout(window.rawEditTimeout);
                     window.rawEditTimeout = setTimeout(() => {
@@ -5474,7 +5474,7 @@ Available variables:
                     }, 500);
                 });
                 
-                // Обработчик Ctrl+S
+                // Handle Ctrl+S
                 rawEditor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyS, () => {
                     vscode.postMessage({
                         type: 'rawContentChanged',
