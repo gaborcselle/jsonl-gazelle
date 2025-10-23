@@ -2040,6 +2040,7 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>JSONL Gazelle</title>
+    <script src="https://cdn.jsdelivr.net/npm/monaco-editor@0.44.0/min/vs/loader.js"></script>
     <style>
         html, body {
             font-family: var(--vscode-font-family);
@@ -2537,6 +2538,7 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
             background-color: var(--vscode-editor-background);
             padding: 0;
         }
+        
         
         .raw-content {
             font-family: var(--vscode-editor-font-family);
@@ -3187,7 +3189,7 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
             <!-- Raw View Container -->
             <div class="view-container" id="rawViewContainer" style="display: none;">
                 <div class="raw-view" id="rawView">
-                    <div class="raw-content" id="rawContent"></div>
+                    <div id="rawEditor" style="height: 100%; width: 100%;"></div>
                 </div>
             </div>
         </div>
@@ -3551,19 +3553,7 @@ Available variables:
             document.removeEventListener('mouseup', stopResize);
         }
         
-        // Event listeners
-        document.getElementById('searchInput').addEventListener('input', handleSearch);
-        document.getElementById('logo').addEventListener('click', () => {
-            vscode.postMessage({
-                type: 'openUrl',
-                url: 'https://github.com/gaborcselle/jsonl-gazelle'
-            });
-        });
         
-        // Context menu
-        document.addEventListener('click', hideContextMenu);
-        document.getElementById('contextMenu').addEventListener('click', handleContextMenu);
-        document.getElementById('rowContextMenu').addEventListener('click', handleRowContextMenu);
         
         // Column Manager Modal
         document.getElementById('columnManagerBtn').addEventListener('click', openColumnManager);
@@ -5423,6 +5413,11 @@ Available variables:
                         logo.classList.remove('loading');
                         loadingState.style.display = 'none';
                         searchContainer.classList.remove('controls-hidden');
+                        
+                        // Автоматически открыть файл в редакторе VS Code
+                        vscode.postMessage({
+                            type: 'openInEditor'
+                        });
                     }, rawDelay);
                     break;
             }
@@ -5441,11 +5436,51 @@ Available variables:
             });
         }
         
+        let rawEditor = null;
+        
         function updateRawView() {
-            renderRawChunk(true);
-            requestAnimationFrame(() => {
-                ensureRawViewportFilled();
-                restoreScrollPosition('raw');
+            const editorContainer = document.getElementById('rawEditor');
+            if (!editorContainer) return;
+            
+            // Инициализировать Monaco Editor
+            require.config({ paths: { 'vs': 'https://cdn.jsdelivr.net/npm/monaco-editor@0.44.0/min/vs' } });
+            require(['vs/editor/editor.main'], function () {
+                if (rawEditor) {
+                    rawEditor.dispose();
+                }
+                
+                rawEditor = monaco.editor.create(editorContainer, {
+                    value: currentData.rawContent || '',
+                    language: 'json',
+                    theme: 'vs-dark',
+                    automaticLayout: true,
+                    scrollBeyondLastLine: false,
+                    minimap: { enabled: false },
+                    wordWrap: 'on',
+                    lineNumbers: 'on',
+                    folding: true,
+                    fontSize: 14,
+                    fontFamily: 'Consolas, "Courier New", monospace'
+                });
+                
+                // Обработчик изменений
+                rawEditor.onDidChangeModelContent(() => {
+                    clearTimeout(window.rawEditTimeout);
+                    window.rawEditTimeout = setTimeout(() => {
+                        vscode.postMessage({
+                            type: 'rawContentChanged',
+                            newContent: rawEditor.getValue()
+                        });
+                    }, 500);
+                });
+                
+                // Обработчик Ctrl+S
+                rawEditor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyS, () => {
+                    vscode.postMessage({
+                        type: 'rawContentChanged',
+                        newContent: rawEditor.getValue()
+                    });
+                });
             });
         }
         
