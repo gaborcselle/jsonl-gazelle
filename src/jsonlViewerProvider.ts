@@ -135,6 +135,18 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
                             case 'addColumn':
                                 await this.handleAddColumn(message.columnName, message.position, message.referenceColumn, webviewPanel, document);
                                 break;
+                            case 'addAIColumn':
+                                await this.handleAddAIColumn(message.columnName, message.promptTemplate, message.position, message.referenceColumn, webviewPanel, document);
+                                break;
+                            case 'getSettings':
+                                await this.handleGetSettings(webviewPanel);
+                                break;
+                            case 'saveSettings':
+                                await this.handleSaveSettings(message.settings);
+                                break;
+                            case 'generateAIRows':
+                                await this.handleGenerateAIRows(message.rowIndex, message.contextRowCount, message.rowCount, message.promptTemplate, webviewPanel, document);
+                                break;
                         }
                     } catch (error) {
                         console.error('Error handling webview message:', error);
@@ -147,7 +159,11 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
                 if (e.document.uri.toString() === document.uri.toString()) {
                     // Skip reload if we're currently updating the document
                     if (!this.isUpdating) {
-                        this.loadJsonlFile(document);
+                        // Only reload if the content actually changed
+                        const newContent = e.document.getText();
+                        if (newContent !== this.rawContent) {
+                            this.loadJsonlFile(document);
+                        }
                     }
                 }
             });
@@ -853,16 +869,44 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
                 vscode.window.showErrorMessage('Cannot add columns to primitive values. File must contain JSON objects.');
                 return;
             }
-            
-            // Check if column with this name already exists in this file
-            const columnExists = this.columns.some(col => col.path === columnName) ||
-                                 this.rows.some(row => row.hasOwnProperty(columnName));
-            
-            if (columnExists) {
+
+            // Check if column with this name already exists in the columns list
+            const existingColumnIndex = this.columns.findIndex(col => col.path === columnName);
+
+            // If column exists but has no data (from a previous failed attempt), clean it up
+            const hasDataInRows = this.rows.some(row => row.hasOwnProperty(columnName) && row[columnName] !== null);
+
+            if (existingColumnIndex !== -1 && hasDataInRows) {
+                // Column exists and has real data - don't allow duplicate
                 vscode.window.showErrorMessage(`Column "${columnName}" already exists in this file.`);
                 return;
             }
-            
+
+            // Clean up any remnants from previous failed attempts
+            if (existingColumnIndex !== -1) {
+                // Remove from columns list
+                this.columns.splice(existingColumnIndex, 1);
+            }
+
+            // Remove from rows if present
+            if (this.rows.some(row => row.hasOwnProperty(columnName))) {
+                this.rows.forEach(row => {
+                    delete row[columnName];
+                });
+            }
+
+            // Remove from manualColumnsPerFile to prevent restoration
+            {
+                const fileUri = document.uri.toString();
+                const savedManualColumns = this.manualColumnsPerFile.get(fileUri) || [];
+                const filteredColumns = savedManualColumns.filter(col => col.path !== columnName);
+                if (filteredColumns.length > 0) {
+                    this.manualColumnsPerFile.set(fileUri, filteredColumns);
+                } else {
+                    this.manualColumnsPerFile.delete(fileUri);
+                }
+            }
+
             // Find the reference column
             const refColumnIndex = this.columns.findIndex(col => col.path === referenceColumn);
             if (refColumnIndex === -1) return;
@@ -952,6 +996,570 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
             vscode.window.showErrorMessage(`Failed to add column: ${error instanceof Error ? error.message : 'Unknown error'}`);
             console.error('Error adding column:', error);
         }
+    }
+
+    private async handleAddAIColumn(
+        columnName: string,
+        promptTemplate: string,
+        position: 'before' | 'after',
+        referenceColumn: string,
+        webviewPanel: vscode.WebviewPanel,
+        document: vscode.TextDocument
+    ) {
+        // Set isUpdating flag at the very start to prevent any reloads
+        this.isUpdating = true;
+
+        try {
+            // Validate column name length
+            if (columnName.length > 100) {
+                vscode.window.showErrorMessage('Column name is too long. Maximum length is 100 characters.');
+                this.isUpdating = false;
+                return;
+            }
+
+            // Check if data contains objects (not primitives)
+            if (this.rows.length > 0 && typeof this.rows[0] !== 'object') {
+                vscode.window.showErrorMessage('Cannot add columns to primitive values. File must contain JSON objects.');
+                this.isUpdating = false;
+                return;
+            }
+
+            // Check if column with this name already exists in the columns list
+            const existingColumnIndex = this.columns.findIndex(col => col.path === columnName);
+
+            // If column exists but has no data (from a previous failed attempt), clean it up
+            const hasDataInRows = this.rows.some(row => row.hasOwnProperty(columnName) && row[columnName] !== null);
+
+            if (existingColumnIndex !== -1 && hasDataInRows) {
+                // Column exists and has real data - don't allow duplicate
+                vscode.window.showErrorMessage(`Column "${columnName}" already exists in this file.`);
+                this.isUpdating = false;
+                return;
+            }
+
+            // Clean up any remnants from previous failed attempts
+            if (existingColumnIndex !== -1) {
+                // Remove from columns list
+                this.columns.splice(existingColumnIndex, 1);
+            }
+
+            // Remove from rows if present
+            if (this.rows.some(row => row.hasOwnProperty(columnName))) {
+                this.rows.forEach(row => {
+                    delete row[columnName];
+                });
+            }
+
+            // Remove from manualColumnsPerFile to prevent restoration
+            {
+                const fileUri = document.uri.toString();
+                const savedManualColumns = this.manualColumnsPerFile.get(fileUri) || [];
+                const filteredColumns = savedManualColumns.filter(col => col.path !== columnName);
+                if (filteredColumns.length > 0) {
+                    this.manualColumnsPerFile.set(fileUri, filteredColumns);
+                } else {
+                    this.manualColumnsPerFile.delete(fileUri);
+                }
+            }
+
+            // Find the reference column
+            const refColumnIndex = this.columns.findIndex(col => col.path === referenceColumn);
+            if (refColumnIndex === -1) {
+                this.isUpdating = false;
+                return;
+            }
+
+            // Create new column with position info
+            const newColumn: ColumnInfo = {
+                path: columnName,
+                displayName: columnName,
+                visible: true,
+                isExpanded: false,
+                isManuallyAdded: true,
+                insertPosition: position,
+                insertReferenceColumn: referenceColumn
+            };
+
+            // Insert column at the right position
+            const insertIndex = position === 'before' ? refColumnIndex : refColumnIndex + 1;
+            this.columns.splice(insertIndex, 0, newColumn);
+
+            // Add null values to all rows for the new column (will be filled by AI)
+            this.rows.forEach(row => {
+                const newRow: JsonRow = {};
+                let inserted = false;
+
+                for (const key of Object.keys(row)) {
+                    if (key === referenceColumn && position === 'before' && !inserted) {
+                        newRow[columnName] = null;
+                        inserted = true;
+                    }
+
+                    newRow[key] = row[key];
+
+                    if (key === referenceColumn && position === 'after' && !inserted) {
+                        newRow[columnName] = null;
+                        inserted = true;
+                    }
+                }
+
+                if (!inserted) {
+                    newRow[columnName] = null;
+                }
+
+                Object.keys(row).forEach(key => delete row[key]);
+                Object.assign(row, newRow);
+            });
+
+            // Update webview to show the column with null values
+            this.updateWebview(webviewPanel);
+
+            // Now fill the column with AI-generated content
+            await this.fillColumnWithAI(columnName, promptTemplate, webviewPanel, document);
+
+        } catch (error) {
+            // Rollback: Remove the column that was just added
+            const columnIndex = this.columns.findIndex(col => col.path === columnName);
+            if (columnIndex !== -1) {
+                this.columns.splice(columnIndex, 1);
+            }
+
+            // Remove the column from all rows
+            this.rows.forEach(row => {
+                delete row[columnName];
+            });
+
+            // Remove from manualColumnsPerFile
+            const fileUri = document.uri.toString();
+            const savedManualColumns = this.manualColumnsPerFile.get(fileUri) || [];
+            const filteredColumns = savedManualColumns.filter(col => col.path !== columnName);
+            if (filteredColumns.length > 0) {
+                this.manualColumnsPerFile.set(fileUri, filteredColumns);
+            } else {
+                this.manualColumnsPerFile.delete(fileUri);
+            }
+
+            // Update the webview to reflect the rollback
+            this.updateWebview(webviewPanel);
+
+            // Show user-friendly error message
+            const errorMsg = error instanceof Error ? error.message : 'Unknown error';
+            if (errorMsg.includes('quota') || errorMsg.includes('limit') || errorMsg.includes('allowance')) {
+                vscode.window.showErrorMessage(`AI quota exceeded: ${errorMsg}`);
+            } else {
+                vscode.window.showErrorMessage(`Failed to add AI column: ${errorMsg}`);
+            }
+            console.error('Error adding AI column:', error);
+        } finally {
+            // Always reset the flag when done
+            this.isUpdating = false;
+        }
+    }
+
+    private async fillColumnWithAI(
+        columnName: string,
+        promptTemplate: string,
+        webviewPanel: vscode.WebviewPanel,
+        document: vscode.TextDocument
+    ) {
+        const totalRows = this.rows.length;
+
+        // Note: isUpdating flag is already set by handleAddAIColumn
+        try {
+            await vscode.window.withProgress({
+                location: vscode.ProgressLocation.Notification,
+                title: `Generating AI content for column "${columnName}"`,
+                cancellable: false
+            }, async (progress) => {
+                progress.report({ increment: 0, message: `Processing ${totalRows.toLocaleString()} rows...` });
+
+                // Process rows in parallel batches
+                const batchSize = 10; // Process 10 rows concurrently
+                let processedCount = 0;
+
+            for (let i = 0; i < totalRows; i += batchSize) {
+                const endIndex = Math.min(i + batchSize, totalRows);
+                const batch = [];
+
+                for (let j = i; j < endIndex; j++) {
+                    batch.push(this.generateAIValueForRow(j, promptTemplate, totalRows));
+                }
+
+                // Wait for all promises in the batch to resolve
+                const results = await Promise.all(batch);
+
+                // Assign results to rows
+                for (let j = 0; j < results.length; j++) {
+                    const rowIndex = i + j;
+                    const row = this.rows[rowIndex];
+
+                    // Maintain column order when setting the value
+                    const newRow: JsonRow = {};
+                    for (const key of Object.keys(row)) {
+                        newRow[key] = key === columnName ? results[j] : row[key];
+                    }
+                    Object.keys(row).forEach(key => delete row[key]);
+                    Object.assign(row, newRow);
+                }
+
+                processedCount = endIndex;
+                const progressPercent = Math.round((processedCount / totalRows) * 100);
+                progress.report({
+                    increment: (batchSize / totalRows) * 100,
+                    message: `Processed ${processedCount.toLocaleString()} of ${totalRows.toLocaleString()} rows (${progressPercent}%)`
+                });
+
+                // Update webview periodically
+                if (processedCount % 50 === 0 || processedCount === totalRows) {
+                    this.updateWebview(webviewPanel);
+                }
+            }
+
+            // Update filtered rows
+            this.filterRows();
+
+            // Update parsedLines to reflect the changes
+            this.parsedLines = this.rows.map((row, index) => ({
+                data: row,
+                lineNumber: index + 1,
+                rawLine: JSON.stringify(row)
+            }));
+
+            // Update raw content
+            this.rawContent = this.rows.map(row => JSON.stringify(row)).join('\n');
+
+            // Update the document content
+            const edit = new vscode.WorkspaceEdit();
+            edit.replace(
+                document.uri,
+                new vscode.Range(0, 0, document.lineCount, 0),
+                this.rawContent
+            );
+            await vscode.workspace.applyEdit(edit);
+
+            // Final webview update
+            this.updateWebview(webviewPanel);
+
+                // Save manual columns for this file
+                const fileUri = document.uri.toString();
+                const manualColumns = this.columns.filter(col => col.isManuallyAdded);
+                this.manualColumnsPerFile.set(fileUri, manualColumns);
+
+                vscode.window.showInformationMessage(`AI column "${columnName}" generated successfully for ${totalRows} rows`);
+            });
+        } catch (error) {
+            vscode.window.showErrorMessage(`Failed to generate AI content: ${error instanceof Error ? error.message : 'Unknown error'}`);
+            console.error('Error generating AI content:', error);
+            throw error; // Re-throw so parent can handle
+        }
+    }
+
+    private async generateAIValueForRow(rowIndex: number, promptTemplate: string, totalRows: number): Promise<string> {
+        const row = this.rows[rowIndex];
+
+        // Replace template variables
+        const prompt = this.replaceTemplateVariables(promptTemplate, row, rowIndex, totalRows);
+
+        // Call the language model API (let errors bubble up)
+        const result = await this.callLanguageModel(prompt);
+
+        return result;
+    }
+
+    private replaceTemplateVariables(template: string, row: any, rowIndex: number, totalRows: number): string {
+        let result = template;
+
+        // Replace {{row}} with full JSON
+        result = result.replace(/\{\{row\}\}/g, JSON.stringify(row));
+
+        // Replace {{row.fieldname}}, {{row.fieldname[0]}}, etc.
+        const fieldRegex = /\{\{row\.([a-zA-Z0-9_.\[\]]+)\}\}/g;
+        result = result.replace(fieldRegex, (_match, fieldPath) => {
+            try {
+                const value = this.getNestedValue(row, fieldPath);
+                return value !== undefined && value !== null ? String(value) : '';
+            } catch {
+                return '';
+            }
+        });
+
+        // Replace {{row_number}} (1-based)
+        result = result.replace(/\{\{row_number\}\}/g, String(rowIndex + 1));
+
+        // Replace {{rows_before}}
+        result = result.replace(/\{\{rows_before\}\}/g, String(rowIndex));
+
+        // Replace {{rows_after}}
+        result = result.replace(/\{\{rows_after\}\}/g, String(totalRows - rowIndex - 1));
+
+        return result;
+    }
+
+    private async callLanguageModel(prompt: string): Promise<string> {
+        try {
+            const apiProvider = this.context.globalState.get<string>('aiProvider', 'vscode');
+
+            if (apiProvider === 'openai') {
+                return await this.callOpenAI(prompt);
+            } else {
+                return await this.callVSCodeLM(prompt);
+            }
+        } catch (error) {
+            throw new Error(`Language model error: ${error instanceof Error ? error.message : 'Unknown error'}`);
+        }
+    }
+
+    private async callVSCodeLM(prompt: string): Promise<string> {
+        const models = await vscode.lm.selectChatModels({
+            vendor: 'copilot',
+            family: 'gpt-4o'
+        });
+
+        if (models.length === 0) {
+            throw new Error('No language model available. Please ensure GitHub Copilot is enabled.');
+        }
+
+        const model = models[0];
+        const messages = [
+            vscode.LanguageModelChatMessage.User(prompt)
+        ];
+
+        const response = await model.sendRequest(messages, {}, new vscode.CancellationTokenSource().token);
+
+        let result = '';
+        for await (const fragment of response.text) {
+            result += fragment;
+        }
+
+        return result.trim();
+    }
+
+    private async callOpenAI(prompt: string): Promise<string> {
+        const apiKey = await this.context.secrets.get('openaiApiKey');
+        if (!apiKey) {
+            throw new Error('OpenAI API key not configured. Please set it in AI Settings.');
+        }
+
+        const model = this.context.globalState.get<string>('openaiModel', 'gpt-4o-mini');
+
+        const response = await fetch('https://api.openai.com/v1/chat/completions', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'Authorization': `Bearer ${apiKey}`
+            },
+            body: JSON.stringify({
+                model: model,
+                messages: [
+                    { role: 'user', content: prompt }
+                ],
+                temperature: 0.7
+            })
+        });
+
+        if (!response.ok) {
+            const error = await response.text();
+            throw new Error(`OpenAI API error: ${response.status} - ${error}`);
+        }
+
+        const data = await response.json();
+        return data.choices[0].message.content.trim();
+    }
+
+    private async handleGetSettings(webviewPanel: vscode.WebviewPanel) {
+        try {
+            const apiProvider = this.context.globalState.get<string>('aiProvider', 'vscode');
+            const openaiKey = await this.context.secrets.get('openaiApiKey') || '';
+            const openaiModel = this.context.globalState.get<string>('openaiModel', 'gpt-4o-mini');
+
+            webviewPanel.webview.postMessage({
+                type: 'settingsLoaded',
+                settings: {
+                    apiProvider,
+                    openaiKey,
+                    openaiModel
+                }
+            });
+        } catch (error) {
+            console.error('Error loading settings:', error);
+        }
+    }
+
+    private async handleSaveSettings(settings: { apiProvider: string; openaiKey: string; openaiModel: string }) {
+        try {
+            await this.context.globalState.update('aiProvider', settings.apiProvider);
+            await this.context.globalState.update('openaiModel', settings.openaiModel);
+
+            if (settings.openaiKey) {
+                await this.context.secrets.store('openaiApiKey', settings.openaiKey);
+            }
+
+            vscode.window.showInformationMessage('AI settings saved successfully');
+        } catch (error) {
+            vscode.window.showErrorMessage(`Failed to save settings: ${error instanceof Error ? error.message : 'Unknown error'}`);
+            console.error('Error saving settings:', error);
+        }
+    }
+
+    private async handleGenerateAIRows(
+        rowIndex: number,
+        contextRowCount: number,
+        rowCount: number,
+        promptTemplate: string,
+        webviewPanel: vscode.WebviewPanel,
+        document: vscode.TextDocument
+    ) {
+        // Set isUpdating flag to prevent reload during AI generation
+        this.isUpdating = true;
+
+        try {
+            // Get context rows (previous rows before the selected row)
+            const startIndex = Math.max(0, rowIndex - contextRowCount + 1);
+            const contextRows = this.rows.slice(startIndex, rowIndex + 1);
+
+            // Replace template variables
+            let prompt = promptTemplate;
+            prompt = prompt.replace(/\{\{context_rows\}\}/g, JSON.stringify(contextRows, null, 2));
+            prompt = prompt.replace(/\{\{row_count\}\}/g, String(rowCount));
+            prompt = prompt.replace(/\{\{existing_count\}\}/g, String(this.rows.length));
+
+            // Extract column names and types from context rows
+            const columnNames = contextRows.length > 0 ? Object.keys(contextRows[0]) : [];
+            const firstRow = contextRows.length > 0 ? contextRows[0] : {};
+            const columnTypes = columnNames.map(name => {
+                const value = firstRow[name];
+                return `${name}: ${typeof value === 'number' ? 'number' : typeof value === 'boolean' ? 'boolean' : 'string'}`;
+            });
+
+            // Add strict instruction to return JSON array with exact structure
+            prompt += `\n\nIMPORTANT INSTRUCTIONS:
+                1. Return ONLY a valid JSON array of ${rowCount} objects
+                2. Each object MUST have ALL these fields with correct types:
+                   ${columnTypes.join('\n                   ')}
+                3. Use proper JSON types: numbers without quotes, booleans as true/false, strings in quotes
+                4. Do NOT omit any fields
+                5. Do NOT add extra fields
+                6. No explanations, no markdown formatting, just the JSON array
+
+                Example row from context:
+                ${JSON.stringify(firstRow)}`;
+
+
+            await vscode.window.withProgress({
+                location: vscode.ProgressLocation.Notification,
+                title: `Generating ${rowCount} AI rows...`,
+                cancellable: false
+            }, async (progress) => {
+                progress.report({ increment: 0, message: 'Calling AI model...' });
+
+                // Call the AI model
+                const result = await this.callLanguageModel(prompt);
+
+                progress.report({ increment: 50, message: 'Parsing generated rows...' });
+
+                // Parse the result
+                let generatedRows: any[];
+                try {
+                    // Try to extract JSON array from the response
+                    const jsonMatch = result.match(/\[[\s\S]*\]/);
+                    if (jsonMatch) {
+                        generatedRows = JSON.parse(jsonMatch[0]);
+                    } else {
+                        generatedRows = JSON.parse(result);
+                    }
+
+                    if (!Array.isArray(generatedRows)) {
+                        throw new Error('AI did not return an array');
+                    }
+
+                    // Fix data types based on context rows
+                    generatedRows = generatedRows.map(row => this.fixDataTypes(row, firstRow));
+                } catch (parseError) {
+                    throw new Error(`Failed to parse AI response as JSON: ${parseError instanceof Error ? parseError.message : 'Unknown error'}\n\nResponse: ${result}`);
+                }
+
+                progress.report({ increment: 25, message: 'Inserting rows...' });
+
+                // Insert the generated rows after the selected row
+                const insertIndex = rowIndex + 1;
+                this.rows.splice(insertIndex, 0, ...generatedRows);
+
+                // Rebuild parsedLines
+                this.parsedLines = this.rows.map((row, index) => ({
+                    data: row,
+                    lineNumber: index + 1,
+                    rawLine: JSON.stringify(row)
+                }));
+
+                // Update filtered rows
+                this.filterRows();
+
+                // Update raw content
+                this.rawContent = this.rows.map(row => JSON.stringify(row)).join('\n');
+
+                // Update the document content
+                const edit = new vscode.WorkspaceEdit();
+                edit.replace(
+                    document.uri,
+                    new vscode.Range(0, 0, document.lineCount, 0),
+                    this.rawContent
+                );
+                await vscode.workspace.applyEdit(edit);
+
+                progress.report({ increment: 25, message: 'Done!' });
+
+                // Update webview
+                this.updateWebview(webviewPanel);
+
+                vscode.window.showInformationMessage(`Successfully generated and inserted ${generatedRows.length} rows`);
+            });
+
+        } catch (error) {
+            // Show user-friendly error message
+            const errorMsg = error instanceof Error ? error.message : 'Unknown error';
+            if (errorMsg.includes('quota') || errorMsg.includes('limit') || errorMsg.includes('allowance')) {
+                vscode.window.showErrorMessage(`AI quota exceeded: ${errorMsg}`);
+            } else {
+                vscode.window.showErrorMessage(`Failed to generate AI rows: ${errorMsg}`);
+            }
+            console.error('Error generating AI rows:', error);
+        } finally {
+            // Always reset the isUpdating flag
+            this.isUpdating = false;
+        }
+    }
+
+    private fixDataTypes(generatedRow: any, templateRow: any): any {
+        const fixedRow: any = {};
+
+        for (const key in templateRow) {
+            if (generatedRow.hasOwnProperty(key)) {
+                const templateValue = templateRow[key];
+                const generatedValue = generatedRow[key];
+                const templateType = typeof templateValue;
+
+                // Convert to the correct type based on template
+                if (templateType === 'number') {
+                    // Convert string numbers to actual numbers
+                    fixedRow[key] = typeof generatedValue === 'string' ? parseFloat(generatedValue) : Number(generatedValue);
+                } else if (templateType === 'boolean') {
+                    // Convert string booleans to actual booleans
+                    if (typeof generatedValue === 'string') {
+                        fixedRow[key] = generatedValue.toLowerCase() === 'true';
+                    } else {
+                        fixedRow[key] = Boolean(generatedValue);
+                    }
+                } else {
+                    // Keep as string or original type
+                    fixedRow[key] = generatedValue;
+                }
+            } else {
+                // Field missing, use null
+                fixedRow[key] = null;
+            }
+        }
+
+        return fixedRow;
     }
 
     private getSampleValue(columnPath: string): any {
@@ -2236,7 +2844,42 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
         .add-column-modal {
             width: 450px;
         }
-        
+
+        .ai-column-modal {
+            width: 580px;
+            max-width: 90vw;
+        }
+
+        .settings-modal {
+            width: 500px;
+            max-width: 90vw;
+        }
+
+        .ai-prompt-textarea {
+            width: 100%;
+            min-height: 180px;
+            padding: 8px 12px;
+            font-size: 13px;
+            background-color: var(--vscode-input-background);
+            color: var(--vscode-input-foreground);
+            border: 1px solid var(--vscode-input-border);
+            border-radius: 4px;
+            outline: none;
+            font-family: 'Consolas', 'Monaco', 'Courier New', monospace;
+            resize: vertical;
+            line-height: 1.5;
+            box-sizing: border-box;
+        }
+
+        .ai-prompt-textarea:focus {
+            border-color: var(--vscode-focusBorder);
+        }
+
+        .ai-prompt-textarea::placeholder {
+            color: var(--vscode-input-placeholderForeground);
+            opacity: 0.6;
+        }
+
         .modal-header {
             display: flex;
             align-items: center;
@@ -2273,7 +2916,13 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
         .modal-body {
             padding: 16px;
             overflow-y: auto;
+            overflow-x: hidden;
             flex: 1;
+            box-sizing: border-box;
+        }
+
+        .modal-body * {
+            box-sizing: border-box;
         }
         
         .modal-hint {
@@ -2386,6 +3035,7 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
             outline: none;
             font-family: var(--vscode-font-family);
             margin-bottom: 16px;
+            box-sizing: border-box;
         }
         
         .column-name-input:focus {
@@ -2453,6 +3103,10 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
                 <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3h7a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-7m0-18H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h7m0-18v18"></path></svg>
                 Columns
             </button>
+            <button class="column-manager-btn" id="settingsBtn" title="AI Settings">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"></circle><path d="M12 1v6m0 6v6m5.657-14.657l-4.243 4.243m-2.828 2.828l-4.243 4.243m16.97 1.414l-6-6m-6 6l-6-6"></path></svg>
+                AI Settings
+            </button>
             <label class="wrap-text-control" title="Wrap text in table cells">
                 <input type="checkbox" id="wrapTextCheckbox">
                 <span>Wrap Text</span>
@@ -2502,6 +3156,15 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
             Insert Column After
         </div>
         <div class="context-menu-separator"></div>
+        <div class="context-menu-item" data-action="insertAIColumnBefore">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg>
+            Insert Column with AI Before
+        </div>
+        <div class="context-menu-item" data-action="insertAIColumnAfter">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg>
+            Insert Column with AI After
+        </div>
+        <div class="context-menu-separator"></div>
         <div class="context-menu-item" data-action="unstringify" id="unstringifyMenuItem" style="display: none;">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M8 3H7a2 2 0 0 0-2 2v5a2 2 0 0 1-2 2 2 2 0 0 1 2 2v5c0 1.1.9 2 2 2h1"/><path d="M16 21h1a2 2 0 0 0 2-2v-5c0-1.1.9-2 2-2a2 2 0 0 1-2-2V5a2 2 0 0 0-2-2h-1"/></svg>
             Unstringify JSON in Column
@@ -2529,6 +3192,11 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
         <div class="row-context-menu-item" data-action="duplicateRow">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path><path d="M9 9h6v6"></path></svg>
             Duplicate
+        </div>
+        <div class="row-context-menu-separator"></div>
+        <div class="row-context-menu-item" data-action="insertAIRows">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"></path><line x1="12" y1="17" x2="12.01" y2="17"></line></svg>
+            Insert Rows with AI
         </div>
         <div class="row-context-menu-separator"></div>
         <div class="row-context-menu-item" data-action="pasteAbove" id="pasteAboveMenuItem">
@@ -2573,6 +3241,110 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
                 <div class="modal-actions">
                     <button class="modal-button modal-button-primary" id="addColumnConfirmBtn">Add Column</button>
                     <button class="modal-button modal-button-secondary" id="addColumnCancelBtn">Cancel</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="column-manager-modal" id="aiColumnModal">
+        <div class="modal-content ai-column-modal">
+            <div class="modal-header">
+                <h3>Insert Column with AI</h3>
+                <button class="modal-close" id="aiColumnCloseBtn">&times;</button>
+            </div>
+            <div class="modal-body">
+                <label for="aiColumnName" style="display: block; margin-bottom: 8px; font-weight: 500;">Column Name:</label>
+                <input type="text" id="aiColumnName" class="column-name-input" placeholder="e.g., summary, category, score" />
+
+                <label for="aiPrompt" style="display: block; margin-top: 16px; margin-bottom: 8px; font-weight: 500;">AI Prompt Template:</label>
+                <textarea id="aiPrompt" class="ai-prompt-textarea" rows="10" placeholder="Example: Categorize this item: {{row.name}} with price {{row.price}}
+
+Available variables:
+- {{row}} - entire row as JSON
+- {{row.fieldname}} - specific field value
+- {{row.fieldname[0]}} - array element
+- {{row_number}} - current row number
+- {{rows_before}} - number of rows before this one
+- {{rows_after}} - number of rows after this one"></textarea>
+
+                <div class="ai-info-box" style="margin-top: 12px; padding: 12px; background: rgba(255, 255, 255, 0.05); border-radius: 6px; font-size: 12px; color: #888;">
+                    <strong>Note:</strong> This will use the language model API configured in your VS Code settings. API calls will be parallelized for better performance.
+                </div>
+
+                <div class="modal-actions" style="margin-top: 16px;">
+                    <button class="modal-button modal-button-primary" id="aiColumnConfirmBtn">Generate Column</button>
+                    <button class="modal-button modal-button-secondary" id="aiColumnCancelBtn">Cancel</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="column-manager-modal" id="settingsModal">
+        <div class="modal-content settings-modal">
+            <div class="modal-header">
+                <h3>AI Settings</h3>
+                <button class="modal-close" id="settingsCloseBtn">&times;</button>
+            </div>
+            <div class="modal-body">
+                <label for="apiProvider" style="display: block; margin-bottom: 8px; font-weight: 500;">AI Provider:</label>
+                <select id="apiProvider" class="settings-select" style="width: 100%; padding: 8px 12px; font-size: 13px; background-color: var(--vscode-input-background); color: var(--vscode-input-foreground); border: 1px solid var(--vscode-input-border); border-radius: 4px; outline: none; margin-bottom: 16px; box-sizing: border-box;">
+                    <option value="vscode">VS Code Language Model (GitHub Copilot)</option>
+                    <option value="openai">OpenAI API</option>
+                </select>
+
+                <div id="openaiSettings" style="display: none;">
+                    <label for="openaiKey" style="display: block; margin-bottom: 8px; font-weight: 500;">OpenAI API Key:</label>
+                    <input type="password" id="openaiKey" class="column-name-input" placeholder="sk-..." />
+
+                    <label for="openaiModel" style="display: block; margin-bottom: 8px; font-weight: 500;">Model:</label>
+                    <select id="openaiModel" class="settings-select" style="width: 100%; padding: 8px 12px; font-size: 13px; background-color: var(--vscode-input-background); color: var(--vscode-input-foreground); border: 1px solid var(--vscode-input-border); border-radius: 4px; outline: none; margin-bottom: 16px; box-sizing: border-box;">
+                        <option value="gpt-4o-mini">GPT-4o Mini (Recommended)</option>
+                        <option value="gpt-4o">GPT-4o</option>
+                        <option value="gpt-4-turbo">GPT-4 Turbo</option>
+                        <option value="gpt-3.5-turbo">GPT-3.5 Turbo</option>
+                    </select>
+                </div>
+
+                <div class="ai-info-box" style="margin-top: 12px; padding: 12px; background: rgba(255, 255, 255, 0.05); border-radius: 6px; font-size: 12px; color: #888;">
+                    <strong>Note:</strong> Your API key is stored securely in VS Code's secret storage. It will never be shared or transmitted outside of API requests to the selected provider.
+                </div>
+
+                <div class="modal-actions" style="margin-top: 16px;">
+                    <button class="modal-button modal-button-primary" id="settingsSaveBtn">Save Settings</button>
+                    <button class="modal-button modal-button-secondary" id="settingsCancelBtn">Cancel</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="column-manager-modal" id="aiRowsModal">
+        <div class="modal-content ai-column-modal">
+            <div class="modal-header">
+                <h3>Insert Rows with AI</h3>
+                <button class="modal-close" id="aiRowsCloseBtn">&times;</button>
+            </div>
+            <div class="modal-body">
+                <label for="contextRowCount" style="display: block; margin-bottom: 8px; font-weight: 500;">Number of Context Rows:</label>
+                <input type="number" id="contextRowCount" class="column-name-input" value="10" min="1" max="100" placeholder="10" />
+
+                <label for="rowCount" style="display: block; margin-top: 16px; margin-bottom: 8px; font-weight: 500;">Number of Rows to Generate:</label>
+                <input type="number" id="rowCount" class="column-name-input" value="5" min="1" max="50" placeholder="5" />
+
+                <label for="aiRowsPrompt" style="display: block; margin-top: 16px; margin-bottom: 8px; font-weight: 500;">AI Prompt:</label>
+                <textarea id="aiRowsPrompt" class="ai-prompt-textarea" rows="8" placeholder="Generate more rows like these, but make them different from the lines below.
+
+                Available variables:
+                - {{context_rows}} - JSON array of previous rows
+                - {{row_count}} - number of rows to generate
+                - {{existing_count}} - total existing rows">Generate more rows like these, but make them different from the lines below.</textarea>
+
+                <div class="ai-info-box" style="margin-top: 12px; padding: 12px; background: rgba(255, 255, 255, 0.05); border-radius: 6px; font-size: 12px; color: #888;">
+                    <strong>Note:</strong> The AI will use the specified number of previous rows as context to generate new similar rows. The generated rows will be inserted below the selected row.
+                </div>
+
+                <div class="modal-actions" style="margin-top: 16px;">
+                    <button class="modal-button modal-button-primary" id="aiRowsGenerateBtn">Generate Rows</button>
+                    <button class="modal-button modal-button-secondary" id="aiRowsCancelBtn">Cancel</button>
                 </div>
             </div>
         </div>
@@ -2898,7 +3670,190 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
                 closeAddColumnModal();
             }
         });
-        
+
+        // AI Column Modal
+        let aiColumnPosition = null;
+        let aiColumnReferenceColumn = null;
+
+        function openAIColumnModal(position, referenceColumn) {
+            aiColumnPosition = position;
+            aiColumnReferenceColumn = referenceColumn;
+
+            const modal = document.getElementById('aiColumnModal');
+            const nameInput = document.getElementById('aiColumnName');
+            const promptInput = document.getElementById('aiPrompt');
+            nameInput.value = '';
+            promptInput.value = '';
+            modal.classList.add('show');
+
+            // Focus name input
+            setTimeout(() => nameInput.focus(), 100);
+        }
+
+        function closeAIColumnModal() {
+            const modal = document.getElementById('aiColumnModal');
+            modal.classList.remove('show');
+            aiColumnPosition = null;
+            aiColumnReferenceColumn = null;
+        }
+
+        function confirmAIColumn() {
+            const nameInput = document.getElementById('aiColumnName');
+            const promptInput = document.getElementById('aiPrompt');
+            const columnName = nameInput.value.trim();
+            const promptTemplate = promptInput.value.trim();
+
+            if (!columnName || !promptTemplate) {
+                return; // Don't proceed without both inputs
+            }
+
+            vscode.postMessage({
+                type: 'addAIColumn',
+                columnName: columnName,
+                promptTemplate: promptTemplate,
+                position: aiColumnPosition,
+                referenceColumn: aiColumnReferenceColumn
+            });
+
+            closeAIColumnModal();
+        }
+
+        // AI Column Modal event listeners
+        document.getElementById('aiColumnCloseBtn').addEventListener('click', closeAIColumnModal);
+        document.getElementById('aiColumnCancelBtn').addEventListener('click', closeAIColumnModal);
+        document.getElementById('aiColumnConfirmBtn').addEventListener('click', confirmAIColumn);
+        document.getElementById('aiColumnModal').addEventListener('click', (e) => {
+            if (e.target.id === 'aiColumnModal') {
+                closeAIColumnModal();
+            }
+        });
+        document.getElementById('aiColumnName').addEventListener('keydown', (e) => {
+            if (e.key === 'Escape') {
+                closeAIColumnModal();
+            }
+        });
+        document.getElementById('aiPrompt').addEventListener('keydown', (e) => {
+            if (e.key === 'Escape') {
+                closeAIColumnModal();
+            }
+        });
+
+        // Settings Modal
+        function openSettingsModal() {
+            const modal = document.getElementById('settingsModal');
+            const apiProvider = document.getElementById('apiProvider');
+            const openaiKey = document.getElementById('openaiKey');
+            const openaiModel = document.getElementById('openaiModel');
+
+            // Request current settings from backend
+            vscode.postMessage({ type: 'getSettings' });
+
+            modal.classList.add('show');
+        }
+
+        function closeSettingsModal() {
+            const modal = document.getElementById('settingsModal');
+            modal.classList.remove('show');
+        }
+
+        function saveSettings() {
+            const apiProvider = document.getElementById('apiProvider').value;
+            const openaiKey = document.getElementById('openaiKey').value;
+            const openaiModel = document.getElementById('openaiModel').value;
+
+            vscode.postMessage({
+                type: 'saveSettings',
+                settings: {
+                    apiProvider: apiProvider,
+                    openaiKey: openaiKey,
+                    openaiModel: openaiModel
+                }
+            });
+
+            closeSettingsModal();
+        }
+
+        // Settings Modal event listeners
+        document.getElementById('settingsBtn').addEventListener('click', openSettingsModal);
+        document.getElementById('settingsCloseBtn').addEventListener('click', closeSettingsModal);
+        document.getElementById('settingsCancelBtn').addEventListener('click', closeSettingsModal);
+        document.getElementById('settingsSaveBtn').addEventListener('click', saveSettings);
+        document.getElementById('settingsModal').addEventListener('click', (e) => {
+            if (e.target.id === 'settingsModal') {
+                closeSettingsModal();
+            }
+        });
+
+        // Toggle OpenAI settings visibility based on provider selection
+        document.getElementById('apiProvider').addEventListener('change', (e) => {
+            const openaiSettings = document.getElementById('openaiSettings');
+            if (e.target.value === 'openai') {
+                openaiSettings.style.display = 'block';
+            } else {
+                openaiSettings.style.display = 'none';
+            }
+        });
+
+        // AI Rows Modal
+        let aiRowsReferenceRow = null;
+
+        function openAIRowsModal(rowIndex) {
+            aiRowsReferenceRow = rowIndex;
+
+            const modal = document.getElementById('aiRowsModal');
+            const contextRowCountInput = document.getElementById('contextRowCount');
+            const rowCountInput = document.getElementById('rowCount');
+            const promptInput = document.getElementById('aiRowsPrompt');
+
+            // Set defaults
+            contextRowCountInput.value = '10';
+            rowCountInput.value = '5';
+            if (!promptInput.value || promptInput.value === promptInput.placeholder) {
+                promptInput.value = 'Based on these example rows:\\n{{context_rows}}\\n\\nGenerate {{row_count}} new unique rows with the EXACT same structure and all the same fields. Make the data realistic and different from the examples above.';
+            }
+
+            modal.classList.add('show');
+
+            // Focus context row count input
+            setTimeout(() => contextRowCountInput.focus(), 100);
+        }
+
+        function closeAIRowsModal() {
+            const modal = document.getElementById('aiRowsModal');
+            modal.classList.remove('show');
+            aiRowsReferenceRow = null;
+        }
+
+        function generateAIRows() {
+            const contextRowCount = parseInt(document.getElementById('contextRowCount').value) || 10;
+            const rowCount = parseInt(document.getElementById('rowCount').value) || 5;
+            const promptTemplate = document.getElementById('aiRowsPrompt').value.trim();
+
+            if (!promptTemplate) {
+                return;
+            }
+
+            vscode.postMessage({
+                type: 'generateAIRows',
+                rowIndex: aiRowsReferenceRow,
+                contextRowCount: contextRowCount,
+                rowCount: rowCount,
+                promptTemplate: promptTemplate
+            });
+
+            closeAIRowsModal();
+        }
+
+        // AI Rows Modal event listeners
+        document.getElementById('aiRowsCloseBtn').addEventListener('click', closeAIRowsModal);
+        document.getElementById('aiRowsCancelBtn').addEventListener('click', closeAIRowsModal);
+        document.getElementById('aiRowsGenerateBtn').addEventListener('click', generateAIRows);
+        document.getElementById('aiRowsModal').addEventListener('click', (e) => {
+            if (e.target.id === 'aiRowsModal') {
+                closeAIRowsModal();
+            }
+        });
+
         // Modal drag and drop
         let draggedModalItem = null;
         
@@ -3102,6 +4057,12 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
                 case 'insertAfter':
                     openAddColumnModal('after', contextMenuColumn);
                     break;
+                case 'insertAIColumnBefore':
+                    openAIColumnModal('before', contextMenuColumn);
+                    break;
+                case 'insertAIColumnAfter':
+                    openAIColumnModal('after', contextMenuColumn);
+                    break;
                 case 'remove':
                     vscode.postMessage({
                         type: 'removeColumn',
@@ -3181,6 +4142,9 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
                         type: 'duplicateRow',
                         rowIndex: contextMenuRow
                     });
+                    break;
+                case 'insertAIRows':
+                    openAIRowsModal(contextMenuRow);
                     break;
                 case 'pasteAbove':
                     vscode.postMessage({
@@ -4238,6 +5202,23 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
                     } else {
                         pasteAboveMenuItem.classList.add('disabled');
                         pasteBelowMenuItem.classList.add('disabled');
+                    }
+                    break;
+                case 'settingsLoaded':
+                    const apiProvider = document.getElementById('apiProvider');
+                    const openaiKey = document.getElementById('openaiKey');
+                    const openaiModel = document.getElementById('openaiModel');
+                    const openaiSettings = document.getElementById('openaiSettings');
+
+                    apiProvider.value = message.settings.apiProvider || 'vscode';
+                    openaiKey.value = message.settings.openaiKey || '';
+                    openaiModel.value = message.settings.openaiModel || 'gpt-4o-mini';
+
+                    // Show/hide OpenAI settings based on provider
+                    if (message.settings.apiProvider === 'openai') {
+                        openaiSettings.style.display = 'block';
+                    } else {
+                        openaiSettings.style.display = 'none';
                     }
                     break;
             }
