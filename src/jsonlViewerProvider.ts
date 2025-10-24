@@ -5644,6 +5644,17 @@ Available variables:
             button.addEventListener('click', (e) => switchView(e.target.dataset.view));
         });
         
+        // Add event listeners for context menus
+        document.getElementById('contextMenu').addEventListener('click', handleContextMenu);
+        document.getElementById('rowContextMenu').addEventListener('click', handleRowContextMenu);
+        
+        // Hide context menus when clicking outside
+        document.addEventListener('click', (e) => {
+            if (!e.target.closest('.context-menu') && !e.target.closest('.row-context-menu')) {
+                hideContextMenu();
+            }
+        });
+        
     </script>
 </body>
 </html>`;
