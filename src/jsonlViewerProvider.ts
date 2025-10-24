@@ -141,6 +141,12 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
                             case 'getSettings':
                                 await this.handleGetSettings(webviewPanel);
                                 break;
+                            case 'checkAPIKey':
+                                await this.handleCheckAPIKey(webviewPanel);
+                                break;
+                            case 'showAPIKeyWarning':
+                                vscode.window.showWarningMessage('OpenAI API key is required for AI features. Please configure it in settings.');
+                                break;
                             case 'saveSettings':
                                 await this.handleSaveSettings(message.settings);
                                 break;
@@ -1296,17 +1302,7 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
     }
 
     private async callLanguageModel(prompt: string): Promise<string> {
-        try {
-            const apiProvider = this.context.globalState.get<string>('aiProvider', 'vscode');
-
-            if (apiProvider === 'openai') {
-                return await this.callOpenAI(prompt);
-            } else {
-                return await this.callVSCodeLM(prompt);
-            }
-        } catch (error) {
-            throw new Error(`Language model error: ${error instanceof Error ? error.message : 'Unknown error'}`);
-        }
+        return await this.callOpenAI(prompt);
     }
 
     private async callVSCodeLM(prompt: string): Promise<string> {
@@ -1340,7 +1336,7 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
             throw new Error('OpenAI API key not configured. Please set it in AI Settings.');
         }
 
-        const model = this.context.globalState.get<string>('openaiModel', 'gpt-4o-mini');
+        const model = this.context.globalState.get<string>('openaiModel', 'gpt-4.1-mini');
 
         const response = await fetch('https://api.openai.com/v1/chat/completions', {
             method: 'POST',
@@ -1368,14 +1364,12 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
 
     private async handleGetSettings(webviewPanel: vscode.WebviewPanel) {
         try {
-            const apiProvider = this.context.globalState.get<string>('aiProvider', 'vscode');
             const openaiKey = await this.context.secrets.get('openaiApiKey') || '';
-            const openaiModel = this.context.globalState.get<string>('openaiModel', 'gpt-4o-mini');
+            const openaiModel = this.context.globalState.get<string>('openaiModel', 'gpt-4.1-mini');
 
             webviewPanel.webview.postMessage({
                 type: 'settingsLoaded',
                 settings: {
-                    apiProvider,
                     openaiKey,
                     openaiModel
                 }
@@ -1385,9 +1379,26 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
         }
     }
 
-    private async handleSaveSettings(settings: { apiProvider: string; openaiKey: string; openaiModel: string }) {
+    private async handleCheckAPIKey(webviewPanel: vscode.WebviewPanel) {
         try {
-            await this.context.globalState.update('aiProvider', settings.apiProvider);
+            const openaiKey = await this.context.secrets.get('openaiApiKey');
+            const hasAPIKey = !!openaiKey;
+
+            webviewPanel.webview.postMessage({
+                type: 'apiKeyCheckResult',
+                hasAPIKey
+            });
+        } catch (error) {
+            console.error('Error checking API key:', error);
+            webviewPanel.webview.postMessage({
+                type: 'apiKeyCheckResult',
+                hasAPIKey: false
+            });
+        }
+    }
+
+    private async handleSaveSettings(settings: { openaiKey: string; openaiModel: string }) {
+        try {
             await this.context.globalState.update('openaiModel', settings.openaiModel);
 
             if (settings.openaiKey) {
@@ -2774,6 +2785,9 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
             align-items: center;
             gap: 6px;
             font-size: 13px;
+        }
+        
+        .column-manager-btn:first-of-type {
             margin-left: auto;
         }
         
@@ -3104,8 +3118,7 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
                 Columns
             </button>
             <button class="column-manager-btn" id="settingsBtn" title="AI Settings">
-                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"></circle><path d="M12 1v6m0 6v6m5.657-14.657l-4.243 4.243m-2.828 2.828l-4.243 4.243m16.97 1.414l-6-6m-6 6l-6-6"></path></svg>
-                AI Settings
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1 1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path></svg>
             </button>
             <label class="wrap-text-control" title="Wrap text in table cells">
                 <input type="checkbox" id="wrapTextCheckbox">
@@ -3286,27 +3299,23 @@ Available variables:
                 <button class="modal-close" id="settingsCloseBtn">&times;</button>
             </div>
             <div class="modal-body">
-                <label for="apiProvider" style="display: block; margin-bottom: 8px; font-weight: 500;">AI Provider:</label>
-                <select id="apiProvider" class="settings-select" style="width: 100%; padding: 8px 12px; font-size: 13px; background-color: var(--vscode-input-background); color: var(--vscode-input-foreground); border: 1px solid var(--vscode-input-border); border-radius: 4px; outline: none; margin-bottom: 16px; box-sizing: border-box;">
-                    <option value="vscode">VS Code Language Model (GitHub Copilot)</option>
-                    <option value="openai">OpenAI API</option>
-                </select>
-
-                <div id="openaiSettings" style="display: none;">
+                <div id="openaiSettings">
                     <label for="openaiKey" style="display: block; margin-bottom: 8px; font-weight: 500;">OpenAI API Key:</label>
                     <input type="password" id="openaiKey" class="column-name-input" placeholder="sk-..." />
 
                     <label for="openaiModel" style="display: block; margin-bottom: 8px; font-weight: 500;">Model:</label>
                     <select id="openaiModel" class="settings-select" style="width: 100%; padding: 8px 12px; font-size: 13px; background-color: var(--vscode-input-background); color: var(--vscode-input-foreground); border: 1px solid var(--vscode-input-border); border-radius: 4px; outline: none; margin-bottom: 16px; box-sizing: border-box;">
-                        <option value="gpt-4o-mini">GPT-4o Mini (Recommended)</option>
-                        <option value="gpt-4o">GPT-4o</option>
-                        <option value="gpt-4-turbo">GPT-4 Turbo</option>
-                        <option value="gpt-3.5-turbo">GPT-3.5 Turbo</option>
+                        <option value="gpt-4.1-nano">gpt-4.1-nano</option>
+                        <option value="gpt-4.1-mini">gpt-4.1-mini</option>
+                        <option value="gpt-4.1">gpt-4.1</option>
+                        <option value="gpt-5-nano">gpt-5-nano</option>
+                        <option value="gpt-5-mini">gpt-5-mini</option>
+                        <option value="gpt-5">gpt-5</option>
                     </select>
                 </div>
 
                 <div class="ai-info-box" style="margin-top: 12px; padding: 12px; background: rgba(255, 255, 255, 0.05); border-radius: 6px; font-size: 12px; color: #888;">
-                    <strong>Note:</strong> Your API key is stored securely in VS Code's secret storage. It will never be shared or transmitted outside of API requests to the selected provider.
+                    <strong>Note:</strong> Your API key is stored securely in VS Code's secret storage. It will never be shared or transmitted outside of API requests to OpenAI.
                 </div>
 
                 <div class="modal-actions" style="margin-top: 16px;">
@@ -3741,14 +3750,47 @@ Available variables:
         // Settings Modal
         function openSettingsModal() {
             const modal = document.getElementById('settingsModal');
-            const apiProvider = document.getElementById('apiProvider');
-            const openaiKey = document.getElementById('openaiKey');
-            const openaiModel = document.getElementById('openaiModel');
 
             // Request current settings from backend
             vscode.postMessage({ type: 'getSettings' });
 
             modal.classList.add('show');
+        }
+
+        function checkAPIKeyAndOpenModal(modalFunction, ...args) {
+            vscode.postMessage({ type: 'checkAPIKey' });
+            
+            // Listen for API key check response
+            const checkAPIKeyListener = (event) => {
+                const message = event.data;
+                if (message.type === 'apiKeyCheckResult') {
+                    window.removeEventListener('message', checkAPIKeyListener);
+                    clearTimeout(timeoutId);
+                    
+                    if (message.hasAPIKey) {
+                        modalFunction(...args);
+                    } else {
+                        // Send message to backend to show warning and open settings
+                        vscode.postMessage({ 
+                            type: 'showAPIKeyWarning' 
+                        });
+                        openSettingsModal();
+                    }
+                }
+            };
+            
+            // Timeout after 5 seconds if no response
+            const timeoutId = setTimeout(() => {
+                window.removeEventListener('message', checkAPIKeyListener);
+                console.error('API key check timed out');
+                // Fallback: open settings modal
+                vscode.postMessage({ 
+                    type: 'showAPIKeyWarning' 
+                });
+                openSettingsModal();
+            }, 5000);
+            
+            window.addEventListener('message', checkAPIKeyListener);
         }
 
         function closeSettingsModal() {
@@ -3757,14 +3799,12 @@ Available variables:
         }
 
         function saveSettings() {
-            const apiProvider = document.getElementById('apiProvider').value;
             const openaiKey = document.getElementById('openaiKey').value;
             const openaiModel = document.getElementById('openaiModel').value;
 
             vscode.postMessage({
                 type: 'saveSettings',
                 settings: {
-                    apiProvider: apiProvider,
                     openaiKey: openaiKey,
                     openaiModel: openaiModel
                 }
@@ -3784,15 +3824,6 @@ Available variables:
             }
         });
 
-        // Toggle OpenAI settings visibility based on provider selection
-        document.getElementById('apiProvider').addEventListener('change', (e) => {
-            const openaiSettings = document.getElementById('openaiSettings');
-            if (e.target.value === 'openai') {
-                openaiSettings.style.display = 'block';
-            } else {
-                openaiSettings.style.display = 'none';
-            }
-        });
 
         // AI Rows Modal
         let aiRowsReferenceRow = null;
@@ -4058,10 +4089,10 @@ Available variables:
                     openAddColumnModal('after', contextMenuColumn);
                     break;
                 case 'insertAIColumnBefore':
-                    openAIColumnModal('before', contextMenuColumn);
+                    checkAPIKeyAndOpenModal(openAIColumnModal, 'before', contextMenuColumn);
                     break;
                 case 'insertAIColumnAfter':
-                    openAIColumnModal('after', contextMenuColumn);
+                    checkAPIKeyAndOpenModal(openAIColumnModal, 'after', contextMenuColumn);
                     break;
                 case 'remove':
                     vscode.postMessage({
@@ -4144,7 +4175,7 @@ Available variables:
                     });
                     break;
                 case 'insertAIRows':
-                    openAIRowsModal(contextMenuRow);
+                    checkAPIKeyAndOpenModal(openAIRowsModal, contextMenuRow);
                     break;
                 case 'pasteAbove':
                     vscode.postMessage({
@@ -5205,21 +5236,11 @@ Available variables:
                     }
                     break;
                 case 'settingsLoaded':
-                    const apiProvider = document.getElementById('apiProvider');
                     const openaiKey = document.getElementById('openaiKey');
                     const openaiModel = document.getElementById('openaiModel');
-                    const openaiSettings = document.getElementById('openaiSettings');
 
-                    apiProvider.value = message.settings.apiProvider || 'vscode';
                     openaiKey.value = message.settings.openaiKey || '';
-                    openaiModel.value = message.settings.openaiModel || 'gpt-4o-mini';
-
-                    // Show/hide OpenAI settings based on provider
-                    if (message.settings.apiProvider === 'openai') {
-                        openaiSettings.style.display = 'block';
-                    } else {
-                        openaiSettings.style.display = 'none';
-                    }
+                    openaiModel.value = message.settings.openaiModel || 'gpt-4.1-mini';
                     break;
             }
         });
