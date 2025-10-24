@@ -76,9 +76,9 @@ The generated file is automatically excluded from git via `.gitignore` to keep t
 - [X] Table view: Allow wrapping text - add a checkbox in the top bar, and if it's checked, the line contents should wrap
 - [X] Table view: Column addition - this should be a right-click on the column header, Insert before, insert after. (Prompt for the name of the new column) 
 - [X] Table view: Fix "unstringify column" for `escaped-json.jsonl` - it should create those columns
-- [ ] Table view: Insert column with AI: Pull up a prompt dialog, let me define how it should be filled by using `{{row}}` or `{{row.fieldname[index]}}`, `{{row_number}}`, `{{rows_before}}`, {{rows_after}} notation. Then parallelize the filling of the newly created column, show a progress bar.
-- [ ] Table view: Insert rows with AI: Right-click on the row header, then choose how many of the previous rows to feed it (default to 10), and a prompt dialog that defaults to "generate more like these, but make it different from the lines below"
-- [ ] Settings: A settings dialog to enter your OpenAI key and select a model (default to gpt-4.1-mini) for the above AI features
+- [X] Table view: Insert column with AI: Pull up a prompt dialog, let me define how it should be filled by using `{{row}}` or `{{row.fieldname[index]}}`, `{{row_number}}`, `{{rows_before}}`, {{rows_after}} notation. Then parallelize the filling of the newly created column, show a progress bar.
+- [X] Table view: Insert rows with AI: Right-click on the row header, then choose how many of the previous rows to feed it (default to 10), and a prompt dialog that defaults to "generate more like these, but make it different from the lines below"
+- [X] Settings: A settings dialog to enter your OpenAI key and select a model (default to gpt-4.1-mini) for the above AI features
 - [X] Pretty print view: Insert before and after
 - [ ] Pretty print view: Resolve the layouting bug where the lines initially briefly appear in a container that's too small
 - [ ] Pretty print view: Resolve the selection bug which unselects the current row first and requires a second click to select the row you wanted to selet
@@ -86,7 +86,7 @@ The generated file is automatically excluded from git via `.gitignore` to keep t
 - [ ] Raw view: Add JSON syntax highlighting
 - [ ] Find / Replace: Implement great Find / Replace / Replace All with Regex option and highlighting
 - [ ] Large files: Generate a file with `generate-large.js`, loading fails above 100 MB with "Assertion Failed: Argument is `undefined` or `null`."
-- [ ] Split codebase: Figure out how to split
+- [ ] Split codebase: Figure out how to split into separate files, maybe one per view?
 
 ## License
 
