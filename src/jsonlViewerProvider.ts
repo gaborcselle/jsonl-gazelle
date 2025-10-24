@@ -3222,7 +3222,108 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
         .modal-button-secondary:hover {
             background-color: var(--vscode-button-secondaryHoverBackground);
         }
-        
+
+        /* Find/Replace Modal Styles */
+        .find-replace-modal {
+            width: 550px;
+        }
+
+        .find-replace-group {
+            margin-bottom: 16px;
+        }
+
+        .find-replace-group label {
+            display: block;
+            margin-bottom: 6px;
+            font-weight: 500;
+            font-size: 13px;
+        }
+
+        .find-replace-input {
+            width: 100%;
+            padding: 8px 12px;
+            font-size: 13px;
+            background-color: var(--vscode-input-background);
+            color: var(--vscode-input-foreground);
+            border: 1px solid var(--vscode-input-border);
+            border-radius: 4px;
+            outline: none;
+            font-family: var(--vscode-font-family);
+            box-sizing: border-box;
+        }
+
+        .find-replace-input:focus {
+            border-color: var(--vscode-focusBorder);
+        }
+
+        .find-replace-info {
+            margin-top: 6px;
+            font-size: 12px;
+            color: var(--vscode-descriptionForeground);
+        }
+
+        .find-replace-options {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 16px;
+            margin-bottom: 16px;
+            padding: 12px;
+            background-color: var(--vscode-textBlockQuote-background);
+            border-radius: 4px;
+        }
+
+        .checkbox-label {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            cursor: pointer;
+            font-size: 13px;
+        }
+
+        .checkbox-label input[type="checkbox"] {
+            cursor: pointer;
+        }
+
+        .checkbox-label span {
+            user-select: none;
+        }
+
+        .regex-error {
+            padding: 8px 12px;
+            background-color: var(--vscode-inputValidation-errorBackground);
+            border: 1px solid var(--vscode-inputValidation-errorBorder);
+            border-radius: 4px;
+            color: var(--vscode-errorForeground);
+            font-size: 12px;
+            margin-bottom: 12px;
+        }
+
+        .find-replace-actions {
+            display: flex;
+            gap: 8px;
+            justify-content: flex-end;
+            flex-wrap: wrap;
+        }
+
+        .find-replace-actions .modal-button {
+            display: flex;
+            align-items: center;
+            gap: 4px;
+        }
+
+        /* Highlight styles for find results */
+        .find-highlight {
+            background-color: var(--vscode-editor-findMatchHighlightBackground);
+            border: 1px solid var(--vscode-editor-findMatchBorder);
+            border-radius: 2px;
+        }
+
+        .find-highlight-current {
+            background-color: var(--vscode-editor-findMatchBackground);
+            border: 1px solid var(--vscode-editor-findMatchBorder);
+            border-radius: 2px;
+        }
+
     </style>
 </head>
 <body>
@@ -3246,6 +3347,10 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
                 <button data-view="raw"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"></path><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"></path></svg> Raw</button>
                 <div class="error-count" id="errorCount" style="display: none;"></div>
             </div>
+            <button class="column-manager-btn" id="findReplaceBtn" title="Find and Replace in cells (Cmd+F)">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"></circle><path d="m21 21-4.35-4.35"></path><path d="M9 15l6-6"></path></svg>
+                Find & Replace
+            </button>
             <button class="column-manager-btn" id="columnManagerBtn" title="Show/hide columns and reorder them">
                 <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3h7a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-7m0-18H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h7m0-18v18"></path></svg>
                 Columns
@@ -3392,6 +3497,7 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
         </div>
     </div>
 
+    <!-- AI Column Modal -->
     <div class="column-manager-modal" id="aiColumnModal">
         <div class="modal-content ai-column-modal">
             <div class="modal-header">
@@ -3436,6 +3542,7 @@ Available variables:
         </div>
     </div>
 
+    <!-- AI Settings Modal -->
     <div class="column-manager-modal" id="settingsModal">
         <div class="modal-content settings-modal">
             <div class="modal-header">
@@ -3470,6 +3577,7 @@ Available variables:
         </div>
     </div>
 
+    <!-- AI Rows Modal -->
     <div class="column-manager-modal" id="aiRowsModal">
         <div class="modal-content ai-column-modal">
             <div class="modal-header">
@@ -3498,6 +3606,62 @@ Available variables:
                 <div class="modal-actions" style="margin-top: 16px;">
                     <button class="modal-button modal-button-primary" id="aiRowsGenerateBtn">Generate Rows</button>
                     <button class="modal-button modal-button-secondary" id="aiRowsCancelBtn">Cancel</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Find/Replace Modal -->
+    <div class="column-manager-modal" id="findReplaceModal" style="display: none;">
+        <div class="modal-content find-replace-modal">
+            <div class="modal-header">
+                <h3>Find and Replace</h3>
+                <button class="modal-close" id="findReplaceCloseBtn">&times;</button>
+            </div>
+            <div class="modal-body">
+                <div class="find-replace-group">
+                    <label for="findInput">Find:</label>
+                    <input type="text" id="findInput" class="find-replace-input" placeholder="Enter text or regex pattern..." />
+                    <div class="find-replace-info" id="findMatchCount">0 matches</div>
+                </div>
+
+                <div class="find-replace-group">
+                    <label for="replaceInput">Replace with:</label>
+                    <input type="text" id="replaceInput" class="find-replace-input" placeholder="Enter replacement text..." />
+                </div>
+
+                <div class="find-replace-options">
+                    <label class="checkbox-label">
+                        <input type="checkbox" id="regexCheckbox" />
+                        <span>Use Regular Expression</span>
+                    </label>
+                    <label class="checkbox-label">
+                        <input type="checkbox" id="caseSensitiveCheckbox" />
+                        <span>Case Sensitive</span>
+                    </label>
+                    <label class="checkbox-label">
+                        <input type="checkbox" id="wholeWordCheckbox" />
+                        <span>Whole Word</span>
+                    </label>
+                </div>
+
+                <div class="regex-error" id="regexError" style="display: none;"></div>
+
+                <div class="modal-actions find-replace-actions">
+                    <button class="modal-button modal-button-secondary" id="findPrevBtn">
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <polyline points="15 18 9 12 15 6"></polyline>
+                        </svg>
+                        Previous
+                    </button>
+                    <button class="modal-button modal-button-secondary" id="findNextBtn">
+                        Next
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <polyline points="9 18 15 12 9 6"></polyline>
+                        </svg>
+                    </button>
+                    <button class="modal-button modal-button-secondary" id="replaceBtn">Replace</button>
+                    <button class="modal-button modal-button-primary" id="replaceAllBtn">Replace All</button>
                 </div>
             </div>
         </div>
@@ -3644,9 +3808,478 @@ Available variables:
             document.removeEventListener('mousemove', handleResize);
             document.removeEventListener('mouseup', stopResize);
         }
-        
-        
-        
+
+        // Find/Replace State
+        let findReplaceState = {
+            matches: [],
+            currentMatchIndex: -1,
+            findPattern: '',
+            useRegex: false,
+            caseSensitive: false,
+            wholeWord: false
+        };
+
+        // Find/Replace Modal Functions
+        function openFindReplaceModal() {
+            const modal = document.getElementById('findReplaceModal');
+            modal.style.display = 'flex';
+            document.getElementById('findInput').focus();
+            performFind(); // Initial find with current input
+        }
+
+        function closeFindReplaceModal() {
+            const modal = document.getElementById('findReplaceModal');
+            modal.style.display = 'none';
+            clearHighlights();
+        }
+
+        function performFind() {
+            const findText = document.getElementById('findInput').value;
+            const useRegex = document.getElementById('regexCheckbox').checked;
+            const caseSensitive = document.getElementById('caseSensitiveCheckbox').checked;
+            const wholeWord = document.getElementById('wholeWordCheckbox').checked;
+
+            // Clear previous highlights
+            clearHighlights();
+
+            if (!findText) {
+                document.getElementById('findMatchCount').textContent = '0 matches';
+                document.getElementById('regexError').style.display = 'none';
+                findReplaceState.matches = [];
+                return;
+            }
+
+            try {
+                // Build search pattern
+                let pattern;
+                if (useRegex) {
+                    pattern = new RegExp(findText, caseSensitive ? 'g' : 'gi');
+                } else {
+                    let escapedText = escapeRegex(findText);
+                    if (wholeWord) {
+                        escapedText = '\\\\b' + escapedText + '\\\\b';
+                    }
+                    pattern = new RegExp(escapedText, caseSensitive ? 'g' : 'gi');
+                }
+
+                // Hide regex error if pattern is valid
+                document.getElementById('regexError').style.display = 'none';
+
+                // Store state
+                findReplaceState.findPattern = findText;
+                findReplaceState.useRegex = useRegex;
+                findReplaceState.caseSensitive = caseSensitive;
+                findReplaceState.wholeWord = wholeWord;
+
+                // Find matches based on current view
+                findMatchesInCurrentView(pattern);
+
+                // Update match count
+                const matchCount = findReplaceState.matches.length;
+                document.getElementById('findMatchCount').textContent =
+                    matchCount === 0 ? 'No matches' :
+                    matchCount === 1 ? '1 match' :
+                    matchCount + ' matches';
+
+                // Highlight first match
+                if (matchCount > 0) {
+                    findReplaceState.currentMatchIndex = 0;
+                    highlightCurrentMatch();
+                }
+
+            } catch (error) {
+                // Show regex error
+                document.getElementById('regexError').textContent = 'Invalid regex pattern: ' + error.message;
+                document.getElementById('regexError').style.display = 'block';
+                findReplaceState.matches = [];
+                document.getElementById('findMatchCount').textContent = '0 matches';
+            }
+        }
+
+        function findMatchesInCurrentView(pattern) {
+            findReplaceState.matches = [];
+
+            if (currentView === 'table') {
+                // Search in table cells (use raw value if available, otherwise text content)
+                const cells = document.querySelectorAll('#dataTable td');
+                cells.forEach((cell, index) => {
+                    // Use raw value for accurate matching (without JSON quotes)
+                    const text = cell.dataset.rawValue !== undefined ? cell.dataset.rawValue : cell.textContent;
+                    const matches = [...text.matchAll(pattern)];
+
+                    matches.forEach(match => {
+                        findReplaceState.matches.push({
+                            element: cell,
+                            text: text,
+                            match: match[0],
+                            index: match.index,
+                            cellIndex: index
+                        });
+                    });
+                });
+            } else if (currentView === 'json') {
+                // Search in JSON view
+                const jsonLines = document.querySelectorAll('.json-content-editable');
+                jsonLines.forEach((textarea, lineIndex) => {
+                    const text = textarea.value;
+                    const matches = [...text.matchAll(pattern)];
+
+                    matches.forEach(match => {
+                        findReplaceState.matches.push({
+                            element: textarea,
+                            text: text,
+                            match: match[0],
+                            index: match.index,
+                            lineIndex: lineIndex
+                        });
+                    });
+                });
+            } else if (currentView === 'raw') {
+                // Search in raw view
+                const rawLines = document.querySelectorAll('.raw-line-content');
+                rawLines.forEach((lineContent, lineIndex) => {
+                    const text = lineContent.textContent;
+                    const matches = [...text.matchAll(pattern)];
+
+                    matches.forEach(match => {
+                        findReplaceState.matches.push({
+                            element: lineContent,
+                            text: text,
+                            match: match[0],
+                            index: match.index,
+                            lineIndex: lineIndex
+                        });
+                    });
+                });
+            }
+        }
+
+        function highlightCurrentMatch() {
+            // Clear previous current highlight
+            document.querySelectorAll('.find-highlight-current').forEach(el => {
+                el.classList.remove('find-highlight-current');
+                el.classList.add('find-highlight');
+            });
+
+            if (findReplaceState.currentMatchIndex < 0 ||
+                findReplaceState.currentMatchIndex >= findReplaceState.matches.length) {
+                return;
+            }
+
+            const match = findReplaceState.matches[findReplaceState.currentMatchIndex];
+
+            // Scroll to and highlight the match
+            if (match.element) {
+                match.element.scrollIntoView({ behavior: 'smooth', block: 'center' });
+
+                // For table cells and raw content, add highlight class
+                if (currentView === 'table' || currentView === 'raw') {
+                    match.element.classList.add('find-highlight-current');
+                } else if (currentView === 'json') {
+                    // For JSON textareas, set selection
+                    match.element.focus();
+                    match.element.setSelectionRange(match.index, match.index + match.match.length);
+                }
+            }
+
+            // Update count display
+            document.getElementById('findMatchCount').textContent =
+                (findReplaceState.currentMatchIndex + 1) + ' of ' + findReplaceState.matches.length;
+        }
+
+        function clearHighlights() {
+            document.querySelectorAll('.find-highlight, .find-highlight-current').forEach(el => {
+                el.classList.remove('find-highlight', 'find-highlight-current');
+            });
+        }
+
+        function findNext() {
+            if (findReplaceState.matches.length === 0) {
+                performFind();
+                return;
+            }
+
+            findReplaceState.currentMatchIndex =
+                (findReplaceState.currentMatchIndex + 1) % findReplaceState.matches.length;
+            highlightCurrentMatch();
+        }
+
+        function findPrevious() {
+            if (findReplaceState.matches.length === 0) {
+                performFind();
+                return;
+            }
+
+            findReplaceState.currentMatchIndex =
+                (findReplaceState.currentMatchIndex - 1 + findReplaceState.matches.length) % findReplaceState.matches.length;
+            highlightCurrentMatch();
+        }
+
+        function replaceCurrent() {
+            if (findReplaceState.currentMatchIndex < 0 ||
+                findReplaceState.matches.length === 0) {
+                return;
+            }
+
+            const match = findReplaceState.matches[findReplaceState.currentMatchIndex];
+            const replaceText = document.getElementById('replaceInput').value;
+
+            if (currentView === 'table') {
+                // Replace in table cell
+                const cell = match.element;
+                const row = cell.closest('tr');
+                const rowIndex = parseInt(row.dataset.index);
+                const columnPath = cell.dataset.columnPath;
+
+                // Get actual row data with safety checks
+                const actualRowIndex = currentData.rowIndices && currentData.rowIndices[rowIndex] !== undefined
+                    ? currentData.rowIndices[rowIndex]
+                    : rowIndex;
+
+                const allRows = currentData.allRows || currentData.rows || [];
+                const rowData = allRows[actualRowIndex];
+
+                if (!rowData) {
+                    console.error('Could not find row data for index:', actualRowIndex);
+                    console.error('Available data:', {
+                        rowIndex,
+                        actualRowIndex,
+                        allRowsLength: allRows.length,
+                        hasRowIndices: !!currentData.rowIndices
+                    });
+                    return;
+                }
+
+                // Get current value from the stored raw value (which matches what we searched)
+                let currentValueStr = match.text; // Use the text we found the match in
+
+                // Perform replacement on the actual value
+                const newValueStr = currentValueStr.substring(0, match.index) +
+                                    replaceText +
+                                    currentValueStr.substring(match.index + match.match.length);
+
+                // Update display (JSON stringify for consistent display)
+                match.element.textContent = JSON.stringify(newValueStr);
+                // Update the raw value data attribute
+                match.element.dataset.rawValue = newValueStr;
+
+                // Send update to backend
+                vscode.postMessage({
+                    type: 'updateCell',
+                    rowIndex: actualRowIndex,
+                    columnPath: columnPath,
+                    value: newValueStr
+                });
+
+            } else if (currentView === 'json') {
+                // Replace in JSON textarea
+                const textarea = match.element;
+                const oldValue = textarea.value;
+                const newValue = oldValue.substring(0, match.index) +
+                                 replaceText +
+                                 oldValue.substring(match.index + match.match.length);
+
+                textarea.value = newValue;
+
+                // Trigger update
+                const rowIndex = parseInt(textarea.closest('.json-line').dataset.index);
+                const actualRowIndex = currentData.rowIndices ? currentData.rowIndices[rowIndex] : rowIndex;
+
+                try {
+                    const parsedData = JSON.parse(newValue);
+                    vscode.postMessage({
+                        type: 'documentChanged',
+                        rowIndex: actualRowIndex,
+                        newData: parsedData
+                    });
+                } catch (e) {
+                    // Invalid JSON after replace
+                }
+
+            } else if (currentView === 'raw') {
+                // Raw view is read-only for cell-level edits, so skip
+                vscode.window.showWarningMessage('Replace is not supported in Raw view. Switch to Table or JSON view.');
+                return;
+            }
+
+            // Re-run find to update matches
+            performFind();
+        }
+
+        function replaceAll() {
+            if (findReplaceState.matches.length === 0) {
+                return;
+            }
+
+            const replaceText = document.getElementById('replaceInput').value;
+            const matchCount = findReplaceState.matches.length;
+
+            // Note: confirm() doesn't work in sandboxed webviews, so we skip confirmation
+            // User can always undo with Ctrl+Z
+
+            // Group matches by element to reduce updates
+            const elementMatches = new Map();
+            findReplaceState.matches.forEach(match => {
+                if (!elementMatches.has(match.element)) {
+                    elementMatches.set(match.element, []);
+                }
+                elementMatches.get(match.element).push(match);
+            });
+
+            // Replace in each element (process in reverse order to maintain indices)
+            elementMatches.forEach((matches, element) => {
+                matches.sort((a, b) => b.index - a.index); // Reverse order
+
+                if (currentView === 'table') {
+                    const row = element.closest('tr');
+                    const rowIndex = parseInt(row.dataset.index);
+                    const columnPath = element.dataset.columnPath;
+
+                    // Get actual row data with safety checks
+                    const actualRowIndex = currentData.rowIndices && currentData.rowIndices[rowIndex] !== undefined
+                        ? currentData.rowIndices[rowIndex]
+                        : rowIndex;
+
+                    const allRows = currentData.allRows || currentData.rows || [];
+                    const rowData = allRows[actualRowIndex];
+
+                    if (!rowData) {
+                        console.error('Could not find row data for index:', actualRowIndex);
+                        return;
+                    }
+
+                    // Get current value from the first match's text (all matches in same element have same text)
+                    let newText = matches[0].text;
+
+                    // Apply all replacements in reverse order (already sorted)
+                    matches.forEach(match => {
+                        newText = newText.substring(0, match.index) +
+                                  replaceText +
+                                  newText.substring(match.index + match.match.length);
+                    });
+
+                    // Update display (JSON stringify for consistent display)
+                    element.textContent = JSON.stringify(newText);
+                    // Update the raw value data attribute
+                    element.dataset.rawValue = newText;
+
+                    // Send update
+                    vscode.postMessage({
+                        type: 'updateCell',
+                        rowIndex: actualRowIndex,
+                        columnPath: columnPath,
+                        value: newText
+                    });
+
+                } else if (currentView === 'json') {
+                    let newValue = element.value;
+                    matches.forEach(match => {
+                        newValue = newValue.substring(0, match.index) +
+                                   replaceText +
+                                   newValue.substring(match.index + match.match.length);
+                    });
+
+                    element.value = newValue;
+
+                    const rowIndex = parseInt(element.closest('.json-line').dataset.index);
+                    const actualRowIndex = currentData.rowIndices ? currentData.rowIndices[rowIndex] : rowIndex;
+
+                    try {
+                        const parsedData = JSON.parse(newValue);
+                        vscode.postMessage({
+                            type: 'documentChanged',
+                            rowIndex: actualRowIndex,
+                            newData: parsedData
+                        });
+                    } catch (e) {
+                        // Invalid JSON
+                    }
+                }
+            });
+
+            vscode.window.showInformationMessage('Replaced ' + matchCount + ' occurrences');
+
+            // Re-run find
+            performFind();
+        }
+
+        // Find/Replace Event Listeners
+        document.getElementById('findReplaceCloseBtn').addEventListener('click', closeFindReplaceModal);
+        document.getElementById('findReplaceModal').addEventListener('click', (e) => {
+            if (e.target.id === 'findReplaceModal') {
+                closeFindReplaceModal();
+            }
+        });
+
+        document.getElementById('findInput').addEventListener('input', performFind);
+        document.getElementById('regexCheckbox').addEventListener('change', performFind);
+        document.getElementById('caseSensitiveCheckbox').addEventListener('change', performFind);
+        document.getElementById('wholeWordCheckbox').addEventListener('change', performFind);
+
+        document.getElementById('findNextBtn').addEventListener('click', findNext);
+        document.getElementById('findPrevBtn').addEventListener('click', findPrevious);
+        document.getElementById('replaceBtn').addEventListener('click', replaceCurrent);
+        document.getElementById('replaceAllBtn').addEventListener('click', replaceAll);
+
+        // Keyboard shortcuts for Find/Replace
+        document.addEventListener('keydown', (e) => {
+            // Cmd/Ctrl + F: Open Find
+            if ((e.metaKey || e.ctrlKey) && e.key === 'f') {
+                e.preventDefault();
+                openFindReplaceModal();
+            }
+
+            // Cmd/Ctrl + H: Open Find/Replace
+            if ((e.metaKey || e.ctrlKey) && e.key === 'h') {
+                e.preventDefault();
+                openFindReplaceModal();
+                document.getElementById('replaceInput').focus();
+            }
+
+            // Escape: Close modal
+            if (e.key === 'Escape' && document.getElementById('findReplaceModal').style.display === 'flex') {
+                closeFindReplaceModal();
+            }
+
+            // Enter in find input: Find next
+            if (e.key === 'Enter' && document.activeElement.id === 'findInput') {
+                e.preventDefault();
+                findNext();
+            }
+
+            // Enter in replace input: Replace current
+            if (e.key === 'Enter' && document.activeElement.id === 'replaceInput') {
+                e.preventDefault();
+                if (e.shiftKey) {
+                    replaceAll();
+                } else {
+                    replaceCurrent();
+                }
+            }
+
+            // F3 or Cmd/Ctrl+G: Find next
+            if (e.key === 'F3' || ((e.metaKey || e.ctrlKey) && e.key === 'g')) {
+                e.preventDefault();
+                if (e.shiftKey) {
+                    findPrevious();
+                } else {
+                    findNext();
+                }
+            }
+        });
+
+        // Event listeners
+        document.getElementById('searchInput').addEventListener('input', handleSearch);
+        document.getElementById('logo').addEventListener('click', () => {
+            vscode.postMessage({
+                type: 'openUrl',
+                url: 'https://github.com/gaborcselle/jsonl-gazelle'
+            });
+        });
+
+        // Find/Replace Button
+        document.getElementById('findReplaceBtn').addEventListener('click', openFindReplaceModal);
+
         // Column Manager Modal
         document.getElementById('columnManagerBtn').addEventListener('click', openColumnManager);
         document.getElementById('modalCloseBtn').addEventListener('click', closeColumnManager);
@@ -4668,9 +5301,12 @@ Available variables:
 
             // Get the actual index from the pre-computed mapping
             // rowIndex here is the filtered index (0-based position in currentData.rows)
-            const actualRowIndex = currentData.rowIndices && currentData.rowIndices[rowIndex] !== undefined 
-                ? currentData.rowIndices[rowIndex] 
+            const actualRowIndex = currentData.rowIndices && currentData.rowIndices[rowIndex] !== undefined
+                ? currentData.rowIndices[rowIndex]
                 : rowIndex; // Fallback to filtered index if mapping is unavailable
+
+            // Store the filtered row index on the row element for Find/Replace
+            tr.dataset.index = rowIndex.toString();
 
             // Add row number cell
             const rowNumCell = document.createElement('td');
@@ -4691,6 +5327,11 @@ Available variables:
                 const td = document.createElement('td');
                 const value = getNestedValue(row, column.path);
                 const valueStr = value !== undefined ? JSON.stringify(value) : '';
+
+                // Store column path and raw value on the cell element for Find/Replace
+                td.dataset.columnPath = column.path;
+                // Store the actual value (not JSON stringified) for accurate find/replace
+                td.dataset.rawValue = value !== undefined && value !== null ? String(value) : '';
 
                 if (column.isExpanded) {
                     td.classList.add('expanded-column');
@@ -5478,7 +6119,13 @@ Available variables:
                     logo.classList.remove('loading');
                     loadingState.style.display = 'none';
                     searchContainer.classList.remove('controls-hidden');
-                    requestAnimationFrame(ensureTableViewportFilled);
+                    // Re-render table to apply any active search filters
+                    renderTableChunk(true);
+                    // Re-apply search highlighting if there's an active search
+                    const searchTerm = document.getElementById('searchInput').value;
+                    if (searchTerm) {
+                        highlightTableResults(searchTerm);
+                    }
                     break;
                 case 'json':
                     document.getElementById('jsonViewContainer').style.display = 'block';
