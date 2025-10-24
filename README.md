@@ -70,6 +70,11 @@ This will create `test-data/large.jsonl` with:
 The generated file is automatically excluded from git via `.gitignore` to keep the repository lightweight.
 
 ## What's next / Roadmap
+- [ ] Pretty print view: Syntax highlighting
+- [ ] Pretty print view: Fix first rendering bug
+- [ ] Find / Replace: Implement great Find / Replace / Replace All with Regex option and highlighting
+- [ ] Large files: Generate a file with `generate-large.js`, loading fails above 100 MB with "Assertion Failed: Argument is `undefined` or `null`."
+- [ ] Split codebase: Figure out how to split into separate files, maybe one per view?
 - [X] Virtualize data loading
 - [X] Table view: Row deletion and addition - this should be on right-click on the row header, allow Delete, Insert above, and insert below
 - [X] Table view: Allow re-ordering columns, allow hiding /unhiding columns - like Google Sheets
@@ -80,13 +85,8 @@ The generated file is automatically excluded from git via `.gitignore` to keep t
 - [X] Table view: Insert rows with AI: Right-click on the row header, then choose how many of the previous rows to feed it (default to 10), and a prompt dialog that defaults to "generate more like these, but make it different from the lines below"
 - [X] Settings: A settings dialog to enter your OpenAI key and select a model (default to gpt-4.1-mini) for the above AI features
 - [X] Pretty print view: Insert before and after
-- [ ] Pretty print view: Resolve the layouting bug where the lines initially briefly appear in a container that's too small
-- [ ] Pretty print view: Resolve the selection bug which unselects the current row first and requires a second click to select the row you wanted to selet
-- [ ] Raw view: Allow editing the raw view
-- [ ] Raw view: Add JSON syntax highlighting
-- [ ] Find / Replace: Implement great Find / Replace / Replace All with Regex option and highlighting
-- [ ] Large files: Generate a file with `generate-large.js`, loading fails above 100 MB with "Assertion Failed: Argument is `undefined` or `null`."
-- [ ] Split codebase: Figure out how to split into separate files, maybe one per view?
+- [X] Raw view: Allow editing the raw view
+- [X] Raw view: Add JSON syntax highlighting
 
 ## License
 
