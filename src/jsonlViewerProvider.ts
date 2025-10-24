@@ -1681,45 +1681,43 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
                     await document.save();
                 }
                 
-                // Only update internal data structures when saving, not on content changes
-                if (isSave) {
-                    // Parse the new content to update internal data without full reload
-                    const lines = newContent.split('\n');
-                    this.totalLines = lines.length;
-                    this.loadedLines = 0;
-                    this.rows = [];
-                    this.parsedLines = [];
-                    
-                    // Parse lines to update rows and columns
-                    for (let i = 0; i < lines.length; i++) {
-                        const line = lines[i].trim();
-                        if (line) {
-                            try {
-                                const parsed = JSON.parse(line);
-                                this.rows.push(parsed);
-                                this.parsedLines.push({
-                                    data: parsed,
-                                    lineNumber: i + 1,
-                                    rawLine: line,
-                                    error: undefined
-                                });
-                            } catch (error) {
-                                this.parsedLines.push({
-                                    data: null,
-                                    lineNumber: i + 1,
-                                    rawLine: line,
-                                    error: error instanceof Error ? error.message : String(error)
-                                });
-                            }
+                // Update internal data structures for both save and content changes
+                // Parse the new content to update internal data without full reload
+                const lines = newContent.split('\n');
+                this.totalLines = lines.length;
+                this.loadedLines = 0;
+                this.rows = [];
+                this.parsedLines = [];
+                
+                // Parse lines to update rows and columns
+                for (let i = 0; i < lines.length; i++) {
+                    const line = lines[i].trim();
+                    if (line) {
+                        try {
+                            const parsed = JSON.parse(line);
+                            this.rows.push(parsed);
+                            this.parsedLines.push({
+                                data: parsed,
+                                lineNumber: i + 1,
+                                rawLine: line,
+                                error: undefined
+                            });
+                        } catch (error) {
+                            this.parsedLines.push({
+                                data: null,
+                                lineNumber: i + 1,
+                                rawLine: line,
+                                error: error instanceof Error ? error.message : String(error)
+                            });
                         }
                     }
-                    
-                    this.loadedLines = this.rows.length;
-                    this.filteredRows = this.rows;
-                    
-                    // Update columns based on new data
-                    this.updateColumns();
                 }
+                
+                this.loadedLines = this.rows.length;
+                this.filteredRows = this.rows;
+                
+                // Update columns based on new data
+                this.updateColumns();
                 
                 // Update the webview to reflect changes
                 this.updateWebview(webviewPanel);
@@ -2327,6 +2325,8 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
         #rawViewContainer {
             height: 100%;
             overflow: auto;
+            font-family: var(--vscode-editor-font-family);
+            font-size: 12px;
         }
         
         table {
@@ -5407,11 +5407,20 @@ Available variables:
                 return;
             }
             
-            // Force save when switching away from raw view
+            // Hide any open context menus when switching views
+            hideContextMenu();
+            
+            // Update data model when switching away from raw view (without saving)
             if (currentView === 'raw' && viewType !== 'raw') {
-                vscode.postMessage({
-                    type: 'forceSave'
-                });
+                // Get current content from Monaco editor and update data model without saving
+                const rawEditor = document.getElementById('rawEditor');
+                if (rawEditor && rawEditor.editor) {
+                    const currentContent = rawEditor.editor.getValue();
+                    vscode.postMessage({
+                        type: 'rawContentChanged',
+                        newContent: currentContent
+                    });
+                }
             }
             
             // Save current scroll position
@@ -5548,8 +5557,8 @@ Available variables:
                     wordWrap: 'on',
                     lineNumbers: 'on',
                     folding: true,
-                    fontSize: 14,
-                    fontFamily: 'Consolas, "Courier New", monospace'
+                    fontSize: 12,
+                    fontFamily: 'var(--vscode-editor-font-family)'
                 });
                 
                 // Disable JSON validation for JSONL files
