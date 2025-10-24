@@ -1,27 +1,7 @@
 import * as vscode from 'vscode';
 import * as path from 'path';
-
-interface JsonRow {
-    [key: string]: any;
-}
-
-interface ParsedLine {
-    data: JsonRow | null;
-    lineNumber: number;
-    rawLine: string;
-    error?: string;
-}
-
-interface ColumnInfo {
-    path: string;
-    displayName: string;
-    visible: boolean;
-    isExpanded?: boolean;
-    parentPath?: string;
-    isManuallyAdded?: boolean;  // Flag for manually added columns
-    insertPosition?: 'before' | 'after';  // Position relative to reference
-    insertReferenceColumn?: string;  // Reference column for insertion
-}
+import { JsonRow, ParsedLine, ColumnInfo } from './jsonl/types';
+import * as utils from './jsonl/utils';
 
 export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
     private static readonly viewType = 'jsonl-gazelle.jsonlViewer';
@@ -567,13 +547,7 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
     }
 
     private getDisplayName(path: string): string {
-        // For nested paths, return the full path to avoid conflicts with expanded columns
-        // For top-level paths, return just the field name
-        const parts = path.split('.');
-        if (parts.length > 1) {
-            return path; // Return full path for nested fields
-        }
-        return parts[parts.length - 1]; // Return just the field name for top-level
+        return utils.getDisplayName(path);
     }
 
     private filterRows() {
@@ -635,28 +609,7 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
     }
     
     private deleteNestedProperty(obj: any, path: string): void {
-        const parts = path.split('.');
-        if (parts.length === 1) {
-            // Top-level property
-            delete obj[path];
-        } else {
-            // Nested property
-            const parentPath = parts.slice(0, -1);
-            const propertyName = parts[parts.length - 1];
-            
-            let current = obj;
-            for (const part of parentPath) {
-                if (current && typeof current === 'object' && part in current) {
-                    current = current[part];
-                } else {
-                    return; // Path doesn't exist
-                }
-            }
-            
-            if (current && typeof current === 'object') {
-                delete current[propertyName];
-            }
-        }
+        utils.deleteNestedProperty(obj, path);
     }
 
     private expandColumn(columnPath: string) {
@@ -1613,39 +1566,7 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
 
 
     private getNestedValue(obj: any, path: string): any {
-        // Handle null/undefined object
-        if (obj === null || obj === undefined) {
-            return undefined;
-        }
-        
-        // Handle special case for primitive values with "(value)" path
-        if (path === '(value)' && (typeof obj === 'string' || typeof obj === 'number' || typeof obj === 'boolean' || obj === null || Array.isArray(obj))) {
-            return obj;
-        }
-        
-        const parts = path.split('.');
-        let current = obj;
-        
-        for (const part of parts) {
-            if (current === null || current === undefined) {
-                break;
-            }
-            
-            if (part.includes('[') && part.includes(']')) {
-                const [key, indexStr] = part.split('[');
-                const index = parseInt(indexStr.replace(']', ''));
-                if (isNaN(index)) {
-                    return undefined;
-                }
-                current = current[key]?.[index];
-            } else {
-                current = current[part];
-            }
-            
-            if (current === undefined) break;
-        }
-        
-        return current;
+        return utils.getNestedValue(obj, path);
     }
 
     private async handleRawContentChange(newContent: string, webviewPanel: vscode.WebviewPanel, document: vscode.TextDocument) {
@@ -2154,75 +2075,34 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
             flex-direction: column;
             overflow: hidden;
         }
-        
-        .header {
-            display: flex;
-            align-items: center;
-            padding: 10px;
-            background-color: var(--vscode-editor-background);
-            border-bottom: 1px solid var(--vscode-panel-border);
-            gap: 10px;
-        }
-        
+
         .logo {
-            width: 32px;
-            height: 32px;
-            margin-right: 10px;
+            width: 28px;
+            height: 28px;
+            margin-right: 12px;
+            flex-shrink: 0;
         }
-        
+
         .logo.loading {
             animation: spin 2s linear infinite;
         }
-        
+
         .loading-state {
             display: flex;
             align-items: center;
             gap: 10px;
-            flex: 1;
-            justify-content: center;
-            font-size: 14px;
+            margin-right: 12px;
+            font-size: 13px;
             color: var(--vscode-descriptionForeground);
         }
-        
+
         .loading-progress {
-            font-size: 12px;
+            font-size: 11px;
             color: var(--vscode-descriptionForeground);
         }
-        
+
         .controls-hidden {
             display: none !important;
-        }
-        
-        .search-container {
-            display: flex;
-            align-items: center;
-            gap: 5px;
-            flex: 1;
-        }
-        
-        .search-input {
-            flex: 1;
-            padding: 5px 10px;
-            border: 1px solid var(--vscode-input-border);
-            background-color: var(--vscode-input-background);
-            color: var(--vscode-input-foreground);
-            border-radius: 3px;
-        }
-        
-        .search-input:focus {
-            outline: none;
-            border-color: var(--vscode-focusBorder);
-        }
-        
-        .search-icon {
-            color: var(--vscode-foreground);
-            display: flex;
-            align-items: center;
-        }
-        
-        .search-icon svg {
-            width: 16px;
-            height: 16px;
         }
         
         .replace-container {
@@ -2856,10 +2736,11 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
         }
         
         .search-highlight {
-            background-color: var(--vscode-editor-findMatchBackground);
-            color: var(--vscode-editor-findMatchForeground);
+            background-color: var(--vscode-editor-findMatchBackground) !important;
+            color: var(--vscode-editor-findMatchForeground) !important;
             padding: 1px 2px;
             border-radius: 2px;
+            border-left: 3px solid var(--vscode-editor-findMatchBorder);
         }
         
         .table-highlight {
@@ -3327,20 +3208,13 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
     </style>
 </head>
 <body>
-    <div class="header">
-        <img src="${gazelleIconUri}" class="logo" alt="JSONL Gazelle" id="logo" title="JSONL Gazelle" style="cursor: pointer;">
-        <div class="loading-state" id="loadingState" style="display: none;">
-            <div>Loading large file...</div>
-            <div class="loading-progress" id="loadingProgress"></div>
-        </div>
-        <div class="search-container" id="searchContainer">
-            <span class="search-icon"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"></circle><path d="m21 21-4.35-4.35"></path></svg></span>
-            <input type="text" class="search-input" id="searchInput" placeholder="Find...">
-        </div>
-    </div>
-    
     <div class="main-content">
         <div class="view-controls">
+            <img src="${gazelleIconUri}" class="logo" alt="JSONL Gazelle" id="logo" title="JSONL Gazelle" style="cursor: pointer;">
+            <div class="loading-state" id="loadingState" style="display: none;">
+                <div>Loading large file...</div>
+                <div class="loading-progress" id="loadingProgress"></div>
+            </div>
             <div class="segmented-control">
                 <button class="active" data-view="table"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect><line x1="9" y1="3" x2="9" y2="21"></line><line x1="15" y1="3" x2="15" y2="21"></line><line x1="3" y1="9" x2="21" y2="9"></line><line x1="3" y1="15" x2="21" y2="15"></line></svg> Table</button>
                 <button data-view="json"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="4" y1="6" x2="20" y2="6"></line><line x1="8" y1="10" x2="20" y2="10"></line><line x1="12" y1="14" x2="20" y2="14"></line><line x1="8" y1="18" x2="20" y2="18"></line></svg> Pretty Print</button>
@@ -4269,7 +4143,6 @@ Available variables:
         });
 
         // Event listeners
-        document.getElementById('searchInput').addEventListener('input', handleSearch);
         document.getElementById('logo').addEventListener('click', () => {
             vscode.postMessage({
                 type: 'openUrl',
@@ -4714,81 +4587,6 @@ Available variables:
             target.classList.remove('drag-over');
         }
         
-        function handleSearch() {
-            const searchTerm = document.getElementById('searchInput').value;
-            
-            // Perform search in current view with highlighting
-            if (currentView === 'table') {
-                vscode.postMessage({
-                    type: 'search',
-                    searchTerm: searchTerm
-                });
-                highlightTableResults(searchTerm);
-            } else if (currentView === 'json') {
-                highlightJsonResults(searchTerm);
-            } else if (currentView === 'raw') {
-                highlightRawResults(searchTerm);
-            }
-        }
-        
-        function highlightTableResults(searchTerm) {
-            document.querySelectorAll('.table-highlight').forEach(el => {
-                el.classList.remove('table-highlight');
-            });
-            
-            if (!searchTerm) return;
-            
-            const cells = document.querySelectorAll('#dataTable td');
-            cells.forEach(cell => {
-                const text = cell.textContent;
-                const matches = text.toLowerCase().includes(searchTerm.toLowerCase());
-                
-                if (matches) {
-                    cell.classList.add('table-highlight');
-                }
-            });
-        }
-        
-        function highlightJsonResults(searchTerm) {
-            const jsonLines = document.querySelectorAll('.json-content-editable');
-            jsonLines.forEach(textarea => {
-                // For textareas, we can't easily highlight within the text
-                // Instead, we'll add a visual indicator if the content matches
-                const content = textarea.value;
-                let hasMatch = false;
-                
-                if (searchTerm) {
-                    hasMatch = content.toLowerCase().includes(searchTerm.toLowerCase());
-                }
-                
-                if (hasMatch) {
-                    textarea.style.borderColor = 'var(--vscode-editor-findMatchBackground)';
-                    textarea.style.boxShadow = '0 0 0 2px var(--vscode-editor-findMatchBackground)';
-                } else {
-                    textarea.style.borderColor = '';
-                    textarea.style.boxShadow = '';
-                }
-            });
-        }
-        
-        
-        function highlightRawResults(searchTerm) {
-            const rawLines = document.querySelectorAll('.raw-line-content');
-            rawLines.forEach(lineContent => {
-                // Remove existing highlights
-                lineContent.classList.remove('search-highlight');
-                
-                if (!searchTerm) return;
-                
-                const text = lineContent.textContent;
-                const matches = text.toLowerCase().includes(searchTerm.toLowerCase());
-                
-                if (matches) {
-                    lineContent.classList.add('search-highlight');
-                }
-            });
-        }
-        
         
         
         
@@ -4999,13 +4797,11 @@ Available variables:
             const logo = document.getElementById('logo');
             const loadingState = document.getElementById('loadingState');
             const loadingProgress = document.getElementById('loadingProgress');
-            const searchContainer = document.getElementById('searchContainer');
             
             if (data.isIndexing) {
                 // Initial loading - show spinning logo and hide controls
                 logo.classList.add('loading');
                 loadingState.style.display = 'flex';
-                searchContainer.classList.add('controls-hidden');
                 
                 // Don't show the indexing div since we have header loading state
                 document.getElementById('indexingDiv').style.display = 'none';
@@ -5017,7 +4813,6 @@ Available variables:
             if (data.loadingProgress && data.loadingProgress.loadingChunks) {
                 logo.classList.add('loading');
                 loadingState.style.display = 'flex';
-                searchContainer.classList.add('controls-hidden');
                 
                 const memoryInfo = data.loadingProgress.memoryOptimized ? 
                     \`<div style="font-size: 11px; color: var(--vscode-warningForeground); margin-top: 5px;">
@@ -5036,14 +4831,12 @@ Available variables:
                 // Loading complete - show controls and stop spinning logo
                 logo.classList.remove('loading');
                 loadingState.style.display = 'none';
-                searchContainer.classList.remove('controls-hidden');
                 
                 document.getElementById('indexingDiv').style.display = 'none';
                 document.getElementById('dataTable').style.display = 'table';
             }
             
             // Update search inputs
-            document.getElementById('searchInput').value = data.searchTerm;
             
             // Update error count
             const errorCountElement = document.getElementById('errorCount');
@@ -5394,7 +5187,6 @@ Available variables:
             tableRenderState.renderedRows = end;
             tableRenderState.isRendering = false;
 
-            const searchTerm = document.getElementById('searchInput').value;
             if (searchTerm) {
                 highlightTableResults(searchTerm);
             }
@@ -5693,7 +5485,6 @@ Available variables:
             jsonRenderState.renderedRows = end;
             jsonRenderState.isRendering = false;
 
-            const searchTerm = document.getElementById('searchInput').value;
             if (searchTerm) {
                 highlightJsonResults(searchTerm);
             }
@@ -5795,7 +5586,6 @@ Available variables:
             rawRenderState.renderedLines = end;
             rawRenderState.isRendering = false;
 
-            const searchTerm = document.getElementById('searchInput').value;
             if (searchTerm) {
                 highlightRawResults(searchTerm);
             }
@@ -6085,13 +5875,11 @@ Available variables:
             // Show spinning gazelle during view switch
             const logo = document.getElementById('logo');
             const loadingState = document.getElementById('loadingState');
-            const searchContainer = document.getElementById('searchContainer');
             logo.classList.add('loading');
             loadingState.style.display = 'flex';
             loadingState.innerHTML = '<div>Switching view...</div>';
             
             // Hide search container during view switch
-            searchContainer.classList.add('controls-hidden');
             
             // Update segmented control
             document.querySelectorAll('.segmented-control button').forEach(button => {
@@ -6118,11 +5906,9 @@ Available variables:
                     // Hide loading state immediately for table view (already rendered)
                     logo.classList.remove('loading');
                     loadingState.style.display = 'none';
-                    searchContainer.classList.remove('controls-hidden');
                     // Re-render table to apply any active search filters
                     renderTableChunk(true);
                     // Re-apply search highlighting if there's an active search
-                    const searchTerm = document.getElementById('searchInput').value;
                     if (searchTerm) {
                         highlightTableResults(searchTerm);
                     }
@@ -6151,7 +5937,6 @@ Available variables:
                         // Hide loading state after JSON view is rendered
                         logo.classList.remove('loading');
                         loadingState.style.display = 'none';
-                        searchContainer.classList.remove('controls-hidden');
                     }, jsonDelay);
                     break;
                 case 'raw':
@@ -6167,8 +5952,12 @@ Available variables:
                         // Hide loading state after raw view is rendered
                         logo.classList.remove('loading');
                         loadingState.style.display = 'none';
-                        searchContainer.classList.remove('controls-hidden');
-                        
+
+                        // Re-apply search highlighting if there's an active search
+                        if (searchTerm) {
+                            highlightRawResults(searchTerm);
+                        }
+
                         // Automatically open file in VS Code editor
                         vscode.postMessage({
                             type: 'openInEditor'
@@ -6395,48 +6184,11 @@ Available variables:
     }
     
     private setNestedValue(obj: any, path: string, value: any) {
-        const parts = path.split('.');
-        let current = obj;
-        
-        for (let i = 0; i < parts.length - 1; i++) {
-            const part = parts[i];
-            
-            if (part.includes('[') && part.includes(']')) {
-                const [key, indexStr] = part.split('[');
-                const index = parseInt(indexStr.replace(']', ''));
-                if (!current[key]) current[key] = [];
-                if (!current[key][index]) current[key][index] = {};
-                current = current[key][index];
-            } else {
-                if (!current[part]) current[part] = {};
-                current = current[part];
-            }
-        }
-        
-        const lastPart = parts[parts.length - 1];
-        if (lastPart.includes('[') && lastPart.includes(']')) {
-            const [key, indexStr] = lastPart.split('[');
-            const index = parseInt(indexStr.replace(']', ''));
-            if (!current[key]) current[key] = [];
-            current[key][index] = value;
-        } else {
-            current[lastPart] = value;
-        }
+        utils.setNestedValue(obj, path, value);
     }
 
     private isStringifiedJson(value: any): boolean {
-        if (typeof value !== 'string') {
-            return false;
-        }
-
-        const trimmed = value.trim();
-        // Skip empty strings
-        if (trimmed === '') {
-            return false;
-        }
-        // Check if it starts with "[" or "{" and looks like JSON
-        return (trimmed.startsWith('[') || trimmed.startsWith('{')) &&
-               (trimmed.endsWith(']') || trimmed.endsWith('}'));
+        return utils.isStringifiedJson(value);
     }
 
     private async handleUnstringifyColumn(columnPath: string, webviewPanel: vscode.WebviewPanel, document: vscode.TextDocument) {
