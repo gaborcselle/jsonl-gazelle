@@ -2908,6 +2908,45 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
             font-weight: 600;
         }
         
+        .modal-header-buttons {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+        
+        .modal-info-btn {
+            background: none;
+            border: none;
+            color: var(--vscode-textLink-foreground);
+            cursor: pointer;
+            font-size: 16px;
+            font-weight: bold;
+            padding: 4px 8px;
+            border-radius: 4px;
+            transition: background-color 0.2s;
+        }
+        
+        .modal-info-btn:hover {
+            background-color: var(--vscode-button-hoverBackground);
+        }
+        
+        .label-with-info {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            margin-top: 16px;
+            margin-bottom: 8px;
+        }
+        
+        .ai-info-panel code {
+            background-color: var(--vscode-textCodeBlock-background);
+            color: var(--vscode-textPreformat-foreground);
+            padding: 2px 4px;
+            border-radius: 3px;
+            font-family: var(--vscode-editor-font-family);
+            font-size: 11px;
+        }
+        
         .modal-close {
             background: none;
             border: none;
@@ -3269,7 +3308,10 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
                 <label for="aiColumnName" style="display: block; margin-bottom: 8px; font-weight: 500;">Column Name:</label>
                 <input type="text" id="aiColumnName" class="column-name-input" placeholder="e.g., summary, category, score" />
 
-                <label for="aiPrompt" style="display: block; margin-top: 16px; margin-bottom: 8px; font-weight: 500;">AI Prompt Template:</label>
+                <div class="label-with-info">
+                    <label for="aiPrompt" style="display: inline-block; margin-top: 16px; margin-bottom: 8px; font-weight: 500;">AI Prompt Template:</label>
+                    <button class="modal-info-btn" id="aiColumnInfoBtn">ℹ</button>
+                </div>
                 <textarea id="aiPrompt" class="ai-prompt-textarea" rows="10" placeholder="Example: Categorize this item: {{row.name}} with price {{row.price}}
 
 Available variables:
@@ -3280,9 +3322,17 @@ Available variables:
 - {{rows_before}} - number of rows before this one
 - {{rows_after}} - number of rows after this one"></textarea>
 
-                <div class="ai-info-box" style="margin-top: 12px; padding: 12px; background: rgba(255, 255, 255, 0.05); border-radius: 6px; font-size: 12px; color: #888;">
-                    <strong>Note:</strong> This will use the language model API configured in your VS Code settings. API calls will be parallelized for better performance.
+                <div class="ai-info-panel" id="aiInfoPanel" style="display: none; margin-top: 12px; padding: 12px; background: rgba(255, 255, 255, 0.05); border-radius: 6px; font-size: 12px; color: #888;">
+                    <strong>Example:</strong> Categorize this item: {{row.name}} with price {{row.price}}<br><br>
+                    <strong>Available variables:</strong><br>
+                    • <code>{{row}}</code> - entire row as JSON<br>
+                    • <code>{{row.fieldname}}</code> - specific field value<br>
+                    • <code>{{row.fieldname[0]}}</code> - array element<br>
+                    • <code>{{row_number}}</code> - current row number<br>
+                    • <code>{{rows_before}}</code> - number of rows before this one<br>
+                    • <code>{{rows_after}}</code> - number of rows after this one
                 </div>
+
 
                 <div class="modal-actions" style="margin-top: 16px;">
                     <button class="modal-button modal-button-primary" id="aiColumnConfirmBtn">Generate Column</button>
@@ -3301,7 +3351,7 @@ Available variables:
             <div class="modal-body">
                 <div id="openaiSettings">
                     <label for="openaiKey" style="display: block; margin-bottom: 8px; font-weight: 500;">OpenAI API Key:</label>
-                    <input type="password" id="openaiKey" class="column-name-input" placeholder="sk-..." />
+                    <input type="text" id="openaiKey" class="column-name-input" placeholder="sk-..." />
 
                     <label for="openaiModel" style="display: block; margin-bottom: 8px; font-weight: 500;">Model:</label>
                     <select id="openaiModel" class="settings-select" style="width: 100%; padding: 8px 12px; font-size: 13px; background-color: var(--vscode-input-background); color: var(--vscode-input-foreground); border: 1px solid var(--vscode-input-border); border-radius: 4px; outline: none; margin-bottom: 16px; box-sizing: border-box;">
@@ -3731,6 +3781,10 @@ Available variables:
         document.getElementById('aiColumnCloseBtn').addEventListener('click', closeAIColumnModal);
         document.getElementById('aiColumnCancelBtn').addEventListener('click', closeAIColumnModal);
         document.getElementById('aiColumnConfirmBtn').addEventListener('click', confirmAIColumn);
+        document.getElementById('aiColumnInfoBtn').addEventListener('click', () => {
+            const infoPanel = document.getElementById('aiInfoPanel');
+            infoPanel.style.display = infoPanel.style.display === 'none' ? 'block' : 'none';
+        });
         document.getElementById('aiColumnModal').addEventListener('click', (e) => {
             if (e.target.id === 'aiColumnModal') {
                 closeAIColumnModal();
