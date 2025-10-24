@@ -442,7 +442,7 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
         
         // Detect column order from first row to preserve file order
         const columnOrderMap = new Map<string, number>();
-        if (this.rows.length > 0 && typeof this.rows[0] === 'object') {
+        if (this.rows.length > 0 && typeof this.rows[0] === 'object' && this.rows[0] !== null && !Array.isArray(this.rows[0])) {
             Object.keys(this.rows[0]).forEach((key, index) => {
                 columnOrderMap.set(key, index);
             });
@@ -1689,6 +1689,9 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
                 this.rows = [];
                 this.parsedLines = [];
                 
+                // Reset path counts for accurate column detection
+                this.pathCounts = {};
+                
                 // Parse lines to update rows and columns
                 for (let i = 0; i < lines.length; i++) {
                     const line = lines[i].trim();
@@ -1702,6 +1705,13 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
                                 rawLine: line,
                                 error: undefined
                             });
+                            
+                            // Count paths for column detection
+                            try {
+                                this.countPaths(parsed, '', this.pathCounts);
+                            } catch (countError) {
+                                console.warn(`Error counting paths for line ${i + 1}:`, countError);
+                            }
                         } catch (error) {
                             this.parsedLines.push({
                                 data: null,
