@@ -104,6 +104,12 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
                             case 'rawContentChanged':
                                 await this.handleRawContentChange(message.newContent, webviewPanel, document);
                                 break;
+                            case 'rawContentSave':
+                                await this.handleRawContentSave(message.newContent, webviewPanel, document);
+                                break;
+                            case 'forceSave':
+                                await document.save();
+                                break;
                             case 'unstringifyColumn':
                                 await this.handleUnstringifyColumn(message.columnPath, webviewPanel, document);
                                 break;
@@ -436,7 +442,7 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
         
         // Detect column order from first row to preserve file order
         const columnOrderMap = new Map<string, number>();
-        if (this.rows.length > 0 && typeof this.rows[0] === 'object') {
+        if (this.rows.length > 0 && typeof this.rows[0] === 'object' && this.rows[0] !== null && !Array.isArray(this.rows[0])) {
             Object.keys(this.rows[0]).forEach((key, index) => {
                 columnOrderMap.set(key, index);
             });
@@ -1643,9 +1649,22 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
     }
 
     private async handleRawContentChange(newContent: string, webviewPanel: vscode.WebviewPanel, document: vscode.TextDocument) {
+        await this.updateRawContent(newContent, webviewPanel, document, false);
+    }
+
+    private async handleRawContentSave(newContent: string, webviewPanel: vscode.WebviewPanel, document: vscode.TextDocument) {
+        await this.updateRawContent(newContent, webviewPanel, document, true);
+    }
+
+    private async updateRawContent(newContent: string, webviewPanel: vscode.WebviewPanel, document: vscode.TextDocument, isSave: boolean) {
         try {
             // Update the raw content
             this.rawContent = newContent;
+            
+            // Set updating flag to prevent document change handler from reloading (only for change events)
+            if (!isSave) {
+                this.isUpdating = true;
+            }
             
             // Update the document content
             const edit = new vscode.WorkspaceEdit();
@@ -1654,17 +1673,88 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
                 new vscode.Range(0, 0, document.lineCount, 0),
                 newContent
             );
-            await vscode.workspace.applyEdit(edit);
+            const success = await vscode.workspace.applyEdit(edit);
             
-            // Reload the file to update parsed data
-            await this.loadJsonlFile(document);
+            if (success) {
+                // Save the document to update dirty state indicator (only for save events)
+                if (isSave) {
+                    await document.save();
+                }
+                
+                // Update internal data structures for both save and content changes
+                // Parse the new content to update internal data without full reload
+                const lines = newContent.split('\n');
+                this.totalLines = lines.length;
+                this.loadedLines = 0;
+                this.rows = [];
+                this.parsedLines = [];
+                
+                // Reset path counts for accurate column detection
+                this.pathCounts = {};
+                
+                // Parse lines to update rows and columns
+                for (let i = 0; i < lines.length; i++) {
+                    const line = lines[i].trim();
+                    if (line) {
+                        try {
+                            const parsed = JSON.parse(line);
+                            this.rows.push(parsed);
+                            this.parsedLines.push({
+                                data: parsed,
+                                lineNumber: i + 1,
+                                rawLine: line,
+                                error: undefined
+                            });
+                            
+                            // Count paths for column detection
+                            try {
+                                this.countPaths(parsed, '', this.pathCounts);
+                            } catch (countError) {
+                                console.warn(`Error counting paths for line ${i + 1}:`, countError);
+                            }
+                        } catch (error) {
+                            this.parsedLines.push({
+                                data: null,
+                                lineNumber: i + 1,
+                                rawLine: line,
+                                error: error instanceof Error ? error.message : String(error)
+                            });
+                        }
+                    }
+                }
+                
+                this.loadedLines = this.rows.length;
+                this.filteredRows = this.rows;
+                
+                // Update columns based on new data
+                this.updateColumns();
+                
+                // Update the webview to reflect changes
+                this.updateWebview(webviewPanel);
+                
+                // Show success message only for save events
+                if (isSave) {
+                    vscode.window.showInformationMessage('File saved successfully');
+                }
+            } else {
+                const errorMsg = isSave ? 'Failed to save file' : 'Failed to save raw content changes';
+                vscode.window.showErrorMessage(errorMsg);
+            }
             
-            // Update the webview to reflect changes
-            this.updateWebview(webviewPanel);
+            // Reset updating flag after a short delay (only for change events)
+            if (!isSave) {
+                setTimeout(() => { this.isUpdating = false; }, 100);
+            }
         } catch (error) {
-            console.error('Error handling raw content change:', error);
+            console.error('Error handling raw content:', error);
             const errorMessage = error instanceof Error ? error.message : String(error);
-            vscode.window.showErrorMessage('Failed to save raw content changes: ' + errorMessage);
+            const errorMsg = isSave ? 'Failed to save file: ' + errorMessage : 'Failed to save raw content changes: ' + errorMessage;
+            vscode.window.showErrorMessage(errorMsg);
+            
+            // Reset updating flag on error (only for change events)
+            if (!isSave) {
+                setTimeout(() => { this.isUpdating = false; }, 100);
+            }
         }
     }
 
@@ -2040,6 +2130,7 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>JSONL Gazelle</title>
+    <script src="https://cdn.jsdelivr.net/npm/monaco-editor@0.44.0/min/vs/loader.js"></script>
     <style>
         html, body {
             font-family: var(--vscode-font-family);
@@ -2244,6 +2335,8 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
         #rawViewContainer {
             height: 100%;
             overflow: auto;
+            font-family: var(--vscode-editor-font-family);
+            font-size: 12px;
         }
         
         table {
@@ -2537,6 +2630,7 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
             background-color: var(--vscode-editor-background);
             padding: 0;
         }
+        
         
         .raw-content {
             font-family: var(--vscode-editor-font-family);
@@ -3187,7 +3281,7 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
             <!-- Raw View Container -->
             <div class="view-container" id="rawViewContainer" style="display: none;">
                 <div class="raw-view" id="rawView">
-                    <div class="raw-content" id="rawContent"></div>
+                    <div id="rawEditor" style="height: 100%; width: 100%;"></div>
                 </div>
             </div>
         </div>
@@ -3551,19 +3645,7 @@ Available variables:
             document.removeEventListener('mouseup', stopResize);
         }
         
-        // Event listeners
-        document.getElementById('searchInput').addEventListener('input', handleSearch);
-        document.getElementById('logo').addEventListener('click', () => {
-            vscode.postMessage({
-                type: 'openUrl',
-                url: 'https://github.com/gaborcselle/jsonl-gazelle'
-            });
-        });
         
-        // Context menu
-        document.addEventListener('click', hideContextMenu);
-        document.getElementById('contextMenu').addEventListener('click', handleContextMenu);
-        document.getElementById('rowContextMenu').addEventListener('click', handleRowContextMenu);
         
         // Column Manager Modal
         document.getElementById('columnManagerBtn').addEventListener('click', openColumnManager);
@@ -5335,6 +5417,22 @@ Available variables:
                 return;
             }
             
+            // Hide any open context menus when switching views
+            hideContextMenu();
+            
+            // Update data model when switching away from raw view (without saving)
+            if (currentView === 'raw' && viewType !== 'raw') {
+                // Get current content from Monaco editor and update data model without saving
+                const rawEditor = document.getElementById('rawEditor');
+                if (rawEditor && rawEditor.editor) {
+                    const currentContent = rawEditor.editor.getValue();
+                    vscode.postMessage({
+                        type: 'rawContentChanged',
+                        newContent: currentContent
+                    });
+                }
+            }
+            
             // Save current scroll position
             const tableContainer = document.getElementById('tableContainer');
             if (tableContainer) {
@@ -5423,6 +5521,11 @@ Available variables:
                         logo.classList.remove('loading');
                         loadingState.style.display = 'none';
                         searchContainer.classList.remove('controls-hidden');
+                        
+                        // Automatically open file in VS Code editor
+                        vscode.postMessage({
+                            type: 'openInEditor'
+                        });
                     }, rawDelay);
                     break;
             }
@@ -5441,11 +5544,64 @@ Available variables:
             });
         }
         
+        let rawEditor = null;
+        
         function updateRawView() {
-            renderRawChunk(true);
-            requestAnimationFrame(() => {
-                ensureRawViewportFilled();
-                restoreScrollPosition('raw');
+            const editorContainer = document.getElementById('rawEditor');
+            if (!editorContainer) return;
+            
+            // Initialize Monaco Editor
+            require.config({ paths: { 'vs': 'https://cdn.jsdelivr.net/npm/monaco-editor@0.44.0/min/vs' } });
+            require(['vs/editor/editor.main'], function () {
+                if (rawEditor) {
+                    rawEditor.dispose();
+                }
+                
+                rawEditor = monaco.editor.create(editorContainer, {
+                    value: currentData.rawContent || '',
+                    language: 'json',
+                    theme: 'vs-dark',
+                    automaticLayout: true,
+                    scrollBeyondLastLine: false,
+                    minimap: { enabled: false },
+                    wordWrap: 'on',
+                    lineNumbers: 'on',
+                    folding: true,
+                    fontSize: 12,
+                    fontFamily: 'var(--vscode-editor-font-family)'
+                });
+                
+                // Disable JSON validation for JSONL files
+                monaco.languages.json.jsonDefaults.setDiagnosticsOptions({
+                    validate: false,
+                    allowComments: true,
+                    schemas: []
+                });
+                
+                // Additionally disable validation for current model
+                const model = rawEditor.getModel();
+                if (model) {
+                    monaco.editor.setModelMarkers(model, 'json', []);
+                }
+                
+                // Handle content changes
+                rawEditor.onDidChangeModelContent(() => {
+                    clearTimeout(window.rawEditTimeout);
+                    window.rawEditTimeout = setTimeout(() => {
+                        vscode.postMessage({
+                            type: 'rawContentChanged',
+                            newContent: rawEditor.getValue()
+                        });
+                    }, 500);
+                });
+                
+                // Handle Ctrl+S
+                rawEditor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyS, () => {
+                    vscode.postMessage({
+                        type: 'rawContentSave',
+                        newContent: rawEditor.getValue()
+                    });
+                });
             });
         }
         
@@ -5495,7 +5651,18 @@ Available variables:
         
         // Add event listeners for view controls
         document.querySelectorAll('.segmented-control button').forEach(button => {
-            button.addEventListener('click', (e) => switchView(e.target.dataset.view));
+            button.addEventListener('click', (e) => switchView(e.currentTarget.dataset.view));
+        });
+        
+        // Add event listeners for context menus
+        document.getElementById('contextMenu').addEventListener('click', handleContextMenu);
+        document.getElementById('rowContextMenu').addEventListener('click', handleRowContextMenu);
+        
+        // Hide context menus when clicking outside
+        document.addEventListener('click', (e) => {
+            if (!e.target.closest('.context-menu') && !e.target.closest('.row-context-menu')) {
+                hideContextMenu();
+            }
         });
         
     </script>
