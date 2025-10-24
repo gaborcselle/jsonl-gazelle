@@ -5651,7 +5651,7 @@ Available variables:
         
         // Add event listeners for view controls
         document.querySelectorAll('.segmented-control button').forEach(button => {
-            button.addEventListener('click', (e) => switchView(e.target.dataset.view));
+            button.addEventListener('click', (e) => switchView(e.currentTarget.dataset.view));
         });
         
         // Add event listeners for context menus
