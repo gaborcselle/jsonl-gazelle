@@ -6278,6 +6278,9 @@ Available variables:
 
             // Update raw content and save changes
             this.rawContent = this.rows.map(row => JSON.stringify(row)).join('\n');
+            
+            // Update pretty content to reflect the unstringified data
+            this.prettyContent = this.convertJsonlToPretty(this.rows);
 
             // Save the changes to the file
             const fullRange = new vscode.Range(
