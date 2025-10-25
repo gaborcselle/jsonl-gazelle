@@ -5769,6 +5769,8 @@ Available variables:
                     // Show column controls for table view
                     columnManagerBtn.style.display = 'flex';
                     wrapTextControl.style.display = 'flex';
+                    // Show search container for table view
+                    searchContainer.style.display = 'flex';
                     // Hide loading state immediately for table view (already rendered)
                     logo.classList.remove('loading');
                     loadingState.style.display = 'none';
@@ -5781,6 +5783,8 @@ Available variables:
                     // Hide column controls for json view
                     columnManagerBtn.style.display = 'none';
                     wrapTextControl.style.display = 'none';
+                    // Hide search container for json view
+                    searchContainer.style.display = 'none';
                     
                     // Add event isolation to prevent bubbling
                     const jsonContainer = document.getElementById('jsonViewContainer');
@@ -5807,6 +5811,8 @@ Available variables:
                     // Hide column controls for raw view
                     columnManagerBtn.style.display = 'none';
                     wrapTextControl.style.display = 'none';
+                    // Hide search container for raw view
+                    searchContainer.style.display = 'none';
                     // Use setTimeout to allow the loading animation to show before rendering
                     // Longer delay for larger datasets to ensure smooth animation
                     const rawDelay = currentData.rawContent && currentData.rawContent.length > 100000 ? 100 : 50;
