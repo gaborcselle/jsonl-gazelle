@@ -4710,6 +4710,8 @@ Available variables:
             // Reset JSON rendering state when data updates
             if (currentView === 'json') {
                 renderJsonChunk(true);
+                // Update Monaco Editor with new pretty content
+                updatePrettyView();
                 requestAnimationFrame(() => restoreScrollPosition('json'));
             } else {
                 resetJsonRenderingState();
