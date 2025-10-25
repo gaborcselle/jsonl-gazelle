@@ -32,6 +32,7 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
     private isIndexing: boolean = false;
     private parsedLines: ParsedLine[] = [];
     private rawContent: string = '';
+    private prettyContent: string = '';
     private errorCount: number = 0;
 
     // Chunked loading properties
@@ -106,6 +107,12 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
                                 break;
                             case 'rawContentSave':
                                 await this.handleRawContentSave(message.newContent, webviewPanel, document);
+                                break;
+                            case 'prettyContentChanged':
+                                await this.handlePrettyContentChange(message.newContent, webviewPanel, document);
+                                break;
+                            case 'prettyContentSave':
+                                await this.handlePrettyContentSave(message.newContent, webviewPanel, document);
                                 break;
                             case 'forceSave':
                                 await document.save();
@@ -230,6 +237,10 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
             this.isIndexing = true;
             const text = document.getText();
             this.rawContent = text;
+            
+            // Initialize pretty content after parsing
+            this.prettyContent = '';
+            
             const lines = text.split('\n');
             
             this.totalLines = lines.length;
@@ -277,6 +288,9 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
             this.filteredRows = this.rows; // Point to same array for small files
             this.isIndexing = false;
             
+            // Initialize pretty content after loading
+            this.prettyContent = this.convertJsonlToPretty(this.rows);
+            
             if (this.currentWebviewPanel) {
                 this.updateWebview(this.currentWebviewPanel);
             }
@@ -307,6 +321,9 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
         
         this.filteredRows = this.rows; // Point to same array initially
         this.isIndexing = false;
+        
+        // Initialize pretty content after loading
+        this.prettyContent = this.convertJsonlToPretty(this.rows);
         
         if (this.currentWebviewPanel) {
             this.updateWebview(this.currentWebviewPanel);
@@ -381,6 +398,9 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
         
         this.loadingChunks = false;
         
+        // Update pretty content after all chunks are loaded
+        this.prettyContent = this.convertJsonlToPretty(this.rows);
+        
         // Final update
         if (this.currentWebviewPanel) {
             this.updateWebview(this.currentWebviewPanel);
@@ -442,7 +462,7 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
         
         // Detect column order from first row to preserve file order
         const columnOrderMap = new Map<string, number>();
-        if (this.rows.length > 0 && typeof this.rows[0] === 'object' && this.rows[0] !== null && !Array.isArray(this.rows[0])) {
+        if (this.rows.length > 0 && typeof this.rows[0] === 'object') {
             Object.keys(this.rows[0]).forEach((key, index) => {
                 columnOrderMap.set(key, index);
             });
@@ -613,6 +633,9 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
             
             // Update raw content
             this.rawContent = this.rows.map(row => JSON.stringify(row)).join('\n');
+            
+            // Update pretty content
+            this.prettyContent = this.convertJsonlToPretty(this.rows);
             
             // Update the document content
             const edit = new vscode.WorkspaceEdit();
@@ -810,6 +833,9 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
                 }));
                 
                 this.rawContent = this.rows.map(row => JSON.stringify(row)).join('\n');
+                
+                // Update pretty content
+                this.prettyContent = this.convertJsonlToPretty(this.rows);
                 
                 // Save to document
                 this.isUpdating = true;
@@ -1689,9 +1715,6 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
                 this.rows = [];
                 this.parsedLines = [];
                 
-                // Reset path counts for accurate column detection
-                this.pathCounts = {};
-                
                 // Parse lines to update rows and columns
                 for (let i = 0; i < lines.length; i++) {
                     const line = lines[i].trim();
@@ -1705,13 +1728,6 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
                                 rawLine: line,
                                 error: undefined
                             });
-                            
-                            // Count paths for column detection
-                            try {
-                                this.countPaths(parsed, '', this.pathCounts);
-                            } catch (countError) {
-                                console.warn(`Error counting paths for line ${i + 1}:`, countError);
-                            }
                         } catch (error) {
                             this.parsedLines.push({
                                 data: null,
@@ -1725,6 +1741,9 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
                 
                 this.loadedLines = this.rows.length;
                 this.filteredRows = this.rows;
+                
+                // Update pretty content to match the new JSONL
+                this.prettyContent = this.convertJsonlToPretty(this.rows);
                 
                 // Update columns based on new data
                 this.updateColumns();
@@ -1756,6 +1775,248 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
                 setTimeout(() => { this.isUpdating = false; }, 100);
             }
         }
+    }
+
+    private async handlePrettyContentChange(newContent: string, webviewPanel: vscode.WebviewPanel, document: vscode.TextDocument) {
+        console.log('Pretty content changed, calling updatePrettyContent');
+        await this.updatePrettyContent(newContent, webviewPanel, document, false);
+    }
+
+    private async handlePrettyContentSave(newContent: string, webviewPanel: vscode.WebviewPanel, document: vscode.TextDocument) {
+        console.log('Pretty content save, calling updatePrettyContent');
+        await this.updatePrettyContent(newContent, webviewPanel, document, true);
+    }
+
+    private async updatePrettyContent(newContent: string, webviewPanel: vscode.WebviewPanel, document: vscode.TextDocument, isSave: boolean) {
+        try {
+            // Update the pretty content
+            this.prettyContent = newContent;
+            
+            // Set updating flag to prevent document change handler from reloading (only for change events)
+            if (!isSave) {
+                this.isUpdating = true;
+            }
+            
+            // Convert pretty JSON back to JSONL format
+            const jsonlContent = this.convertPrettyToJsonl(newContent);
+            
+            // Don't update if conversion resulted in empty content (to avoid data loss)
+            if (!jsonlContent.trim()) {
+                console.warn('Pretty content conversion resulted in empty JSONL, skipping update');
+                return;
+            }
+            
+            // Update the document content
+            const edit = new vscode.WorkspaceEdit();
+            edit.replace(
+                document.uri,
+                new vscode.Range(0, 0, document.lineCount, 0),
+                jsonlContent
+            );
+            const success = await vscode.workspace.applyEdit(edit);
+            
+            if (success) {
+                // Save the document to update dirty state indicator (only for save events)
+                if (isSave) {
+                    await document.save();
+                }
+                
+                // Update internal data structures for both save and content changes
+                // Parse the new content to update internal data without full reload
+                const lines = jsonlContent.split('\n');
+                this.totalLines = lines.length;
+                this.loadedLines = 0;
+                this.rows = [];
+                this.parsedLines = [];
+                
+                // Parse lines to update rows and columns
+                for (let i = 0; i < lines.length; i++) {
+                    const line = lines[i].trim();
+                    if (line) {
+                        try {
+                            const parsed = JSON.parse(line);
+                            this.rows.push(parsed);
+                            this.parsedLines.push({
+                                data: parsed,
+                                lineNumber: i + 1,
+                                rawLine: line,
+                                error: undefined
+                            });
+                        } catch (error) {
+                            this.parsedLines.push({
+                                data: null,
+                                lineNumber: i + 1,
+                                rawLine: line,
+                                error: error instanceof Error ? error.message : String(error)
+                            });
+                        }
+                    }
+                }
+                
+                this.loadedLines = this.rows.length;
+                this.filteredRows = this.rows;
+                
+                // Update raw content to match the new JSONL
+                this.rawContent = jsonlContent;
+                
+                // Update columns based on new data
+                this.updateColumns();
+                
+                // Update the webview to reflect changes
+                this.updateWebview(webviewPanel);
+                
+                // Show success message only for save events
+                if (isSave) {
+                    vscode.window.showInformationMessage('File saved successfully');
+                }
+            } else {
+                const errorMsg = isSave ? 'Failed to save file' : 'Failed to save pretty content changes';
+                vscode.window.showErrorMessage(errorMsg);
+            }
+            
+            // Reset updating flag after a short delay (only for change events)
+            if (!isSave) {
+                setTimeout(() => { this.isUpdating = false; }, 100);
+            }
+        } catch (error) {
+            console.error('Error handling pretty content:', error);
+            const errorMessage = error instanceof Error ? error.message : String(error);
+            const errorMsg = isSave ? 'Failed to save file: ' + errorMessage : 'Failed to save pretty content changes: ' + errorMessage;
+            vscode.window.showErrorMessage(errorMsg);
+            
+            // Reset updating flag on error (only for change events)
+            if (!isSave) {
+                setTimeout(() => { this.isUpdating = false; }, 100);
+            }
+        }
+    }
+
+    private convertPrettyToJsonl(prettyContent: string): string {
+        console.log('Converting pretty content to JSONL:', prettyContent.substring(0, 200) + '...');
+        
+        try {
+            // First try to parse as a single JSON object
+            const parsed = JSON.parse(prettyContent);
+            
+            // If it's an array, convert each element to a separate JSONL line
+            if (Array.isArray(parsed)) {
+                const result = parsed.map(item => JSON.stringify(item)).join('\n');
+                console.log('Parsed as array, result:', result.substring(0, 200) + '...');
+                return result;
+            }
+            
+            // If it's a single object, return it as one line
+            const result = JSON.stringify(parsed);
+            console.log('Parsed as single object, result:', result);
+            return result;
+        } catch {
+            // If not valid JSON, try to parse multiple JSON objects separated by empty lines
+            try {
+                const lines = prettyContent.split('\n');
+                const jsonlLines: string[] = [];
+                let currentJsonObject = '';
+                let braceCount = 0;
+                let inString = false;
+                let escapeNext = false;
+                
+                console.log('Parsing multiple JSON objects, total lines:', lines.length);
+                
+                for (const line of lines) {
+                    const trimmed = line.trim();
+                    
+                    // Skip empty lines
+                    if (!trimmed) {
+                        if (currentJsonObject.trim()) {
+                            try {
+                                const parsed = JSON.parse(currentJsonObject.trim());
+                                jsonlLines.push(JSON.stringify(parsed));
+                                currentJsonObject = '';
+                                braceCount = 0;
+                            } catch {
+                                console.warn('Skipping invalid JSON object:', currentJsonObject.trim());
+                                currentJsonObject = '';
+                                braceCount = 0;
+                            }
+                        }
+                        continue;
+                    }
+                    
+                    // Add line to current JSON object
+                    currentJsonObject += line + '\n';
+                    
+                    // Count braces to determine when we have a complete object
+                    for (let i = 0; i < line.length; i++) {
+                        const char = line[i];
+                        
+                        if (escapeNext) {
+                            escapeNext = false;
+                            continue;
+                        }
+                        
+                        if (char === '\\') {
+                            escapeNext = true;
+                            continue;
+                        }
+                        
+                        if (char === '"' && !escapeNext) {
+                            inString = !inString;
+                            continue;
+                        }
+                        
+                        if (!inString) {
+                            if (char === '{') {
+                                braceCount++;
+                            } else if (char === '}') {
+                                braceCount--;
+                                
+                                // If we've closed all braces, we have a complete object
+                                if (braceCount === 0 && currentJsonObject.trim()) {
+                                    try {
+                                        const parsed = JSON.parse(currentJsonObject.trim());
+                                        jsonlLines.push(JSON.stringify(parsed));
+                                        currentJsonObject = '';
+                                    } catch {
+                                        console.warn('Skipping invalid JSON object:', currentJsonObject.trim());
+                                        currentJsonObject = '';
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                
+                // Handle any remaining object
+                if (currentJsonObject.trim()) {
+                    try {
+                        const parsed = JSON.parse(currentJsonObject.trim());
+                        jsonlLines.push(JSON.stringify(parsed));
+                    } catch {
+                        console.warn('Skipping invalid JSON object:', currentJsonObject.trim());
+                    }
+                }
+                
+                const result = jsonlLines.join('\n');
+                console.log('Multiple JSON objects parsing result:', result.substring(0, 200) + '...');
+                return result;
+            } catch {
+                // If all else fails, return empty string to avoid corruption
+                console.error('Failed to convert pretty content to JSONL');
+                return '';
+            }
+        }
+    }
+
+    private convertJsonlToPretty(rows: JsonRow[]): string {
+        if (rows.length === 0) {
+            return '';
+        }
+        
+        if (rows.length === 1) {
+            return JSON.stringify(rows[0], null, 2);
+        }
+        
+        // Format each row separately and join with newlines
+        return rows.map(row => JSON.stringify(row, null, 2)).join('\n');
     }
 
     private async handleDocumentChange(rowIndex: number, newData: any, webviewPanel: vscode.WebviewPanel, document: vscode.TextDocument) {
@@ -2103,6 +2364,7 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
                     searchTerm: this.searchTerm,
                     parsedLines: this.parsedLines || [],
                     rawContent: this.rawContent || '',
+                    prettyContent: this.prettyContent || '',
                     errorCount: this.errorCount,
                     loadingProgress: {
                         loadedLines: this.loadedLines,
@@ -2333,6 +2595,13 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
         }
         
         #rawViewContainer {
+            height: 100%;
+            overflow: auto;
+            font-family: var(--vscode-editor-font-family);
+            font-size: 12px;
+        }
+        
+        #jsonViewContainer {
             height: 100%;
             overflow: auto;
             font-family: var(--vscode-editor-font-family);
@@ -3275,7 +3544,7 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
             
             <!-- Pretty Print View Container -->
             <div class="view-container" id="jsonViewContainer" style="display: none;">
-                <div class="json-view" id="jsonView"></div>
+                <div id="prettyEditor" style="height: 100%; width: 100%;"></div>
             </div>
             
             <!-- Raw View Container -->
@@ -5420,16 +5689,33 @@ Available variables:
             // Hide any open context menus when switching views
             hideContextMenu();
             
-            // Update data model when switching away from raw view (without saving)
+            // Only sync data when switching away from editors if content was actually modified
+            // This prevents unnecessary data corruption during view switching
             if (currentView === 'raw' && viewType !== 'raw') {
-                // Get current content from Monaco editor and update data model without saving
                 const rawEditor = document.getElementById('rawEditor');
                 if (rawEditor && rawEditor.editor) {
                     const currentContent = rawEditor.editor.getValue();
-                    vscode.postMessage({
-                        type: 'rawContentChanged',
-                        newContent: currentContent
-                    });
+                    // Only sync if content is different from current rawContent
+                    if (currentContent !== currentData.rawContent) {
+                        vscode.postMessage({
+                            type: 'rawContentChanged',
+                            newContent: currentContent
+                        });
+                    }
+                }
+            }
+            
+            if (currentView === 'json' && viewType !== 'json') {
+                const prettyEditor = document.getElementById('prettyEditor');
+                if (prettyEditor && prettyEditor.editor) {
+                    const currentContent = prettyEditor.editor.getValue();
+                    // Only sync if content is different from current prettyContent
+                    if (currentContent !== currentData.prettyContent) {
+                        vscode.postMessage({
+                            type: 'prettyContentChanged',
+                            newContent: currentContent
+                        });
+                    }
                 }
             }
             
@@ -5500,8 +5786,8 @@ Available variables:
                     // Longer delay for larger datasets to ensure smooth animation
                     const jsonDelay = currentData.rows.length > 1000 ? 100 : 50;
                     setTimeout(() => {
-                        updateJsonView();
-                        // Hide loading state after JSON view is rendered
+                        updatePrettyView();
+                        // Hide loading state after pretty view is rendered
                         logo.classList.remove('loading');
                         loadingState.style.display = 'none';
                         searchContainer.classList.remove('controls-hidden');
@@ -5543,6 +5829,71 @@ Available variables:
                 restoreScrollPosition('json');
             });
         }
+        
+        let prettyEditor = null;
+        
+        function updatePrettyView() {
+            const editorContainer = document.getElementById('prettyEditor');
+            if (!editorContainer) return;
+            
+            // Initialize Monaco Editor
+            require.config({ paths: { 'vs': 'https://cdn.jsdelivr.net/npm/monaco-editor@0.44.0/min/vs' } });
+            require(['vs/editor/editor.main'], function () {
+                if (prettyEditor) {
+                    prettyEditor.dispose();
+                }
+                
+                // Use pre-formatted pretty content from Extension Host
+                const prettyContent = currentData.prettyContent || '';
+                
+                prettyEditor = monaco.editor.create(editorContainer, {
+                    value: prettyContent,
+                    language: 'json',
+                    theme: 'vs-dark',
+                    automaticLayout: true,
+                    scrollBeyondLastLine: false,
+                    minimap: { enabled: false },
+                    wordWrap: 'on',
+                    lineNumbers: 'on',
+                    folding: true,
+                    fontSize: 12,
+                    fontFamily: 'var(--vscode-editor-font-family)'
+                });
+                
+                // Disable JSON validation for JSONL files
+                monaco.languages.json.jsonDefaults.setDiagnosticsOptions({
+                    validate: false,
+                    allowComments: true,
+                    schemas: []
+                });
+                
+                // Additionally disable validation for current model
+                const model = prettyEditor.getModel();
+                if (model) {
+                    monaco.editor.setModelMarkers(model, 'json', []);
+                }
+                
+                // Add change listener with debounce
+                prettyEditor.onDidChangeModelContent(() => {
+                    clearTimeout(window.prettyEditTimeout);
+                    window.prettyEditTimeout = setTimeout(() => {
+                        vscode.postMessage({
+                            type: 'prettyContentChanged',
+                            newContent: prettyEditor.getValue()
+                        });
+                    }, 500);
+                });
+                
+                // Add save command (Ctrl+S)
+                prettyEditor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyS, () => {
+                    vscode.postMessage({
+                        type: 'prettyContentSave',
+                        newContent: prettyEditor.getValue()
+                    });
+                });
+            });
+        }
+        
         
         let rawEditor = null;
         
