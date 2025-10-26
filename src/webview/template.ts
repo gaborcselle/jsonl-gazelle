@@ -64,15 +64,18 @@ ${styles}
                     <button class="find-action-btn" id="replaceAllBtn" title="Replace All">Replace All</button>
                 </div>
                 <div class="find-replace-options-group">
-                    <button class="find-option-btn" id="caseSensitiveBtn" title="Match Case">
-                        <svg width="16" height="16" viewBox="0 0 16 16"><path fill="currentColor" d="M6.5 11h-1l-.8-2H2.3l-.8 2h-1L3.5 3h1l3 8zM4 4.5L2.9 7.5h2.2L4 4.5zM11 9V7.5h-.5a2 2 0 00-2 2v.5h-.5v1h.5v2h1v-2h1v-1h-1v-.5a1 1 0 011-1h.5z"/></svg>
-                    </button>
-                    <button class="find-option-btn" id="wholeWordBtn" title="Match Whole Word">
-                        <svg width="16" height="16" viewBox="0 0 16 16"><path fill="currentColor" d="M0 11h2v1H0v-1zm13 0h3v1h-3v-1zm-11 0h2v1H2v-1zm11-9h3v1h-3V2zM0 2h2v1H0V2zm4 6.5c0 1.7 1.3 3 3 3s3-1.3 3-3-1.3-3-3-3-3 1.3-3 3zM2 2h2v1H2V2z"/></svg>
-                    </button>
-                    <button class="find-option-btn" id="regexBtn" title="Use Regular Expression">
-                        <svg width="16" height="16" viewBox="0 0 16 16"><path fill="currentColor" d="M4 1v4L1 2l3-1zm8 0l3 1-3 3V1zm0 14V11l3 3-3 1zM4 15l-3-1 3-3v4zm6-2h1v2h-1v-2zm0-11h1v2h-1V2zM6 2h1v2H6V2zm0 11h1v2H6v-2zm3-5h2v1H9V8z"/></svg>
-                    </button>
+                    <label class="find-option-label">
+                        <input type="checkbox" id="caseSensitiveCheckbox" class="find-option-checkbox" />
+                        <span>Match Case</span>
+                    </label>
+                    <label class="find-option-label">
+                        <input type="checkbox" id="wholeWordCheckbox" class="find-option-checkbox" />
+                        <span>Whole Word</span>
+                    </label>
+                    <label class="find-option-label">
+                        <input type="checkbox" id="regexCheckbox" class="find-option-checkbox" />
+                        <span>Regex</span>
+                    </label>
                 </div>
                 <button class="find-close-btn" id="findReplaceCloseBtn" title="Close (Escape)">
                     <svg width="16" height="16" viewBox="0 0 16 16"><path fill="currentColor" d="M8 8.7L2.9 13.8 2.2 13.1 7.3 8 2.2 2.9 2.9 2.2 8 7.3 13.1 2.2 13.8 2.9 8.7 8 13.8 13.1 13.1 13.8z"/></svg>
