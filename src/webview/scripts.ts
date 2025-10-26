@@ -612,7 +612,7 @@ export const scripts = `
         });
 
         // Find/Replace Button
-        document.getElementById('findReplaceBtn').addEventListener('click', openFindReplaceModal);
+        document.getElementById('findReplaceBtn').addEventListener('click', openFindReplaceBar);
 
         // Column Manager Modal
         document.getElementById('columnManagerBtn').addEventListener('click', openColumnManager);
