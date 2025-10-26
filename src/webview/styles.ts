@@ -1155,4 +1155,104 @@ export const styles = `
             cursor: pointer;
         }
 
+        /* Find & Replace Extension Bar */
+        .find-replace-bar {
+            background-color: var(--vscode-editorWidget-background);
+            border-bottom: 1px solid var(--vscode-editorWidget-border);
+            padding: 4px 8px;
+            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
+        }
+
+        .find-replace-row {
+            display: flex;
+            align-items: center;
+            gap: 4px;
+            flex-wrap: wrap;
+        }
+
+        .find-replace-input-group {
+            display: flex;
+            align-items: center;
+            gap: 4px;
+        }
+
+        .find-replace-input {
+            background-color: var(--vscode-input-background);
+            color: var(--vscode-input-foreground);
+            border: 1px solid var(--vscode-input-border);
+            padding: 3px 6px;
+            font-size: 13px;
+            font-family: var(--vscode-font-family);
+            outline: none;
+            width: 150px;
+            border-radius: 2px;
+        }
+
+        .find-replace-input:focus {
+            border-color: var(--vscode-focusBorder);
+        }
+
+        .find-match-count {
+            font-size: 11px;
+            color: var(--vscode-descriptionForeground);
+            min-width: 50px;
+        }
+
+        .find-nav-btn,
+        .find-option-btn,
+        .find-close-btn {
+            background-color: transparent;
+            border: 1px solid transparent;
+            color: var(--vscode-icon-foreground);
+            padding: 3px;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            border-radius: 2px;
+            width: 22px;
+            height: 22px;
+        }
+
+        .find-nav-btn:hover,
+        .find-option-btn:hover,
+        .find-close-btn:hover {
+            background-color: var(--vscode-toolbar-hoverBackground);
+        }
+
+        .find-option-btn.active {
+            background-color: var(--vscode-button-secondaryBackground);
+            border-color: var(--vscode-button-secondaryBorder);
+        }
+
+        .find-action-btn {
+            background-color: var(--vscode-button-secondaryBackground);
+            color: var(--vscode-button-secondaryForeground);
+            border: 1px solid var(--vscode-button-secondaryBorder);
+            padding: 3px 8px;
+            font-size: 12px;
+            cursor: pointer;
+            border-radius: 2px;
+            white-space: nowrap;
+        }
+
+        .find-action-btn:hover {
+            background-color: var(--vscode-button-secondaryHoverBackground);
+        }
+
+        .find-action-btn:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+
+        .find-replace-options-group {
+            display: flex;
+            gap: 2px;
+            margin-left: auto;
+        }
+
+        .find-close-btn {
+            margin-left: 4px;
+        }
+
 `;

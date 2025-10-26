@@ -15,20 +15,13 @@ ${styles}
     </style>
 </head>
 <body>
-    <div class="header">
-        <img src="${gazelleIconUri}" class="logo" alt="JSONL Gazelle" id="logo" title="JSONL Gazelle" style="cursor: pointer;">
-        <div class="loading-state" id="loadingState" style="display: none;">
-            <div>Loading large file...</div>
-            <div class="loading-progress" id="loadingProgress"></div>
-        </div>
-        <div class="search-container" id="searchContainer">
-            <span class="search-icon"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"></circle><path d="m21 21-4.35-4.35"></path></svg></span>
-            <input type="text" class="search-input" id="searchInput" placeholder="Find...">
-        </div>
-    </div>
-    
     <div class="main-content">
         <div class="view-controls">
+            <img src="${gazelleIconUri}" class="logo" alt="JSONL Gazelle" id="logo" title="JSONL Gazelle" style="cursor: pointer;">
+            <div class="loading-state" id="loadingState" style="display: none;">
+                <div>Loading large file...</div>
+                <div class="loading-progress" id="loadingProgress"></div>
+            </div>
             <div class="segmented-control">
                 <button class="active" data-view="table"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect><line x1="9" y1="3" x2="9" y2="21"></line><line x1="15" y1="3" x2="15" y2="21"></line><line x1="3" y1="9" x2="21" y2="9"></line><line x1="3" y1="15" x2="21" y2="15"></line></svg> Table</button>
                 <button data-view="json"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="4" y1="6" x2="20" y2="6"></line><line x1="8" y1="10" x2="20" y2="10"></line><line x1="12" y1="14" x2="20" y2="14"></line><line x1="8" y1="18" x2="20" y2="18"></line></svg> Pretty Print</button>
@@ -51,7 +44,43 @@ ${styles}
                 <span>Wrap Text</span>
             </label>
         </div>
-        
+
+        <!-- Find & Replace Extension Bar -->
+        <div class="find-replace-bar" id="findReplaceBar" style="display: none;">
+            <div class="find-replace-row">
+                <div class="find-replace-input-group">
+                    <input type="text" id="findInput" class="find-replace-input" placeholder="Find" />
+                    <span class="find-match-count" id="findMatchCount"></span>
+                    <button class="find-nav-btn" id="findPrevBtn" title="Previous match (Shift+Enter)">
+                        <svg width="14" height="14" viewBox="0 0 16 16"><path fill="currentColor" d="M8 10L3 5h10z"/></svg>
+                    </button>
+                    <button class="find-nav-btn" id="findNextBtn" title="Next match (Enter)">
+                        <svg width="14" height="14" viewBox="0 0 16 16"><path fill="currentColor" d="M8 6l5 5H3z"/></svg>
+                    </button>
+                </div>
+                <div class="find-replace-input-group">
+                    <input type="text" id="replaceInput" class="find-replace-input" placeholder="Replace" />
+                    <button class="find-action-btn" id="replaceBtn" title="Replace">Replace</button>
+                    <button class="find-action-btn" id="replaceAllBtn" title="Replace All">Replace All</button>
+                </div>
+                <div class="find-replace-options-group">
+                    <button class="find-option-btn" id="caseSensitiveBtn" title="Match Case">
+                        <svg width="16" height="16" viewBox="0 0 16 16"><path fill="currentColor" d="M6.5 11h-1l-.8-2H2.3l-.8 2h-1L3.5 3h1l3 8zM4 4.5L2.9 7.5h2.2L4 4.5zM11 9V7.5h-.5a2 2 0 00-2 2v.5h-.5v1h.5v2h1v-2h1v-1h-1v-.5a1 1 0 011-1h.5z"/></svg>
+                    </button>
+                    <button class="find-option-btn" id="wholeWordBtn" title="Match Whole Word">
+                        <svg width="16" height="16" viewBox="0 0 16 16"><path fill="currentColor" d="M0 11h2v1H0v-1zm13 0h3v1h-3v-1zm-11 0h2v1H2v-1zm11-9h3v1h-3V2zM0 2h2v1H0V2zm4 6.5c0 1.7 1.3 3 3 3s3-1.3 3-3-1.3-3-3-3-3 1.3-3 3zM2 2h2v1H2V2z"/></svg>
+                    </button>
+                    <button class="find-option-btn" id="regexBtn" title="Use Regular Expression">
+                        <svg width="16" height="16" viewBox="0 0 16 16"><path fill="currentColor" d="M4 1v4L1 2l3-1zm8 0l3 1-3 3V1zm0 14V11l3 3-3 1zM4 15l-3-1 3-3v4zm6-2h1v2h-1v-2zm0-11h1v2h-1V2zM6 2h1v2H6V2zm0 11h1v2H6v-2zm3-5h2v1H9V8z"/></svg>
+                    </button>
+                </div>
+                <button class="find-close-btn" id="findReplaceCloseBtn" title="Close (Escape)">
+                    <svg width="16" height="16" viewBox="0 0 16 16"><path fill="currentColor" d="M8 8.7L2.9 13.8 2.2 13.1 7.3 8 2.2 2.9 2.9 2.2 8 7.3 13.1 2.2 13.8 2.9 8.7 8 13.8 13.1 13.1 13.8z"/></svg>
+                </button>
+            </div>
+            <div class="regex-error" id="regexError" style="display: none;"></div>
+        </div>
+
         <div class="table-container" id="tableContainer">
             <div class="indexing" id="indexingDiv">
                 <img src="${gazelleIconUri}" class="indexing-icon" alt="Indexing...">
@@ -294,62 +323,6 @@ Available variables:
                 <div class="modal-actions" style="margin-top: 16px;">
                     <button class="modal-button modal-button-primary" id="aiRowsGenerateBtn">Generate Rows</button>
                     <button class="modal-button modal-button-secondary" id="aiRowsCancelBtn">Cancel</button>
-                </div>
-            </div>
-        </div>
-    </div>
-
-    <!-- Find/Replace Modal -->
-    <div class="column-manager-modal" id="findReplaceModal" style="display: none;">
-        <div class="modal-content find-replace-modal">
-            <div class="modal-header">
-                <h3>Find and Replace</h3>
-                <button class="modal-close" id="findReplaceCloseBtn">&times;</button>
-            </div>
-            <div class="modal-body">
-                <div class="find-replace-group">
-                    <label for="findInput">Find:</label>
-                    <input type="text" id="findInput" class="find-replace-input" placeholder="Enter text or regex pattern..." />
-                    <div class="find-replace-info" id="findMatchCount">0 matches</div>
-                </div>
-
-                <div class="find-replace-group">
-                    <label for="replaceInput">Replace with:</label>
-                    <input type="text" id="replaceInput" class="find-replace-input" placeholder="Enter replacement text..." />
-                </div>
-
-                <div class="find-replace-options">
-                    <label class="checkbox-label">
-                        <input type="checkbox" id="regexCheckbox" />
-                        <span>Use Regular Expression</span>
-                    </label>
-                    <label class="checkbox-label">
-                        <input type="checkbox" id="caseSensitiveCheckbox" />
-                        <span>Case Sensitive</span>
-                    </label>
-                    <label class="checkbox-label">
-                        <input type="checkbox" id="wholeWordCheckbox" />
-                        <span>Whole Word</span>
-                    </label>
-                </div>
-
-                <div class="regex-error" id="regexError" style="display: none;"></div>
-
-                <div class="modal-actions find-replace-actions">
-                    <button class="modal-button modal-button-secondary" id="findPrevBtn">
-                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                            <polyline points="15 18 9 12 15 6"></polyline>
-                        </svg>
-                        Previous
-                    </button>
-                    <button class="modal-button modal-button-secondary" id="findNextBtn">
-                        Next
-                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                            <polyline points="9 18 15 12 9 6"></polyline>
-                        </svg>
-                    </button>
-                    <button class="modal-button modal-button-secondary" id="replaceBtn">Replace</button>
-                    <button class="modal-button modal-button-primary" id="replaceAllBtn">Replace All</button>
                 </div>
             </div>
         </div>
