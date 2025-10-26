@@ -155,24 +155,30 @@ export const scripts = `
         };
 
         // Find/Replace Modal Functions
-        function openFindReplaceModal() {
-            const modal = document.getElementById('findReplaceModal');
-            modal.style.display = 'flex';
+        function openFindReplaceBar() {
+            const bar = document.getElementById('findReplaceBar');
+            bar.style.display = 'block';
             document.getElementById('findInput').focus();
             performFind(); // Initial find with current input
         }
 
-        function closeFindReplaceModal() {
-            const modal = document.getElementById('findReplaceModal');
-            modal.style.display = 'none';
+        function closeFindReplaceBar() {
+            const bar = document.getElementById('findReplaceBar');
+            bar.style.display = 'none';
             clearHighlights();
+        }
+
+        function toggleFindOption(buttonId) {
+            const button = document.getElementById(buttonId);
+            button.classList.toggle('active');
+            performFind();
         }
 
         function performFind() {
             const findText = document.getElementById('findInput').value;
-            const useRegex = document.getElementById('regexCheckbox').checked;
-            const caseSensitive = document.getElementById('caseSensitiveCheckbox').checked;
-            const wholeWord = document.getElementById('wholeWordCheckbox').checked;
+            const useRegex = document.getElementById('regexBtn').classList.contains('active');
+            const caseSensitive = document.getElementById('caseSensitiveBtn').classList.contains('active');
+            const wholeWord = document.getElementById('wholeWordBtn').classList.contains('active');
 
             // Clear previous highlights
             clearHighlights();
@@ -539,17 +545,11 @@ export const scripts = `
         }
 
         // Find/Replace Event Listeners
-        document.getElementById('findReplaceCloseBtn').addEventListener('click', closeFindReplaceModal);
-        document.getElementById('findReplaceModal').addEventListener('click', (e) => {
-            if (e.target.id === 'findReplaceModal') {
-                closeFindReplaceModal();
-            }
-        });
-
         document.getElementById('findInput').addEventListener('input', performFind);
-        document.getElementById('regexCheckbox').addEventListener('change', performFind);
-        document.getElementById('caseSensitiveCheckbox').addEventListener('change', performFind);
-        document.getElementById('wholeWordCheckbox').addEventListener('change', performFind);
+        document.getElementById('regexBtn').addEventListener('click', () => toggleFindOption('regexBtn'));
+        document.getElementById('caseSensitiveBtn').addEventListener('click', () => toggleFindOption('caseSensitiveBtn'));
+        document.getElementById('wholeWordBtn').addEventListener('click', () => toggleFindOption('wholeWordBtn'));
+        document.getElementById('findReplaceCloseBtn').addEventListener('click', closeFindReplaceBar);
 
         document.getElementById('findNextBtn').addEventListener('click', findNext);
         document.getElementById('findPrevBtn').addEventListener('click', findPrevious);
@@ -561,19 +561,19 @@ export const scripts = `
             // Cmd/Ctrl + F: Open Find
             if ((e.metaKey || e.ctrlKey) && e.key === 'f') {
                 e.preventDefault();
-                openFindReplaceModal();
+                openFindReplaceBar();
             }
 
             // Cmd/Ctrl + H: Open Find/Replace
             if ((e.metaKey || e.ctrlKey) && e.key === 'h') {
                 e.preventDefault();
-                openFindReplaceModal();
+                openFindReplaceBar();
                 document.getElementById('replaceInput').focus();
             }
 
-            // Escape: Close modal
-            if (e.key === 'Escape' && document.getElementById('findReplaceModal').style.display === 'flex') {
-                closeFindReplaceModal();
+            // Escape: Close bar
+            if (e.key === 'Escape' && document.getElementById('findReplaceBar').style.display === 'block') {
+                closeFindReplaceBar();
             }
 
             // Enter in find input: Find next
@@ -612,7 +612,7 @@ export const scripts = `
         });
 
         // Find/Replace Button
-        document.getElementById('findReplaceBtn').addEventListener('click', openFindReplaceModal);
+        document.getElementById('findReplaceBtn').addEventListener('click', openFindReplaceBar);
 
         // Column Manager Modal
         document.getElementById('columnManagerBtn').addEventListener('click', openColumnManager);
