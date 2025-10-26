@@ -357,6 +357,7 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
     private async loadRemainingChunks(lines: string[]) {
         this.loadingChunks = true;
         
+        // Process all chunks without async/await in loop for maximum speed
         for (let startIndex = this.loadedLines; startIndex < this.totalLines; startIndex += this.CHUNK_SIZE) {
             const endIndex = Math.min(startIndex + this.CHUNK_SIZE, this.totalLines);
             const chunkLines = lines.slice(startIndex, endIndex);
@@ -364,44 +365,32 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
             this.processChunk(chunkLines, startIndex);
             this.loadedLines = endIndex;
             
-            // Memory optimization: keep only recent rows for very large files
-            if (this.memoryOptimized && this.rows.length > this.MAX_MEMORY_ROWS) {
-                const keepRows = Math.floor(this.MAX_MEMORY_ROWS * 0.8); // Keep 80% of max
-                const oldLength = this.rows.length;
-                this.rows = this.rows.slice(-keepRows);
-                this.parsedLines = this.parsedLines.slice(-keepRows);
-                
-                // Recalculate path counts for remaining rows
-                this.pathCounts = {};
-                this.rows.forEach(row => {
-                    if (row && typeof row === 'object') {
-                        this.countPaths(row, '', this.pathCounts);
-                    }
-                });
-                
-                console.log(`Memory optimization: Kept ${this.rows.length} most recent rows (removed ${oldLength - this.rows.length} rows)`);
-            }
-            
             // Update columns progressively - only add new columns, don't re-expand
             this.addNewColumnsOnly();
             
-            // Only copy array if there's an active search, otherwise point to same array
-            if (this.searchTerm) {
-                this.filteredRows = [...this.rows];
-            } else {
-                this.filteredRows = this.rows; // Much faster - no copying
-            }
-            
-            // Update UI less frequently (every 5 chunks = every 500 lines)
-            if ((startIndex / this.CHUNK_SIZE) % 5 === 0 && this.currentWebviewPanel) {
+            // Update UI only every 10 chunks (much less frequent)
+            if ((startIndex / this.CHUNK_SIZE) % 10 === 0 && this.currentWebviewPanel) {
+                this.filteredRows = this.searchTerm ? [...this.rows] : this.rows;
                 this.updateWebview(this.currentWebviewPanel);
             }
             
-            // Yield control to prevent blocking the UI
-            await new Promise(resolve => setTimeout(resolve, 0));
+            // Yield only every 1000 lines to maintain responsiveness
+            if (startIndex % (this.CHUNK_SIZE * 10) === 0) {
+                await new Promise(resolve => setTimeout(resolve, 10));
+            }
         }
         
         this.loadingChunks = false;
+        
+        // Update columns one final time
+        this.updateColumns();
+        
+        // Only copy array if there's an active search, otherwise point to same array
+        if (this.searchTerm) {
+            this.filteredRows = [...this.rows];
+        } else {
+            this.filteredRows = this.rows;
+        }
         
         // Update pretty content after all chunks are loaded
         const prettyResult = this.convertJsonlToPrettyWithLineNumbers(this.rows);
