@@ -1333,6 +1333,155 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
         return data.choices[0].message.content.trim();
     }
 
+    private convertJsonlToPrettyWithLineNumbers(rows: JsonRow[]): { content: string, lineMapping: number[] } {
+        if (rows.length === 0) {
+            return { content: '', lineMapping: [] };
+        }
+
+        const lineMapping: number[] = [];
+        let content = '';
+
+        rows.forEach((row, index) => {
+            const prettyJson = JSON.stringify(row, null, 2);
+            const lines = prettyJson.split('\n');
+
+            // Only show line number for the first line of each JSON object
+            const originalLineNumber = index + 1;
+            lines.forEach((line, lineIndex) => {
+                if (lineIndex === 0) {
+                    // First line of JSON object - show original line number
+                    lineMapping.push(originalLineNumber);
+                } else {
+                    // Other lines - show empty string (will be handled by Monaco Editor)
+                    lineMapping.push(0);
+                }
+            });
+
+            if (content) {
+                content += '\n' + prettyJson;
+            } else {
+                content = prettyJson;
+            }
+        });
+
+        return { content, lineMapping };
+    }
+
+    private convertPrettyToJsonl(prettyContent: string): string {
+        console.log('Converting pretty content to JSONL:', prettyContent.substring(0, 200) + '...');
+
+        try {
+            // First try to parse as a single JSON object
+            const parsed = JSON.parse(prettyContent);
+
+            // If it's an array, convert each element to a separate JSONL line
+            if (Array.isArray(parsed)) {
+                const result = parsed.map(item => JSON.stringify(item)).join('\n');
+                console.log('Parsed as array, result:', result.substring(0, 200) + '...');
+                return result;
+            }
+
+            // If it's a single object, return it as one line
+            const result = JSON.stringify(parsed);
+            console.log('Parsed as single object, result:', result);
+            return result;
+        } catch {
+            // If not valid JSON, try to parse multiple JSON objects separated by empty lines
+            try {
+                const lines = prettyContent.split('\n');
+                const jsonlLines: string[] = [];
+                let currentJsonObject = '';
+                let braceCount = 0;
+                let inString = false;
+                let escapeNext = false;
+
+                console.log('Parsing multiple JSON objects, total lines:', lines.length);
+
+                for (const line of lines) {
+                    const trimmed = line.trim();
+
+                    // Skip empty lines
+                    if (!trimmed) {
+                        if (currentJsonObject.trim()) {
+                            try {
+                                const parsed = JSON.parse(currentJsonObject.trim());
+                                jsonlLines.push(JSON.stringify(parsed));
+                                currentJsonObject = '';
+                                braceCount = 0;
+                            } catch {
+                                console.warn('Skipping invalid JSON object:', currentJsonObject.trim());
+                                currentJsonObject = '';
+                                braceCount = 0;
+                            }
+                        }
+                        continue;
+                    }
+
+                    // Add line to current JSON object
+                    currentJsonObject += line + '\n';
+
+                    // Count braces to determine when we have a complete object
+                    for (let i = 0; i < line.length; i++) {
+                        const char = line[i];
+
+                        if (escapeNext) {
+                            escapeNext = false;
+                            continue;
+                        }
+
+                        if (char === '\\') {
+                            escapeNext = true;
+                            continue;
+                        }
+
+                        if (char === '"' && !escapeNext) {
+                            inString = !inString;
+                            continue;
+                        }
+
+                        if (!inString) {
+                            if (char === '{') {
+                                braceCount++;
+                            } else if (char === '}') {
+                                braceCount--;
+
+                                // If we've closed all braces, we have a complete object
+                                if (braceCount === 0 && currentJsonObject.trim()) {
+                                    try {
+                                        const parsed = JSON.parse(currentJsonObject.trim());
+                                        jsonlLines.push(JSON.stringify(parsed));
+                                        currentJsonObject = '';
+                                    } catch {
+                                        console.warn('Skipping invalid JSON object:', currentJsonObject.trim());
+                                        currentJsonObject = '';
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // Handle any remaining object
+                if (currentJsonObject.trim()) {
+                    try {
+                        const parsed = JSON.parse(currentJsonObject.trim());
+                        jsonlLines.push(JSON.stringify(parsed));
+                    } catch {
+                        console.warn('Skipping invalid JSON object:', currentJsonObject.trim());
+                    }
+                }
+
+                const result = jsonlLines.join('\n');
+                console.log('Multiple JSON objects parsing result:', result.substring(0, 200) + '...');
+                return result;
+            } catch {
+                // If all else fails, return empty string to avoid corruption
+                console.error('Failed to convert pretty content to JSONL');
+                return '';
+            }
+        }
+    }
+
     private async handleGetSettings(webviewPanel: vscode.WebviewPanel) {
         try {
             const aiProvider = this.context.globalState.get<string>('aiProvider', 'copilot');
