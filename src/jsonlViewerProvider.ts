@@ -1264,7 +1264,13 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
     }
 
     private async callLanguageModel(prompt: string): Promise<string> {
-        return await this.callOpenAI(prompt);
+        const aiProvider = this.context.globalState.get<string>('aiProvider', 'copilot');
+
+        if (aiProvider === 'copilot') {
+            return await this.callVSCodeLM(prompt);
+        } else {
+            return await this.callOpenAI(prompt);
+        }
     }
 
     private async callVSCodeLM(prompt: string): Promise<string> {
@@ -1326,12 +1332,14 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
 
     private async handleGetSettings(webviewPanel: vscode.WebviewPanel) {
         try {
+            const aiProvider = this.context.globalState.get<string>('aiProvider', 'copilot');
             const openaiKey = await this.context.secrets.get('openaiApiKey') || '';
-            const openaiModel = this.context.globalState.get<string>('openaiModel', 'gpt-4.1-mini');
+            const openaiModel = this.context.globalState.get<string>('openaiModel', 'gpt-4o-mini');
 
             webviewPanel.webview.postMessage({
                 type: 'settingsLoaded',
                 settings: {
+                    aiProvider,
                     openaiKey,
                     openaiModel
                 }
@@ -1343,6 +1351,18 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
 
     private async handleCheckAPIKey(webviewPanel: vscode.WebviewPanel) {
         try {
+            const aiProvider = this.context.globalState.get<string>('aiProvider', 'copilot');
+
+            // If using Copilot, no API key is needed
+            if (aiProvider === 'copilot') {
+                webviewPanel.webview.postMessage({
+                    type: 'apiKeyCheckResult',
+                    hasAPIKey: true
+                });
+                return;
+            }
+
+            // For OpenAI, check if API key exists
             const openaiKey = await this.context.secrets.get('openaiApiKey');
             const hasAPIKey = !!openaiKey;
 
@@ -1359,8 +1379,9 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
         }
     }
 
-    private async handleSaveSettings(settings: { openaiKey: string; openaiModel: string }) {
+    private async handleSaveSettings(settings: { aiProvider: string; openaiKey: string; openaiModel: string }) {
         try {
+            await this.context.globalState.update('aiProvider', settings.aiProvider);
             await this.context.globalState.update('openaiModel', settings.openaiModel);
 
             if (settings.openaiKey) {
