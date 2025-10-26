@@ -854,6 +854,20 @@ export const scripts = `
             modal.classList.add('show');
         }
 
+        function updateProviderSettings() {
+            const provider = document.getElementById('aiProvider').value;
+            const copilotSettings = document.getElementById('copilotSettings');
+            const openaiSettings = document.getElementById('openaiSettings');
+
+            if (provider === 'copilot') {
+                copilotSettings.style.display = 'block';
+                openaiSettings.style.display = 'none';
+            } else {
+                copilotSettings.style.display = 'none';
+                openaiSettings.style.display = 'block';
+            }
+        }
+
         function checkAPIKeyAndOpenModal(modalFunction, ...args) {
             vscode.postMessage({ type: 'checkAPIKey' });
             
@@ -896,12 +910,14 @@ export const scripts = `
         }
 
         function saveSettings() {
+            const aiProvider = document.getElementById('aiProvider').value;
             const openaiKey = document.getElementById('openaiKey').value;
             const openaiModel = document.getElementById('openaiModel').value;
 
             vscode.postMessage({
                 type: 'saveSettings',
                 settings: {
+                    aiProvider: aiProvider,
                     openaiKey: openaiKey,
                     openaiModel: openaiModel
                 }
@@ -915,6 +931,7 @@ export const scripts = `
         document.getElementById('settingsCloseBtn').addEventListener('click', closeSettingsModal);
         document.getElementById('settingsCancelBtn').addEventListener('click', closeSettingsModal);
         document.getElementById('settingsSaveBtn').addEventListener('click', saveSettings);
+        document.getElementById('aiProvider').addEventListener('change', updateProviderSettings);
         document.getElementById('settingsModal').addEventListener('click', (e) => {
             if (e.target.id === 'settingsModal') {
                 closeSettingsModal();
@@ -2247,11 +2264,16 @@ export const scripts = `
                     }
                     break;
                 case 'settingsLoaded':
+                    const aiProvider = document.getElementById('aiProvider');
                     const openaiKey = document.getElementById('openaiKey');
                     const openaiModel = document.getElementById('openaiModel');
 
+                    aiProvider.value = message.settings.aiProvider || 'copilot';
                     openaiKey.value = message.settings.openaiKey || '';
-                    openaiModel.value = message.settings.openaiModel || 'gpt-4.1-mini';
+                    openaiModel.value = message.settings.openaiModel || 'gpt-4o-mini';
+
+                    // Update visibility based on provider
+                    updateProviderSettings();
                     break;
             }
         });

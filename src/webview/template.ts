@@ -270,23 +270,34 @@ Available variables:
                 <button class="modal-close" id="settingsCloseBtn">&times;</button>
             </div>
             <div class="modal-body">
-                <div id="openaiSettings">
+                <label for="aiProvider" style="display: block; margin-bottom: 8px; font-weight: 500;">AI Provider:</label>
+                <select id="aiProvider" class="settings-select" style="width: 100%; padding: 8px 12px; font-size: 13px; background-color: var(--vscode-input-background); color: var(--vscode-input-foreground); border: 1px solid var(--vscode-input-border); border-radius: 4px; outline: none; margin-bottom: 16px; box-sizing: border-box;">
+                    <option value="copilot">GitHub Copilot (VS Code)</option>
+                    <option value="openai">OpenAI API</option>
+                </select>
+
+                <div id="copilotSettings" style="display: none;">
+                    <div class="ai-info-box" style="margin-bottom: 16px; padding: 12px; background: rgba(100, 150, 255, 0.1); border-radius: 6px; font-size: 12px; color: var(--vscode-descriptionForeground);">
+                        <strong>GitHub Copilot:</strong> Uses your VS Code GitHub Copilot subscription. Make sure you have GitHub Copilot enabled in VS Code.
+                    </div>
+                </div>
+
+                <div id="openaiSettings" style="display: none;">
                     <label for="openaiKey" style="display: block; margin-bottom: 8px; font-weight: 500;">OpenAI API Key:</label>
                     <input type="text" id="openaiKey" class="column-name-input" placeholder="sk-..." />
 
-                    <label for="openaiModel" style="display: block; margin-bottom: 8px; font-weight: 500;">Model:</label>
+                    <label for="openaiModel" style="display: block; margin-top: 16px; margin-bottom: 8px; font-weight: 500;">Model:</label>
                     <select id="openaiModel" class="settings-select" style="width: 100%; padding: 8px 12px; font-size: 13px; background-color: var(--vscode-input-background); color: var(--vscode-input-foreground); border: 1px solid var(--vscode-input-border); border-radius: 4px; outline: none; margin-bottom: 16px; box-sizing: border-box;">
-                        <option value="gpt-4.1-nano">gpt-4.1-nano</option>
-                        <option value="gpt-4.1-mini">gpt-4.1-mini</option>
-                        <option value="gpt-4.1">gpt-4.1</option>
-                        <option value="gpt-5-nano">gpt-5-nano</option>
-                        <option value="gpt-5-mini">gpt-5-mini</option>
-                        <option value="gpt-5">gpt-5</option>
+                        <option value="gpt-4o-mini">gpt-4o-mini</option>
+                        <option value="gpt-4o">gpt-4o</option>
+                        <option value="gpt-4-turbo">gpt-4-turbo</option>
+                        <option value="gpt-4">gpt-4</option>
+                        <option value="gpt-3.5-turbo">gpt-3.5-turbo</option>
                     </select>
-                </div>
 
-                <div class="ai-info-box" style="margin-top: 12px; padding: 12px; background: rgba(255, 255, 255, 0.05); border-radius: 6px; font-size: 12px; color: #888;">
-                    <strong>Note:</strong> Your API key is stored securely in VS Code's secret storage. It will never be shared or transmitted outside of API requests to OpenAI.
+                    <div class="ai-info-box" style="margin-top: 12px; padding: 12px; background: rgba(255, 255, 255, 0.05); border-radius: 6px; font-size: 12px; color: #888;">
+                        <strong>Note:</strong> Your API key is stored securely in VS Code's secret storage. It will never be shared or transmitted outside of API requests to OpenAI.
+                    </div>
                 </div>
 
                 <div class="modal-actions" style="margin-top: 16px;">
