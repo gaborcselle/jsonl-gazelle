@@ -1171,54 +1171,89 @@ export const scripts = `
 
             switch (action) {
                 case 'copyRow':
-                    vscode.postMessage({
-                        type: 'copyRow',
-                        rowIndex: contextMenuRow
-                    });
+                    {
+                        const actualRowIndex = currentData.rowIndices && currentData.rowIndices[contextMenuRow] !== undefined
+                            ? currentData.rowIndices[contextMenuRow]
+                            : contextMenuRow;
+                        vscode.postMessage({
+                            type: 'copyRow',
+                            rowIndex: actualRowIndex
+                        });
+                    }
                     break;
                 case 'insertAbove':
-                    vscode.postMessage({
-                        type: 'insertRow',
-                        rowIndex: contextMenuRow,
-                        position: 'above'
-                    });
+                    {
+                        const actualRowIndex = currentData.rowIndices && currentData.rowIndices[contextMenuRow] !== undefined
+                            ? currentData.rowIndices[contextMenuRow]
+                            : contextMenuRow;
+                        vscode.postMessage({
+                            type: 'insertRow',
+                            rowIndex: actualRowIndex,
+                            position: 'above'
+                        });
+                    }
                     break;
                 case 'insertBelow':
-                    vscode.postMessage({
-                        type: 'insertRow',
-                        rowIndex: contextMenuRow,
-                        position: 'below'
-                    });
+                    {
+                        const actualRowIndex = currentData.rowIndices && currentData.rowIndices[contextMenuRow] !== undefined
+                            ? currentData.rowIndices[contextMenuRow]
+                            : contextMenuRow;
+                        vscode.postMessage({
+                            type: 'insertRow',
+                            rowIndex: actualRowIndex,
+                            position: 'below'
+                        });
+                    }
                     break;
                 case 'duplicateRow':
-                    vscode.postMessage({
-                        type: 'duplicateRow',
-                        rowIndex: contextMenuRow
-                    });
+                    {
+                        const actualRowIndex = currentData.rowIndices && currentData.rowIndices[contextMenuRow] !== undefined
+                            ? currentData.rowIndices[contextMenuRow]
+                            : contextMenuRow;
+                        vscode.postMessage({
+                            type: 'duplicateRow',
+                            rowIndex: actualRowIndex
+                        });
+                    }
                     break;
                 case 'insertAIRows':
                     checkAPIKeyAndOpenModal(openAIRowsModal, contextMenuRow);
                     break;
                 case 'pasteAbove':
-                    vscode.postMessage({
-                        type: 'pasteRow',
-                        rowIndex: contextMenuRow,
-                        position: 'above'
-                    });
+                    {
+                        const actualRowIndex = currentData.rowIndices && currentData.rowIndices[contextMenuRow] !== undefined
+                            ? currentData.rowIndices[contextMenuRow]
+                            : contextMenuRow;
+                        vscode.postMessage({
+                            type: 'pasteRow',
+                            rowIndex: actualRowIndex,
+                            position: 'above'
+                        });
+                    }
                     break;
                 case 'pasteBelow':
-                    vscode.postMessage({
-                        type: 'pasteRow',
-                        rowIndex: contextMenuRow,
-                        position: 'below'
-                    });
+                    {
+                        const actualRowIndex = currentData.rowIndices && currentData.rowIndices[contextMenuRow] !== undefined
+                            ? currentData.rowIndices[contextMenuRow]
+                            : contextMenuRow;
+                        vscode.postMessage({
+                            type: 'pasteRow',
+                            rowIndex: actualRowIndex,
+                            position: 'below'
+                        });
+                    }
                     break;
                 case 'deleteRow':
-                    // Send delete request directly - backend will handle confirmation if needed
-                    vscode.postMessage({
-                        type: 'deleteRow',
-                        rowIndex: contextMenuRow
-                    });
+                    {
+                        const actualRowIndex = currentData.rowIndices && currentData.rowIndices[contextMenuRow] !== undefined
+                            ? currentData.rowIndices[contextMenuRow]
+                            : contextMenuRow;
+                        // Send delete request directly - backend will handle confirmation if needed
+                        vscode.postMessage({
+                            type: 'deleteRow',
+                            rowIndex: actualRowIndex
+                        });
+                    }
                     break;
             }
 
