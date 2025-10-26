@@ -858,7 +858,8 @@ export const scripts = `
         }
 
         function updateProviderSettings() {
-            const provider = document.getElementById('aiProvider').value;
+            const providerSelect = document.getElementById('aiProvider');
+            const provider = providerSelect.value || 'copilot'; // Default to copilot if empty
             const copilotSettings = document.getElementById('copilotSettings');
             const openaiSettings = document.getElementById('openaiSettings');
 
@@ -2271,7 +2272,17 @@ export const scripts = `
                     const openaiKey = document.getElementById('openaiKey');
                     const openaiModel = document.getElementById('openaiModel');
 
-                    aiProvider.value = message.settings.aiProvider || 'copilot';
+                    // Set provider value with fallback to copilot
+                    const providerValue = message.settings.aiProvider || 'copilot';
+                    aiProvider.value = providerValue;
+
+                    // If value didn't set (browser issue), try setting selected attribute
+                    if (aiProvider.value !== providerValue) {
+                        Array.from(aiProvider.options).forEach(opt => {
+                            opt.selected = opt.value === providerValue;
+                        });
+                    }
+
                     openaiKey.value = message.settings.openaiKey || '';
                     openaiModel.value = message.settings.openaiModel || 'gpt-4o-mini';
 
