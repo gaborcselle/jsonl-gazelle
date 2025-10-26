@@ -168,17 +168,11 @@ export const scripts = `
             clearHighlights();
         }
 
-        function toggleFindOption(buttonId) {
-            const button = document.getElementById(buttonId);
-            button.classList.toggle('active');
-            performFind();
-        }
-
         function performFind() {
             const findText = document.getElementById('findInput').value;
-            const useRegex = document.getElementById('regexBtn').classList.contains('active');
-            const caseSensitive = document.getElementById('caseSensitiveBtn').classList.contains('active');
-            const wholeWord = document.getElementById('wholeWordBtn').classList.contains('active');
+            const useRegex = document.getElementById('regexCheckbox').checked;
+            const caseSensitive = document.getElementById('caseSensitiveCheckbox').checked;
+            const wholeWord = document.getElementById('wholeWordCheckbox').checked;
 
             // Clear previous highlights
             clearHighlights();
@@ -546,9 +540,9 @@ export const scripts = `
 
         // Find/Replace Event Listeners
         document.getElementById('findInput').addEventListener('input', performFind);
-        document.getElementById('regexBtn').addEventListener('click', () => toggleFindOption('regexBtn'));
-        document.getElementById('caseSensitiveBtn').addEventListener('click', () => toggleFindOption('caseSensitiveBtn'));
-        document.getElementById('wholeWordBtn').addEventListener('click', () => toggleFindOption('wholeWordBtn'));
+        document.getElementById('regexCheckbox').addEventListener('change', performFind);
+        document.getElementById('caseSensitiveCheckbox').addEventListener('change', performFind);
+        document.getElementById('wholeWordCheckbox').addEventListener('change', performFind);
         document.getElementById('findReplaceCloseBtn').addEventListener('click', closeFindReplaceBar);
 
         document.getElementById('findNextBtn').addEventListener('click', findNext);

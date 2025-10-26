@@ -1199,7 +1199,6 @@ export const styles = `
         }
 
         .find-nav-btn,
-        .find-option-btn,
         .find-close-btn {
             background-color: transparent;
             border: 1px solid transparent;
@@ -1215,14 +1214,29 @@ export const styles = `
         }
 
         .find-nav-btn:hover,
-        .find-option-btn:hover,
         .find-close-btn:hover {
             background-color: var(--vscode-toolbar-hoverBackground);
         }
 
-        .find-option-btn.active {
-            background-color: var(--vscode-button-secondaryBackground);
-            border-color: var(--vscode-button-secondaryBorder);
+        .find-option-label {
+            display: flex;
+            align-items: center;
+            gap: 4px;
+            font-size: 12px;
+            color: var(--vscode-foreground);
+            cursor: pointer;
+            padding: 2px 6px;
+            border-radius: 2px;
+            white-space: nowrap;
+        }
+
+        .find-option-label:hover {
+            background-color: var(--vscode-toolbar-hoverBackground);
+        }
+
+        .find-option-checkbox {
+            cursor: pointer;
+            margin: 0;
         }
 
         .find-action-btn {
@@ -1247,8 +1261,9 @@ export const styles = `
 
         .find-replace-options-group {
             display: flex;
-            gap: 2px;
+            gap: 8px;
             margin-left: auto;
+            align-items: center;
         }
 
         .find-close-btn {
