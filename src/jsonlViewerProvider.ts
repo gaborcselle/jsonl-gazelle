@@ -33,6 +33,7 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
     private parsedLines: ParsedLine[] = [];
     private rawContent: string = '';
     private prettyContent: string = '';
+    private prettyLineMapping: number[] = [];
     private errorCount: number = 0;
 
     // Chunked loading properties
@@ -289,7 +290,9 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
             this.isIndexing = false;
             
             // Initialize pretty content after loading
-            this.prettyContent = this.convertJsonlToPretty(this.rows);
+            const prettyResult = this.convertJsonlToPrettyWithLineNumbers(this.rows);
+            this.prettyContent = prettyResult.content;
+            this.prettyLineMapping = prettyResult.lineMapping;
             
             if (this.currentWebviewPanel) {
                 this.updateWebview(this.currentWebviewPanel);
@@ -323,7 +326,9 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
         this.isIndexing = false;
         
         // Initialize pretty content after loading
-        this.prettyContent = this.convertJsonlToPretty(this.rows);
+        const prettyResult = this.convertJsonlToPrettyWithLineNumbers(this.rows);
+        this.prettyContent = prettyResult.content;
+        this.prettyLineMapping = prettyResult.lineMapping;
         
         if (this.currentWebviewPanel) {
             this.updateWebview(this.currentWebviewPanel);
@@ -399,7 +404,9 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
         this.loadingChunks = false;
         
         // Update pretty content after all chunks are loaded
-        this.prettyContent = this.convertJsonlToPretty(this.rows);
+        const prettyResult = this.convertJsonlToPrettyWithLineNumbers(this.rows);
+        this.prettyContent = prettyResult.content;
+        this.prettyLineMapping = prettyResult.lineMapping;
         
         // Final update
         if (this.currentWebviewPanel) {
@@ -635,7 +642,9 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
             this.rawContent = this.rows.map(row => JSON.stringify(row)).join('\n');
             
             // Update pretty content
-            this.prettyContent = this.convertJsonlToPretty(this.rows);
+            const prettyResult = this.convertJsonlToPrettyWithLineNumbers(this.rows);
+            this.prettyContent = prettyResult.content;
+            this.prettyLineMapping = prettyResult.lineMapping;
             
             // Update the document content
             const edit = new vscode.WorkspaceEdit();
@@ -835,7 +844,9 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
                 this.rawContent = this.rows.map(row => JSON.stringify(row)).join('\n');
                 
                 // Update pretty content
-                this.prettyContent = this.convertJsonlToPretty(this.rows);
+                const prettyResult = this.convertJsonlToPrettyWithLineNumbers(this.rows);
+                this.prettyContent = prettyResult.content;
+                this.prettyLineMapping = prettyResult.lineMapping;
                 
                 // Save to document
                 this.isUpdating = true;
@@ -1752,7 +1763,9 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
                 this.filteredRows = this.rows;
                 
                 // Update pretty content to match the new JSONL
-                this.prettyContent = this.convertJsonlToPretty(this.rows);
+                const prettyResult = this.convertJsonlToPrettyWithLineNumbers(this.rows);
+                this.prettyContent = prettyResult.content;
+                this.prettyLineMapping = prettyResult.lineMapping;
                 
                 // Update columns based on new data
                 this.updateColumns();
@@ -2015,17 +2028,39 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
         }
     }
 
-    private convertJsonlToPretty(rows: JsonRow[]): string {
+
+    private convertJsonlToPrettyWithLineNumbers(rows: JsonRow[]): { content: string, lineMapping: number[] } {
         if (rows.length === 0) {
-            return '';
+            return { content: '', lineMapping: [] };
         }
         
-        if (rows.length === 1) {
-            return JSON.stringify(rows[0], null, 2);
-        }
+        const lineMapping: number[] = [];
+        let content = '';
         
-        // Format each row separately and join with newlines
-        return rows.map(row => JSON.stringify(row, null, 2)).join('\n');
+        rows.forEach((row, index) => {
+            const prettyJson = JSON.stringify(row, null, 2);
+            const lines = prettyJson.split('\n');
+            
+            // Only show line number for the first line of each JSON object
+            const originalLineNumber = index + 1;
+            lines.forEach((line, lineIndex) => {
+                if (lineIndex === 0) {
+                    // First line of JSON object - show original line number
+                    lineMapping.push(originalLineNumber);
+                } else {
+                    // Other lines - show empty string (will be handled by Monaco Editor)
+                    lineMapping.push(0);
+                }
+            });
+            
+            if (content) {
+                content += '\n' + prettyJson;
+            } else {
+                content = prettyJson;
+            }
+        });
+        
+        return { content, lineMapping };
     }
 
     private async handleDocumentChange(rowIndex: number, newData: any, webviewPanel: vscode.WebviewPanel, document: vscode.TextDocument) {
@@ -2374,6 +2409,7 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
                     parsedLines: this.parsedLines || [],
                     rawContent: this.rawContent || '',
                     prettyContent: this.prettyContent || '',
+                    prettyLineMapping: this.prettyLineMapping || [],
                     errorCount: this.errorCount,
                     loadingProgress: {
                         loadedLines: this.loadedLines,
@@ -4710,6 +4746,8 @@ Available variables:
             // Reset JSON rendering state when data updates
             if (currentView === 'json') {
                 renderJsonChunk(true);
+                // Update Monaco Editor with new pretty content
+                updatePrettyView();
                 requestAnimationFrame(() => restoreScrollPosition('json'));
             } else {
                 resetJsonRenderingState();
@@ -5860,6 +5898,7 @@ Available variables:
                 
                 // Use pre-formatted pretty content from Extension Host
                 const prettyContent = currentData.prettyContent || '';
+                const lineMapping = currentData.prettyLineMapping || [];
                 
                 prettyEditor = monaco.editor.create(editorContainer, {
                     value: prettyContent,
@@ -5869,7 +5908,15 @@ Available variables:
                     scrollBeyondLastLine: false,
                     minimap: { enabled: false },
                     wordWrap: 'on',
-                    lineNumbers: 'on',
+                    lineNumbers: lineMapping.length > 0 ? (lineNumber) => {
+                        // Use custom line numbers based on mapping
+                        if (lineNumber <= lineMapping.length) {
+                            const mappedNumber = lineMapping[lineNumber - 1];
+                            // If mappedNumber is 0, don't show line number (empty string)
+                            return mappedNumber === 0 ? '' : mappedNumber.toString();
+                        }
+                        return lineNumber.toString();
+                    } : 'on',
                     folding: true,
                     fontSize: 12,
                     fontFamily: 'var(--vscode-editor-font-family)'
@@ -6280,7 +6327,9 @@ Available variables:
             this.rawContent = this.rows.map(row => JSON.stringify(row)).join('\n');
             
             // Update pretty content to reflect the unstringified data
-            this.prettyContent = this.convertJsonlToPretty(this.rows);
+            const prettyResult = this.convertJsonlToPrettyWithLineNumbers(this.rows);
+            this.prettyContent = prettyResult.content;
+            this.prettyLineMapping = prettyResult.lineMapping;
 
             // Save the changes to the file
             const fullRange = new vscode.Range(
