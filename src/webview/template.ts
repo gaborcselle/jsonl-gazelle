@@ -272,11 +272,11 @@ Available variables:
             <div class="modal-body">
                 <label for="aiProvider" style="display: block; margin-bottom: 8px; font-weight: 500;">AI Provider:</label>
                 <select id="aiProvider" class="settings-select" style="width: 100%; padding: 8px 12px; font-size: 13px; background-color: var(--vscode-input-background); color: var(--vscode-input-foreground); border: 1px solid var(--vscode-input-border); border-radius: 4px; outline: none; margin-bottom: 16px; box-sizing: border-box;">
-                    <option value="copilot">GitHub Copilot (VS Code)</option>
+                    <option value="copilot" selected>GitHub Copilot (VS Code)</option>
                     <option value="openai">OpenAI API</option>
                 </select>
 
-                <div id="copilotSettings" style="display: none;">
+                <div id="copilotSettings" style="display: block;">
                     <div class="ai-info-box" style="margin-bottom: 16px; padding: 12px; background: rgba(100, 150, 255, 0.1); border-radius: 6px; font-size: 12px; color: var(--vscode-descriptionForeground);">
                         <strong>GitHub Copilot:</strong> Uses your VS Code GitHub Copilot subscription. Make sure you have GitHub Copilot enabled in VS Code.
                     </div>

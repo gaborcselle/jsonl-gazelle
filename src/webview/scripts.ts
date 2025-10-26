@@ -852,6 +852,9 @@ export const scripts = `
             vscode.postMessage({ type: 'getSettings' });
 
             modal.classList.add('show');
+
+            // Initialize provider settings display
+            setTimeout(() => updateProviderSettings(), 50);
         }
 
         function updateProviderSettings() {
