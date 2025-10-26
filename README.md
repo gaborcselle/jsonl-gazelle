@@ -70,10 +70,10 @@ This will create `test-data/large.jsonl` with:
 The generated file is automatically excluded from git via `.gitignore` to keep the repository lightweight.
 
 ## What's next / Roadmap
-- [ ] Pretty print view: Align line numbers with line numbers in source file
 - [ ] Find / Replace: Implement VS-code Find / Replace / Replace All with Regex option and highlighting
 - [ ] Large files: Generate a file with `generate-large.js`, loading fails above 100 MB with "Assertion Failed: Argument is `undefined` or `null`." - we need to truncate large files to just 100 MB
 - [ ] Split codebase: Split the codebase into smaller separate files
+- [X] Pretty print view: Align line numbers with line numbers in source file
 - [X] Pretty print view: Syntax highlighting
 - [X] Pretty print view: Fix first rendering bug
 - [X] Virtualize data loading
