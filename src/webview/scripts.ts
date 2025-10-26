@@ -612,7 +612,7 @@ export const scripts = `
         });
 
         // Find/Replace Button
-        document.getElementById('findReplaceBtn').addEventListener('click', openFindReplaceBar);
+        document.getElementById('findReplaceBtn').addEventListener('click', openFindReplaceModal);
 
         // Column Manager Modal
         document.getElementById('columnManagerBtn').addEventListener('click', openColumnManager);
@@ -2369,10 +2369,6 @@ export const scripts = `
                     loadingState.style.display = 'none';
                     // Re-render table to apply any active search filters
                     renderTableChunk(true);
-                    // Re-apply search highlighting if there's an active search
-                    if (searchTerm) {
-                        highlightTableResults(searchTerm);
-                    }
                     break;
                 case 'json':
                     document.getElementById('jsonViewContainer').style.display = 'block';
@@ -2413,11 +2409,6 @@ export const scripts = `
                         // Hide loading state after raw view is rendered
                         logo.classList.remove('loading');
                         loadingState.style.display = 'none';
-
-                        // Re-apply search highlighting if there's an active search
-                        if (searchTerm) {
-                            highlightRawResults(searchTerm);
-                        }
 
                         // Automatically open file in VS Code editor
                         vscode.postMessage({
