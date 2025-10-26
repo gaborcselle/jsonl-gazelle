@@ -1270,4 +1270,22 @@ export const styles = `
             margin-left: 4px;
         }
 
+        /* Find & Replace highlighting */
+        .find-highlight {
+            background-color: var(--vscode-editor-findMatchHighlightBackground);
+            border: 1px solid var(--vscode-editor-findMatchBorder);
+            border-radius: 2px;
+        }
+
+        .find-highlight-current {
+            background-color: var(--vscode-editor-findMatchBackground);
+            border: 1px solid var(--vscode-editor-findMatchBorder);
+            border-radius: 2px;
+        }
+
+        td.find-highlight,
+        td.find-highlight-current {
+            position: relative;
+        }
+
 `;

@@ -2372,7 +2372,8 @@ export const scripts = `
             // Show/hide column manager and wrap text controls based on view
             const columnManagerBtn = document.getElementById('columnManagerBtn');
             const wrapTextControl = document.querySelector('.wrap-text-control');
-            
+            const findReplaceBtn = document.getElementById('findReplaceBtn');
+
             // Show selected view container
             switch (viewType) {
                 case 'table':
@@ -2381,6 +2382,7 @@ export const scripts = `
                     // Show column controls for table view
                     columnManagerBtn.style.display = 'flex';
                     wrapTextControl.style.display = 'flex';
+                    findReplaceBtn.style.display = 'flex';
                     // Hide loading state immediately for table view (already rendered)
                     logo.classList.remove('loading');
                     loadingState.style.display = 'none';
@@ -2390,9 +2392,10 @@ export const scripts = `
                 case 'json':
                     document.getElementById('jsonViewContainer').style.display = 'block';
                     document.getElementById('jsonViewContainer').classList.add('isolated');
-                    // Hide column controls for json view
+                    // Hide column controls for json view (but show Find & Replace)
                     columnManagerBtn.style.display = 'none';
                     wrapTextControl.style.display = 'none';
+                    findReplaceBtn.style.display = 'flex';
                     
                     // Add event isolation to prevent bubbling
                     const jsonContainer = document.getElementById('jsonViewContainer');
@@ -2415,9 +2418,10 @@ export const scripts = `
                     break;
                 case 'raw':
                     document.getElementById('rawViewContainer').style.display = 'block';
-                    // Hide column controls for raw view
+                    // Hide column controls for raw view (Monaco has its own Find & Replace)
                     columnManagerBtn.style.display = 'none';
                     wrapTextControl.style.display = 'none';
+                    findReplaceBtn.style.display = 'none';
                     // Use setTimeout to allow the loading animation to show before rendering
                     // Longer delay for larger datasets to ensure smooth animation
                     const rawDelay = currentData.rawContent && currentData.rawContent.length > 100000 ? 100 : 50;
