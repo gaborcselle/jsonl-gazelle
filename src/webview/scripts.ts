@@ -604,7 +604,6 @@ export const scripts = `
         });
 
         // Event listeners
-        document.getElementById('searchInput').addEventListener('input', handleSearch);
         document.getElementById('logo').addEventListener('click', () => {
             vscode.postMessage({
                 type: 'openUrl',
@@ -1049,81 +1048,6 @@ export const scripts = `
             target.classList.remove('drag-over');
         }
         
-        function handleSearch() {
-            const searchTerm = document.getElementById('searchInput').value;
-            
-            // Perform search in current view with highlighting
-            if (currentView === 'table') {
-                vscode.postMessage({
-                    type: 'search',
-                    searchTerm: searchTerm
-                });
-                highlightTableResults(searchTerm);
-            } else if (currentView === 'json') {
-                highlightJsonResults(searchTerm);
-            } else if (currentView === 'raw') {
-                highlightRawResults(searchTerm);
-            }
-        }
-        
-        function highlightTableResults(searchTerm) {
-            document.querySelectorAll('.table-highlight').forEach(el => {
-                el.classList.remove('table-highlight');
-            });
-            
-            if (!searchTerm) return;
-            
-            const cells = document.querySelectorAll('#dataTable td');
-            cells.forEach(cell => {
-                const text = cell.textContent;
-                const matches = text.toLowerCase().includes(searchTerm.toLowerCase());
-                
-                if (matches) {
-                    cell.classList.add('table-highlight');
-                }
-            });
-        }
-        
-        function highlightJsonResults(searchTerm) {
-            const jsonLines = document.querySelectorAll('.json-content-editable');
-            jsonLines.forEach(textarea => {
-                // For textareas, we can't easily highlight within the text
-                // Instead, we'll add a visual indicator if the content matches
-                const content = textarea.value;
-                let hasMatch = false;
-                
-                if (searchTerm) {
-                    hasMatch = content.toLowerCase().includes(searchTerm.toLowerCase());
-                }
-                
-                if (hasMatch) {
-                    textarea.style.borderColor = 'var(--vscode-editor-findMatchBackground)';
-                    textarea.style.boxShadow = '0 0 0 2px var(--vscode-editor-findMatchBackground)';
-                } else {
-                    textarea.style.borderColor = '';
-                    textarea.style.boxShadow = '';
-                }
-            });
-        }
-        
-        
-        function highlightRawResults(searchTerm) {
-            const rawLines = document.querySelectorAll('.raw-line-content');
-            rawLines.forEach(lineContent => {
-                // Remove existing highlights
-                lineContent.classList.remove('search-highlight');
-                
-                if (!searchTerm) return;
-                
-                const text = lineContent.textContent;
-                const matches = text.toLowerCase().includes(searchTerm.toLowerCase());
-                
-                if (matches) {
-                    lineContent.classList.add('search-highlight');
-                }
-            });
-        }
-        
         
         
         
@@ -1334,13 +1258,11 @@ export const scripts = `
             const logo = document.getElementById('logo');
             const loadingState = document.getElementById('loadingState');
             const loadingProgress = document.getElementById('loadingProgress');
-            const searchContainer = document.getElementById('searchContainer');
             
             if (data.isIndexing) {
                 // Initial loading - show spinning logo and hide controls
                 logo.classList.add('loading');
                 loadingState.style.display = 'flex';
-                searchContainer.classList.add('controls-hidden');
                 
                 // Don't show the indexing div since we have header loading state
                 document.getElementById('indexingDiv').style.display = 'none';
@@ -1352,7 +1274,6 @@ export const scripts = `
             if (data.loadingProgress && data.loadingProgress.loadingChunks) {
                 logo.classList.add('loading');
                 loadingState.style.display = 'flex';
-                searchContainer.classList.add('controls-hidden');
                 
                 const memoryInfo = data.loadingProgress.memoryOptimized ? 
                     \`<div style="font-size: 11px; color: var(--vscode-warningForeground); margin-top: 5px;">
@@ -1371,14 +1292,12 @@ export const scripts = `
                 // Loading complete - show controls and stop spinning logo
                 logo.classList.remove('loading');
                 loadingState.style.display = 'none';
-                searchContainer.classList.remove('controls-hidden');
                 
                 document.getElementById('indexingDiv').style.display = 'none';
                 document.getElementById('dataTable').style.display = 'table';
             }
             
             // Update search inputs
-            document.getElementById('searchInput').value = data.searchTerm;
             
             // Update error count
             const errorCountElement = document.getElementById('errorCount');
@@ -1729,7 +1648,6 @@ export const scripts = `
             tableRenderState.renderedRows = end;
             tableRenderState.isRendering = false;
 
-            const searchTerm = document.getElementById('searchInput').value;
             if (searchTerm) {
                 highlightTableResults(searchTerm);
             }
@@ -2028,7 +1946,6 @@ export const scripts = `
             jsonRenderState.renderedRows = end;
             jsonRenderState.isRendering = false;
 
-            const searchTerm = document.getElementById('searchInput').value;
             if (searchTerm) {
                 highlightJsonResults(searchTerm);
             }
@@ -2130,7 +2047,6 @@ export const scripts = `
             rawRenderState.renderedLines = end;
             rawRenderState.isRendering = false;
 
-            const searchTerm = document.getElementById('searchInput').value;
             if (searchTerm) {
                 highlightRawResults(searchTerm);
             }
@@ -2420,10 +2336,230 @@ export const scripts = `
             // Show spinning gazelle during view switch
             const logo = document.getElementById('logo');
             const loadingState = document.getElementById('loadingState');
-            const searchContainer = document.getElementById('searchContainer');
             logo.classList.add('loading');
             loadingState.style.display = 'flex';
             loadingState.innerHTML = '<div>Switching view...</div>';
             
             // Hide search container during view switch
+            
+            // Update segmented control
+            document.querySelectorAll('.segmented-control button').forEach(button => {
+                button.classList.toggle('active', button.dataset.view === viewType);
+            });
+            
+            // Hide all view containers
+            document.getElementById('tableViewContainer').style.display = 'none';
+            document.getElementById('jsonViewContainer').style.display = 'none';
+            document.getElementById('rawViewContainer').style.display = 'none';
+            
+            // Show/hide column manager and wrap text controls based on view
+            const columnManagerBtn = document.getElementById('columnManagerBtn');
+            const wrapTextControl = document.querySelector('.wrap-text-control');
+            
+            // Show selected view container
+            switch (viewType) {
+                case 'table':
+                    document.getElementById('tableViewContainer').style.display = 'block';
+                    document.getElementById('dataTable').style.display = 'table';
+                    // Show column controls for table view
+                    columnManagerBtn.style.display = 'flex';
+                    wrapTextControl.style.display = 'flex';
+                    // Hide loading state immediately for table view (already rendered)
+                    logo.classList.remove('loading');
+                    loadingState.style.display = 'none';
+                    // Re-render table to apply any active search filters
+                    renderTableChunk(true);
+                    // Re-apply search highlighting if there's an active search
+                    if (searchTerm) {
+                        highlightTableResults(searchTerm);
+                    }
+                    break;
+                case 'json':
+                    document.getElementById('jsonViewContainer').style.display = 'block';
+                    document.getElementById('jsonViewContainer').classList.add('isolated');
+                    // Hide column controls for json view
+                    columnManagerBtn.style.display = 'none';
+                    wrapTextControl.style.display = 'none';
+                    
+                    // Add event isolation to prevent bubbling
+                    const jsonContainer = document.getElementById('jsonViewContainer');
+                    jsonContainer.addEventListener('dblclick', function(e) {
+                        e.stopPropagation();
+                    });
+                    jsonContainer.addEventListener('click', function(e) {
+                        e.stopPropagation();
+                    });
+                    
+                    // Use setTimeout to allow the loading animation to show before rendering
+                    // Longer delay for larger datasets to ensure smooth animation
+                    const jsonDelay = currentData.rows.length > 1000 ? 100 : 50;
+                    setTimeout(() => {
+                        updateJsonView();
+                        // Hide loading state after JSON view is rendered
+                        logo.classList.remove('loading');
+                        loadingState.style.display = 'none';
+                    }, jsonDelay);
+                    break;
+                case 'raw':
+                    document.getElementById('rawViewContainer').style.display = 'block';
+                    // Hide column controls for raw view
+                    columnManagerBtn.style.display = 'none';
+                    wrapTextControl.style.display = 'none';
+                    // Use setTimeout to allow the loading animation to show before rendering
+                    // Longer delay for larger datasets to ensure smooth animation
+                    const rawDelay = currentData.rawContent && currentData.rawContent.length > 100000 ? 100 : 50;
+                    setTimeout(() => {
+                        updateRawView();
+                        // Hide loading state after raw view is rendered
+                        logo.classList.remove('loading');
+                        loadingState.style.display = 'none';
+
+                        // Re-apply search highlighting if there's an active search
+                        if (searchTerm) {
+                            highlightRawResults(searchTerm);
+                        }
+
+                        // Automatically open file in VS Code editor
+                        vscode.postMessage({
+                            type: 'openInEditor'
+                        });
+                    }, rawDelay);
+                    break;
+            }
+            
+            // Restore scroll position
+            setTimeout(() => {
+                restoreScrollPosition(viewType);
+            }, 0);
+        }
+        
+        function updateJsonView() {
+            renderJsonChunk(true);
+            requestAnimationFrame(() => {
+                ensureJsonViewportFilled();
+                restoreScrollPosition('json');
+            });
+        }
+        
+        let rawEditor = null;
+        
+        function updateRawView() {
+            const editorContainer = document.getElementById('rawEditor');
+            if (!editorContainer) return;
+            
+            // Initialize Monaco Editor
+            require.config({ paths: { 'vs': 'https://cdn.jsdelivr.net/npm/monaco-editor@0.44.0/min/vs' } });
+            require(['vs/editor/editor.main'], function () {
+                if (rawEditor) {
+                    rawEditor.dispose();
+                }
+                
+                rawEditor = monaco.editor.create(editorContainer, {
+                    value: currentData.rawContent || '',
+                    language: 'json',
+                    theme: 'vs-dark',
+                    automaticLayout: true,
+                    scrollBeyondLastLine: false,
+                    minimap: { enabled: false },
+                    wordWrap: 'on',
+                    lineNumbers: 'on',
+                    folding: true,
+                    fontSize: 12,
+                    fontFamily: 'var(--vscode-editor-font-family)'
+                });
+                
+                // Disable JSON validation for JSONL files
+                monaco.languages.json.jsonDefaults.setDiagnosticsOptions({
+                    validate: false,
+                    allowComments: true,
+                    schemas: []
+                });
+                
+                // Additionally disable validation for current model
+                const model = rawEditor.getModel();
+                if (model) {
+                    monaco.editor.setModelMarkers(model, 'json', []);
+                }
+                
+                // Handle content changes
+                rawEditor.onDidChangeModelContent(() => {
+                    clearTimeout(window.rawEditTimeout);
+                    window.rawEditTimeout = setTimeout(() => {
+                        vscode.postMessage({
+                            type: 'rawContentChanged',
+                            newContent: rawEditor.getValue()
+                        });
+                    }, 500);
+                });
+                
+                // Handle Ctrl+S
+                rawEditor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyS, () => {
+                    vscode.postMessage({
+                        type: 'rawContentSave',
+                        newContent: rawEditor.getValue()
+                    });
+                });
+            });
+        }
+        
+        
+        function expandCell(event, td, rowIndex, columnPath) {
+            event.preventDefault();
+            event.stopPropagation();
+
+            const value = getNestedValue(currentData.allRows[rowIndex], columnPath);
+            if (typeof value !== 'object' || value === null) return;
+            
+            // Create expanded content
+            const expandedContent = document.createElement('div');
+            expandedContent.className = 'expanded-content';
+            
+            if (Array.isArray(value)) {
+                value.forEach((item, index) => {
+                    const div = document.createElement('div');
+                    const strong = document.createElement('strong');
+                    strong.textContent = index + ':';
+                    div.appendChild(strong);
+                    div.appendChild(document.createTextNode(' ' + JSON.stringify(item)));
+                    expandedContent.appendChild(div);
+                });
+            } else {
+                Object.entries(value).forEach(([key, val]) => {
+                    const div = document.createElement('div');
+                    const strong = document.createElement('strong');
+                    strong.textContent = key + ':';
+                    div.appendChild(strong);
+                    div.appendChild(document.createTextNode(' ' + JSON.stringify(val)));
+                    expandedContent.appendChild(div);
+                });
+            }
+            
+            // Position and show
+            td.appendChild(expandedContent);
+            
+            // Hide on click outside
+            setTimeout(() => {
+                document.addEventListener('click', function hideExpanded() {
+                    expandedContent.remove();
+                    document.removeEventListener('click', hideExpanded);
+                });
+            }, 0);
+        }
+        
+        // Add event listeners for view controls
+        document.querySelectorAll('.segmented-control button').forEach(button => {
+            button.addEventListener('click', (e) => switchView(e.currentTarget.dataset.view));
+        });
+        
+        // Add event listeners for context menus
+        document.getElementById('contextMenu').addEventListener('click', handleContextMenu);
+        document.getElementById('rowContextMenu').addEventListener('click', handleRowContextMenu);
+        
+        // Hide context menus when clicking outside
+        document.addEventListener('click', (e) => {
+            if (!e.target.closest('.context-menu') && !e.target.closest('.row-context-menu')) {
+                hideContextMenu();
+            }
+        });
+        
 `;
