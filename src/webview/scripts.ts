@@ -1167,8 +1167,6 @@ export const scripts = `
                 return; // Don't execute action for disabled items
             }
 
-            console.log('handleRowContextMenu - action:', action, 'rowIndex:', contextMenuRow, 'total rows:', currentData.allRows.length);
-
             switch (action) {
                 case 'copyRow':
                     {
@@ -1837,13 +1835,9 @@ export const scripts = `
                             e.preventDefault();
                             
                             const currentRowIndex = parseInt(this.getAttribute('data-row-index'));
-                            console.log('Navigation triggered:', e.key, 'from row', currentRowIndex);
-                            
-                            // Temporarily disable navigation flag to test focus
-                            // isNavigating = true;
-                            
+
                             const jsonView = document.getElementById('jsonView');
-                            
+
                             let targetRowIndex;
                             if (e.key === 'ArrowUp') {
                                 // Go to previous row
@@ -1852,16 +1846,11 @@ export const scripts = `
                                 // Go to next row
                                 targetRowIndex = Math.min(currentData.rows.length - 1, currentRowIndex + 1);
                             }
-                            
-                            console.log('Target row index:', targetRowIndex);
-                            
+
                             // Find the target textarea by its data-row-index attribute
                             const targetTextarea = jsonView.querySelector('.json-content-editable[data-row-index="' + targetRowIndex + '"]');
-                            
-                            console.log('Target textarea found:', !!targetTextarea);
-                            
+
                             if (targetTextarea) {
-                                console.log('Focusing target textarea');
                                 
                                 // Try multiple focus methods to ensure it works
                                 setTimeout(() => {
@@ -1881,22 +1870,11 @@ export const scripts = `
                                     } else {
                                         targetTextarea.setSelectionRange(0, 0);
                                     }
-                                    
-                                    console.log('Focus completed, cursor position:', targetTextarea.selectionStart);
-                                    console.log('Active element:', document.activeElement);
-                                    console.log('Target element:', targetTextarea);
-                                    console.log('Are they the same?', document.activeElement === targetTextarea);
-                                    
+
                                     // Simple scroll to make sure target is visible
                                     targetTextarea.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
                                 }, 10);
-                                
-                                // Temporarily disable navigation flag clearing
-                                // setTimeout(() => {
-                                //     isNavigating = false;
-                                // }, 100);
                             } else {
-                                console.log('Target not found, trying fallback rendering');
                                 // Target row not rendered yet, ensure it's rendered and try again
                                 const jsonView = document.getElementById('jsonView');
                                 
@@ -1904,20 +1882,12 @@ export const scripts = `
                                 while (jsonRenderState.renderedRows <= targetRowIndex && jsonRenderState.renderedRows < jsonRenderState.totalRows) {
                                     renderJsonChunk();
                                 }
-                                
-                                console.log('Rendered rows after fallback:', jsonRenderState.renderedRows);
-                                
+
                                 // Use requestAnimationFrame for better timing with DOM updates
                                 requestAnimationFrame(() => {
                                     const updatedTargetTextarea = jsonView.querySelector('.json-content-editable[data-row-index="' + targetRowIndex + '"]');
-                                    
-                                    console.log('Fallback target textarea found:', !!updatedTargetTextarea);
-                                    
+
                                     if (updatedTargetTextarea) {
-                                        // Temporarily disable navigation flag clearing
-                                        // isNavigating = false;
-                                        
-                                        console.log('Focusing fallback target textarea');
                                         // Focus the textarea
                                         updatedTargetTextarea.focus();
                                         
@@ -1940,10 +1910,6 @@ export const scripts = `
                                                 inline: 'nearest'
                                             });
                                         }
-                                    } else {
-                                        // If still not found, try one more time
-                                        // isNavigating = false;
-                                        console.warn('Target textarea not found after rendering for row', targetRowIndex);
                                     }
                                 });
                             }

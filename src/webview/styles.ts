@@ -60,83 +60,6 @@ export const styles = `
             color: var(--vscode-descriptionForeground);
         }
         
-        .controls-hidden {
-            display: none !important;
-        }
-        
-        .search-container {
-            display: flex;
-            align-items: center;
-            gap: 5px;
-            flex: 1;
-        }
-        
-        .search-input {
-            flex: 1;
-            padding: 5px 10px;
-            border: 1px solid var(--vscode-input-border);
-            background-color: var(--vscode-input-background);
-            color: var(--vscode-input-foreground);
-            border-radius: 3px;
-        }
-        
-        .search-input:focus {
-            outline: none;
-            border-color: var(--vscode-focusBorder);
-        }
-        
-        .search-icon {
-            color: var(--vscode-foreground);
-            display: flex;
-            align-items: center;
-        }
-        
-        .search-icon svg {
-            width: 16px;
-            height: 16px;
-        }
-        
-        .replace-container {
-            display: flex;
-            align-items: center;
-            gap: 5px;
-        }
-        
-        .replace-toggle {
-            padding: 5px 10px;
-            background-color: var(--vscode-button-secondaryBackground);
-            color: var(--vscode-button-secondaryForeground);
-            border: 1px solid var(--vscode-button-border);
-            border-radius: 3px;
-            cursor: pointer;
-            font-size: 12px;
-        }
-        
-        .replace-toggle:hover {
-            background-color: var(--vscode-button-secondaryHoverBackground);
-        }
-        
-        .replace-input {
-            padding: 5px 10px;
-            border: 1px solid var(--vscode-input-border);
-            background-color: var(--vscode-input-background);
-            color: var(--vscode-input-foreground);
-            border-radius: 3px;
-            width: 200px;
-            display: none;
-        }
-        
-        .replace-input.expanded {
-            display: block;
-        }
-        
-        .checkbox-container {
-            display: flex;
-            align-items: center;
-            gap: 5px;
-            font-size: 12px;
-        }
-        
         .checkbox {
             accent-color: var(--vscode-checkbox-background);
         }
@@ -161,30 +84,6 @@ export const styles = `
         
         .button:hover {
             background-color: var(--vscode-button-hoverBackground);
-        }
-        
-        .ai-container {
-            display: flex;
-            align-items: center;
-            gap: 5px;
-            margin-left: 10px;
-        }
-        
-        .ai-input {
-            padding: 5px 10px;
-            border: 1px solid var(--vscode-input-border);
-            background-color: var(--vscode-input-background);
-            color: var(--vscode-input-foreground);
-            border-radius: 3px;
-            width: 300px;
-        }
-        
-        .model-select {
-            padding: 5px 10px;
-            border: 1px solid var(--vscode-input-border);
-            background-color: var(--vscode-input-background);
-            color: var(--vscode-input-foreground);
-            border-radius: 3px;
         }
         
         .table-container {
@@ -399,40 +298,6 @@ export const styles = `
             margin: 5px 0;
         }
         
-        .settings-button {
-            margin-left: auto;
-        }
-        
-        .export-container {
-            position: relative;
-            display: inline-block;
-        }
-        
-        .export-dropdown {
-            position: absolute;
-            top: 100%;
-            right: 0;
-            background-color: var(--vscode-menu-background);
-            border: 1px solid var(--vscode-menu-border);
-            border-radius: 3px;
-            padding: 5px 0;
-            z-index: 1000;
-            min-width: 120px;
-        }
-        
-        .export-dropdown-item {
-            padding: 8px 15px;
-            cursor: pointer;
-            color: var(--vscode-menu-foreground);
-            font-size: 12px;
-        }
-        
-        .export-dropdown-item:hover {
-            background-color: var(--vscode-menu-selectionBackground);
-        }
-        
-        
-        
         .view-controls {
             display: flex;
             align-items: center;
@@ -502,19 +367,6 @@ export const styles = `
             padding: 0;
         }
         
-        
-        .raw-content {
-            font-family: var(--vscode-editor-font-family);
-            font-size: var(--vscode-editor-font-size);
-            line-height: 1.4;
-            background-color: var(--vscode-editor-background);
-            color: var(--vscode-editor-foreground);
-            padding: 10px;
-            white-space: pre;
-            tab-size: 4;
-            min-height: 100%;
-        }
-        
         .raw-line {
             display: flex;
             margin-bottom: 2px;
@@ -546,22 +398,6 @@ export const styles = `
         
         .expandable-cell:hover {
             background-color: var(--vscode-list-hoverBackground);
-        }
-        
-        .expand-icon {
-            margin-left: 5px;
-            font-size: 10px;
-            opacity: 1;
-            display: flex;
-            align-items: center;
-            color: var(--vscode-foreground);
-        }
-        
-        .expand-icon svg {
-            width: 12px;
-            height: 12px;
-            stroke: var(--vscode-foreground);
-            opacity: 0.8;
         }
         
         .expand-button {
@@ -724,18 +560,6 @@ export const styles = `
         
         .json-content-editable.json-valid {
             border-color: var(--vscode-inputValidation-infoBorder);
-        }
-        
-        .search-highlight {
-            background-color: var(--vscode-editor-findMatchBackground);
-            color: var(--vscode-editor-findMatchForeground);
-            padding: 1px 2px;
-            border-radius: 2px;
-        }
-        
-        .table-highlight {
-            background-color: var(--vscode-editor-findMatchBackground);
-            color: var(--vscode-editor-findMatchForeground);
         }
         
         /* Column Manager Button */
@@ -1092,67 +916,6 @@ export const styles = `
         
         .modal-button-secondary:hover {
             background-color: var(--vscode-button-secondaryHoverBackground);
-        }
-
-        /* Find/Replace Modal Styles */
-        .find-replace-modal {
-            width: 550px;
-        }
-
-        .find-replace-group {
-            margin-bottom: 16px;
-        }
-
-        .find-replace-group label {
-            display: block;
-            margin-bottom: 6px;
-            font-weight: 500;
-            font-size: 13px;
-        }
-
-        .find-replace-input {
-            width: 100%;
-            padding: 8px 12px;
-            font-size: 13px;
-            background-color: var(--vscode-input-background);
-            color: var(--vscode-input-foreground);
-            border: 1px solid var(--vscode-input-border);
-            border-radius: 4px;
-            outline: none;
-            font-family: var(--vscode-font-family);
-            box-sizing: border-box;
-        }
-
-        .find-replace-input:focus {
-            border-color: var(--vscode-focusBorder);
-        }
-
-        .find-replace-info {
-            margin-top: 6px;
-            font-size: 12px;
-            color: var(--vscode-descriptionForeground);
-        }
-
-        .find-replace-options {
-            display: flex;
-            flex-wrap: wrap;
-            gap: 16px;
-            margin-bottom: 16px;
-            padding: 12px;
-            background-color: var(--vscode-textBlockQuote-background);
-            border-radius: 4px;
-        }
-
-        .checkbox-label {
-            display: flex;
-            align-items: center;
-            gap: 8px;
-            cursor: pointer;
-            font-size: 13px;
-        }
-
-        .checkbox-label input[type="checkbox"] {
-            cursor: pointer;
         }
 
         /* Find & Replace Extension Bar */
