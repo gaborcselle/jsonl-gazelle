@@ -847,6 +847,12 @@ export const scripts = `
         // Settings Modal
         function openSettingsModal() {
             const modal = document.getElementById('settingsModal');
+            const aiProviderSelect = document.getElementById('aiProvider');
+
+            // Ensure default selection is set before requesting settings
+            if (!aiProviderSelect.value) {
+                aiProviderSelect.value = 'copilot';
+            }
 
             // Request current settings from backend
             vscode.postMessage({ type: 'getSettings' });
@@ -2274,14 +2280,20 @@ export const scripts = `
 
                     // Set provider value with fallback to copilot
                     const providerValue = message.settings.aiProvider || 'copilot';
+
+                    // Set by value
                     aiProvider.value = providerValue;
 
-                    // If value didn't set (browser issue), try setting selected attribute
-                    if (aiProvider.value !== providerValue) {
-                        Array.from(aiProvider.options).forEach(opt => {
-                            opt.selected = opt.value === providerValue;
-                        });
+                    // Also set selectedIndex explicitly for webview compatibility
+                    const selectedOption = Array.from(aiProvider.options).findIndex(opt => opt.value === providerValue);
+                    if (selectedOption !== -1) {
+                        aiProvider.selectedIndex = selectedOption;
                     }
+
+                    // Fallback: set selected attribute on options
+                    Array.from(aiProvider.options).forEach(opt => {
+                        opt.selected = opt.value === providerValue;
+                    });
 
                     openaiKey.value = message.settings.openaiKey || '';
                     openaiModel.value = message.settings.openaiModel || 'gpt-4o-mini';
