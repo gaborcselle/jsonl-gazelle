@@ -1304,13 +1304,16 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
             throw new Error('OpenAI API key not configured. Please set it in AI Settings.');
         }
 
-        const model = this.context.globalState.get<string>('openaiModel', 'gpt-4.1-mini');
+        // Trim the API key to remove any whitespace
+        const trimmedApiKey = apiKey.trim();
+
+        const model = this.context.globalState.get<string>('openaiModel', 'gpt-4o-mini');
 
         const response = await fetch('https://api.openai.com/v1/chat/completions', {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json',
-                'Authorization': `Bearer ${apiKey}`
+                'Authorization': `Bearer ${trimmedApiKey}`
             },
             body: JSON.stringify({
                 model: model,
@@ -1384,8 +1387,9 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
             await this.context.globalState.update('aiProvider', settings.aiProvider);
             await this.context.globalState.update('openaiModel', settings.openaiModel);
 
-            if (settings.openaiKey) {
-                await this.context.secrets.store('openaiApiKey', settings.openaiKey);
+            // Trim and save API key if provided
+            if (settings.openaiKey && settings.openaiKey.trim()) {
+                await this.context.secrets.store('openaiApiKey', settings.openaiKey.trim());
             }
 
             vscode.window.showInformationMessage('AI settings saved successfully');
