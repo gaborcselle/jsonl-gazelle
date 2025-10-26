@@ -1648,10 +1648,6 @@ export const scripts = `
             tableRenderState.renderedRows = end;
             tableRenderState.isRendering = false;
 
-            if (searchTerm) {
-                highlightTableResults(searchTerm);
-            }
-
             if (currentView === 'table') {
                 requestAnimationFrame(ensureTableViewportFilled);
             }
@@ -1946,10 +1942,6 @@ export const scripts = `
             jsonRenderState.renderedRows = end;
             jsonRenderState.isRendering = false;
 
-            if (searchTerm) {
-                highlightJsonResults(searchTerm);
-            }
-
             if (currentView === 'json') {
                 requestAnimationFrame(ensureJsonViewportFilled);
             }
@@ -2046,10 +2038,6 @@ export const scripts = `
             rawContent.appendChild(fragment);
             rawRenderState.renderedLines = end;
             rawRenderState.isRendering = false;
-
-            if (searchTerm) {
-                highlightRawResults(searchTerm);
-            }
 
             if (currentView === 'raw') {
                 requestAnimationFrame(ensureRawViewportFilled);
