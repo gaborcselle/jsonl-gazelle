@@ -318,6 +318,7 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
     private async loadRemainingChunks(lines: string[]) {
         this.loadingChunks = true;
         
+        // Process all chunks without async/await in loop for maximum speed
         for (let startIndex = this.loadedLines; startIndex < this.totalLines; startIndex += this.CHUNK_SIZE) {
             const endIndex = Math.min(startIndex + this.CHUNK_SIZE, this.totalLines);
             const chunkLines = lines.slice(startIndex, endIndex);
@@ -325,45 +326,23 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
             this.processChunk(chunkLines, startIndex);
             this.loadedLines = endIndex;
             
-            // Memory optimization: keep only recent rows for very large files
-            if (this.memoryOptimized && this.rows.length > this.MAX_MEMORY_ROWS) {
-                const keepRows = Math.floor(this.MAX_MEMORY_ROWS * 0.8); // Keep 80% of max
-                const oldLength = this.rows.length;
-                this.rows = this.rows.slice(-keepRows);
-                this.parsedLines = this.parsedLines.slice(-keepRows);
-                
-                // Recalculate path counts for remaining rows
-                this.pathCounts = {};
-                this.rows.forEach(row => {
-                    if (row && typeof row === 'object') {
-                        this.countPaths(row, '', this.pathCounts);
-                    }
-                });
-                
-                console.log(`Memory optimization: Kept ${this.rows.length} most recent rows (removed ${oldLength - this.rows.length} rows)`);
-            }
-            
             // Update columns progressively - only add new columns, don't re-expand
             this.addNewColumnsOnly();
             
-            // Only copy array if there's an active search, otherwise point to same array
-            if (this.searchTerm) {
-                this.filteredRows = [...this.rows];
-            } else {
-                this.filteredRows = this.rows; // Much faster - no copying
-            }
-            
-            // Update UI less frequently (every 5 chunks = every 500 lines)
-            if ((startIndex / this.CHUNK_SIZE) % 5 === 0 && this.currentWebviewPanel) {
+            // Update UI only every 10 chunks (much less frequent)
+            if ((startIndex / this.CHUNK_SIZE) % 10 === 0 && this.currentWebviewPanel) {
+                this.filteredRows = this.searchTerm ? [...this.rows] : this.rows;
                 this.updateWebview(this.currentWebviewPanel);
             }
             
-            // Yield control to prevent blocking the UI
-            await new Promise(resolve => setTimeout(resolve, 0));
+            // Yield only every 1000 lines to maintain responsiveness
+            if (startIndex % (this.CHUNK_SIZE * 10) === 0) {
+                await new Promise(resolve => setTimeout(resolve, 10));
+            }
         }
         
         this.loadingChunks = false;
-        
+
         // Final update
         if (this.currentWebviewPanel) {
             this.updateWebview(this.currentWebviewPanel);
@@ -1264,7 +1243,13 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
     }
 
     private async callLanguageModel(prompt: string): Promise<string> {
-        return await this.callOpenAI(prompt);
+        const aiProvider = this.context.globalState.get<string>('aiProvider', 'copilot');
+
+        if (aiProvider === 'copilot') {
+            return await this.callVSCodeLM(prompt);
+        } else {
+            return await this.callOpenAI(prompt);
+        }
     }
 
     private async callVSCodeLM(prompt: string): Promise<string> {
@@ -1298,13 +1283,16 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
             throw new Error('OpenAI API key not configured. Please set it in AI Settings.');
         }
 
-        const model = this.context.globalState.get<string>('openaiModel', 'gpt-4.1-mini');
+        // Trim the API key to remove any whitespace
+        const trimmedApiKey = apiKey.trim();
+
+        const model = this.context.globalState.get<string>('openaiModel', 'gpt-4o-mini');
 
         const response = await fetch('https://api.openai.com/v1/chat/completions', {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json',
-                'Authorization': `Bearer ${apiKey}`
+                'Authorization': `Bearer ${trimmedApiKey}`
             },
             body: JSON.stringify({
                 model: model,
@@ -1324,14 +1312,165 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
         return data.choices[0].message.content.trim();
     }
 
+    private convertJsonlToPrettyWithLineNumbers(rows: JsonRow[]): { content: string, lineMapping: number[] } {
+        if (rows.length === 0) {
+            return { content: '', lineMapping: [] };
+        }
+
+        const lineMapping: number[] = [];
+        let content = '';
+
+        rows.forEach((row, index) => {
+            const prettyJson = JSON.stringify(row, null, 2);
+            const lines = prettyJson.split('\n');
+
+            // Only show line number for the first line of each JSON object
+            const originalLineNumber = index + 1;
+            lines.forEach((line, lineIndex) => {
+                if (lineIndex === 0) {
+                    // First line of JSON object - show original line number
+                    lineMapping.push(originalLineNumber);
+                } else {
+                    // Other lines - show empty string (will be handled by Monaco Editor)
+                    lineMapping.push(0);
+                }
+            });
+
+            if (content) {
+                content += '\n' + prettyJson;
+            } else {
+                content = prettyJson;
+            }
+        });
+
+        return { content, lineMapping };
+    }
+
+    private convertPrettyToJsonl(prettyContent: string): string {
+        console.log('Converting pretty content to JSONL:', prettyContent.substring(0, 200) + '...');
+
+        try {
+            // First try to parse as a single JSON object
+            const parsed = JSON.parse(prettyContent);
+
+            // If it's an array, convert each element to a separate JSONL line
+            if (Array.isArray(parsed)) {
+                const result = parsed.map(item => JSON.stringify(item)).join('\n');
+                console.log('Parsed as array, result:', result.substring(0, 200) + '...');
+                return result;
+            }
+
+            // If it's a single object, return it as one line
+            const result = JSON.stringify(parsed);
+            console.log('Parsed as single object, result:', result);
+            return result;
+        } catch {
+            // If not valid JSON, try to parse multiple JSON objects separated by empty lines
+            try {
+                const lines = prettyContent.split('\n');
+                const jsonlLines: string[] = [];
+                let currentJsonObject = '';
+                let braceCount = 0;
+                let inString = false;
+                let escapeNext = false;
+
+                console.log('Parsing multiple JSON objects, total lines:', lines.length);
+
+                for (const line of lines) {
+                    const trimmed = line.trim();
+
+                    // Skip empty lines
+                    if (!trimmed) {
+                        if (currentJsonObject.trim()) {
+                            try {
+                                const parsed = JSON.parse(currentJsonObject.trim());
+                                jsonlLines.push(JSON.stringify(parsed));
+                                currentJsonObject = '';
+                                braceCount = 0;
+                            } catch {
+                                console.warn('Skipping invalid JSON object:', currentJsonObject.trim());
+                                currentJsonObject = '';
+                                braceCount = 0;
+                            }
+                        }
+                        continue;
+                    }
+
+                    // Add line to current JSON object
+                    currentJsonObject += line + '\n';
+
+                    // Count braces to determine when we have a complete object
+                    for (let i = 0; i < line.length; i++) {
+                        const char = line[i];
+
+                        if (escapeNext) {
+                            escapeNext = false;
+                            continue;
+                        }
+
+                        if (char === '\\') {
+                            escapeNext = true;
+                            continue;
+                        }
+
+                        if (char === '"' && !escapeNext) {
+                            inString = !inString;
+                            continue;
+                        }
+
+                        if (!inString) {
+                            if (char === '{') {
+                                braceCount++;
+                            } else if (char === '}') {
+                                braceCount--;
+
+                                // If we've closed all braces, we have a complete object
+                                if (braceCount === 0 && currentJsonObject.trim()) {
+                                    try {
+                                        const parsed = JSON.parse(currentJsonObject.trim());
+                                        jsonlLines.push(JSON.stringify(parsed));
+                                        currentJsonObject = '';
+                                    } catch {
+                                        console.warn('Skipping invalid JSON object:', currentJsonObject.trim());
+                                        currentJsonObject = '';
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // Handle any remaining object
+                if (currentJsonObject.trim()) {
+                    try {
+                        const parsed = JSON.parse(currentJsonObject.trim());
+                        jsonlLines.push(JSON.stringify(parsed));
+                    } catch {
+                        console.warn('Skipping invalid JSON object:', currentJsonObject.trim());
+                    }
+                }
+
+                const result = jsonlLines.join('\n');
+                console.log('Multiple JSON objects parsing result:', result.substring(0, 200) + '...');
+                return result;
+            } catch {
+                // If all else fails, return empty string to avoid corruption
+                console.error('Failed to convert pretty content to JSONL');
+                return '';
+            }
+        }
+    }
+
     private async handleGetSettings(webviewPanel: vscode.WebviewPanel) {
         try {
+            const aiProvider = this.context.globalState.get<string>('aiProvider', 'copilot');
             const openaiKey = await this.context.secrets.get('openaiApiKey') || '';
-            const openaiModel = this.context.globalState.get<string>('openaiModel', 'gpt-4.1-mini');
+            const openaiModel = this.context.globalState.get<string>('openaiModel', 'gpt-4o-mini');
 
             webviewPanel.webview.postMessage({
                 type: 'settingsLoaded',
                 settings: {
+                    aiProvider,
                     openaiKey,
                     openaiModel
                 }
@@ -1343,6 +1482,18 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
 
     private async handleCheckAPIKey(webviewPanel: vscode.WebviewPanel) {
         try {
+            const aiProvider = this.context.globalState.get<string>('aiProvider', 'copilot');
+
+            // If using Copilot, no API key is needed
+            if (aiProvider === 'copilot') {
+                webviewPanel.webview.postMessage({
+                    type: 'apiKeyCheckResult',
+                    hasAPIKey: true
+                });
+                return;
+            }
+
+            // For OpenAI, check if API key exists
             const openaiKey = await this.context.secrets.get('openaiApiKey');
             const hasAPIKey = !!openaiKey;
 
@@ -1359,12 +1510,14 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
         }
     }
 
-    private async handleSaveSettings(settings: { openaiKey: string; openaiModel: string }) {
+    private async handleSaveSettings(settings: { aiProvider: string; openaiKey: string; openaiModel: string }) {
         try {
+            await this.context.globalState.update('aiProvider', settings.aiProvider);
             await this.context.globalState.update('openaiModel', settings.openaiModel);
 
-            if (settings.openaiKey) {
-                await this.context.secrets.store('openaiApiKey', settings.openaiKey);
+            // Trim and save API key if provided
+            if (settings.openaiKey && settings.openaiKey.trim()) {
+                await this.context.secrets.store('openaiApiKey', settings.openaiKey.trim());
             }
 
             vscode.window.showInformationMessage('AI settings saved successfully');
@@ -2016,6 +2169,9 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
                 return index >= 0 ? index : this.filteredRows.indexOf(row);
             });
 
+            // Generate pretty-printed content with line mapping
+            const prettyResult = this.convertJsonlToPrettyWithLineNumbers(this.rows);
+
             webviewPanel.webview.postMessage({
                 type: 'update',
                 data: {
@@ -2027,6 +2183,8 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
                     searchTerm: this.searchTerm,
                     parsedLines: this.parsedLines || [],
                     rawContent: this.rawContent || '',
+                    prettyContent: prettyResult.content,
+                    prettyLineMapping: prettyResult.lineMapping,
                     errorCount: this.errorCount,
                     loadingProgress: {
                         loadedLines: this.loadedLines,
