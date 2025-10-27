@@ -33,6 +33,7 @@
   },
   "license": "MIT",
   "activationEvents": [
+    "onStartupFinished",
     "onCustomEditor:jsonl-gazelle.jsonlViewer",
     "onCommand:jsonl-gazelle.openLargeFile"
   ],
@@ -63,7 +64,7 @@
       },
       {
         "command": "jsonl-gazelle.openLargeFile",
-        "title": "Open for Splitting (100MB+)",
+        "title": "Split into Parts (100MB+)",
         "category": "JSONL Gazelle",
         "icon": "$(file)"
       }
