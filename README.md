@@ -14,6 +14,11 @@ Fast JSONL viewer / editor for VS Code with advanced features including Table Vi
 
 ![JSONL Gazelle Screenshot - Raw View](jsonl-gazelle-screenshot4.jpg)
 
+## New
+
+- *v0.3.1*: For extrememly large JSONL files over 100MB, this version adds a new "Split" function available by right-clicking on the file
+- *v0.3.0*: Add a much improved Pretty Print View with syntax highlighting
+
 ## Features
 
 - **Fast Table View**: Automatically detects common JSON paths and displays them as table columns
@@ -71,8 +76,8 @@ The generated file is automatically excluded from git via `.gitignore` to keep t
 
 ## What's next / Roadmap
 - [ ] Find / Replace: Implement VS-code Find / Replace / Replace All with Regex option and highlighting
-- [ ] Large files: Generate a file with `generate-large.js`, loading fails above 100 MB with "Assertion Failed: Argument is `undefined` or `null`." - we need to truncate large files to just 100 MB
 - [ ] Split codebase: Split the codebase into smaller separate files
+- [X] Large files: For JSONL files over 100MB (VS Code limit), add a right-click menu to split the file into smaller parts
 - [X] Pretty print view: Align line numbers with line numbers in source file
 - [X] Pretty print view: Syntax highlighting
 - [X] Pretty print view: Fix first rendering bug
