@@ -27,10 +27,75 @@ export function activate(context: vscode.ExtensionContext) {
             return;
         }
         
+        // Check file size - only allow files >100MB
+        try {
+            const stats = await fs.promises.stat(uri.fsPath);
+            const sizeMB = stats.size / (1024 * 1024);
+            
+            if (sizeMB < 100) {
+                vscode.window.showInformationMessage(
+                    `File splitting is only available for files larger than 100 MB`
+                );
+                return;
+            }
+        } catch (error) {
+            vscode.window.showErrorMessage('Could not check file size');
+            return;
+        }
+        
         await openLargeFileInWebview(uri);
     });
 
     context.subscriptions.push(openLargeFileCommand);
+
+    // Register file decoration provider for large files
+    const fileDecorationProvider = new LargeFileDecorationProvider();
+    context.subscriptions.push(vscode.window.registerFileDecorationProvider(fileDecorationProvider));
+}
+
+// File decoration provider to show icons for large JSONL files
+class LargeFileDecorationProvider implements vscode.FileDecorationProvider {
+    private shownNotifications = new Set<string>();
+
+    async provideFileDecoration(
+        uri: vscode.Uri,
+        token: vscode.CancellationToken
+    ): Promise<vscode.FileDecoration | undefined> {
+        try {
+            // Only process JSONL files
+            if (uri.scheme !== 'file' || !uri.fsPath || path.extname(uri.fsPath) !== '.jsonl') {
+                return undefined;
+            }
+
+            const stats = await fs.promises.stat(uri.fsPath);
+            const sizeMB = stats.size / (1024 * 1024);
+
+            if (sizeMB > 100) {
+                // Show notification only once per file
+                if (!this.shownNotifications.has(uri.fsPath)) {
+                    this.shownNotifications.add(uri.fsPath);
+                    
+                    vscode.window.showInformationMessage(
+                        `Large file detected (${sizeMB.toFixed(2)} MB): ${path.basename(uri.fsPath)}. Split it into smaller parts?`,
+                        'Split File'
+                    ).then(selection => {
+                        if (selection === 'Split File') {
+                            vscode.commands.executeCommand('jsonl-gazelle.openLargeFile', uri);
+                        }
+                    });
+                }
+                
+                return {
+                    badge: '⚠️',
+                    tooltip: 'File too large. Right-click and select "Open for Splitting (100MB+)" to view or split',
+                    color: new vscode.ThemeColor('errorForeground')
+                };
+            }
+        } catch (error) {
+            // Ignore errors
+        }
+        return undefined;
+    }
 }
 
 async function openLargeFileInWebview(uri: vscode.Uri) {
@@ -64,30 +129,34 @@ async function openLargeFileInWebview(uri: vscode.Uri) {
 
         panel.webview.onDidReceiveMessage(async (message) => {
             switch (message.command) {
-                case 'openInSystem':
-                    // Close webview and open file immediately
-                    panel.dispose();
-                    setTimeout(async () => {
-                        try {
-                            const doc = await vscode.workspace.openTextDocument(uri);
-                            await vscode.window.showTextDocument(doc, { 
-                                viewColumn: vscode.ViewColumn.One,
-                                preview: false // Don't preview, just open
-                            });
-                        } catch (error: any) {
-                            vscode.window.showWarningMessage(
-                                'This file is too large to open directly. Right-click on the file and select "Split File into Parts" to create editable files.'
-                            );
-                        }
-                    }, 50);
-                    break;
                 case 'splitFile':
                     const parts = await splitLargeFile(uri.fsPath);
                     panel.dispose();
-                    if (parts.length > 1) {
-                        vscode.window.showInformationMessage(
-                            `File split into ${parts.length} parts (<50MB each)`
+                    
+                    if (parts.length > 0) {
+                        const fileNames = parts.map(p => path.basename(p));
+                        
+                        const result = await vscode.window.showInformationMessage(
+                            `File split into ${parts.length} part${parts.length > 1 ? 's' : ''}. Files: ${fileNames.join(', ')}`,
+                            'Open All'
                         );
+                        
+                        if (result === 'Open All') {
+                            // Open the split files in JSONL Gazelle
+                            for (const partPath of parts) {
+                                try {
+                                    const splitUri = vscode.Uri.file(partPath);
+                                    await vscode.commands.executeCommand(
+                                        'vscode.openWith',
+                                        splitUri,
+                                        'jsonl-gazelle.jsonlViewer',
+                                        vscode.ViewColumn.One
+                                    );
+                                } catch (err) {
+                                    console.error(`Error opening ${partPath}:`, err);
+                                }
+                            }
+                        }
                     }
                     break;
             }
@@ -297,8 +366,8 @@ function getLargeFileHtml(fileName: string, fileSizeMB: string, truncatedMB: str
     
     <div class="warning">
         ⚠️ <strong>File exceeds VS Code limit (${escapeHtml(fileSizeMB)}MB > 100MB)</strong><br>
-        Showing first ${escapeHtml(truncatedMB)}MB (${escapeHtml(lineCount)} lines). Editing in Gazelle is unavailable.<br>
-        <small>💡 Use the button below to open the full file in the standard editor.</small>
+        Showing first ${escapeHtml(truncatedMB)}MB (${escapeHtml(lineCount)} lines). Split into parts to edit in JSONL Gazelle.<br>
+        <small>💡 Use the button below to split the file into editable parts.</small>
     </div>
     
     <div class="stats">
@@ -321,8 +390,7 @@ function getLargeFileHtml(fileName: string, fileSizeMB: string, truncatedMB: str
     </div>
     
     <div class="actions">
-        <button id="splitBtn" onclick="handleSplitFile()">✂️ Split File into Parts &lt;50MB</button>
-        <button onclick="vscode.postMessage({ command: 'openInSystem' })">📝 Open in Text Editor (may be slow)</button>
+        <button id="splitBtn" onclick="handleSplitFile()">✂️ Split into Parts</button>
     </div>
     
     <div class="content">${escapeHtml(content)}</div>
@@ -354,86 +422,130 @@ async function splitLargeFile(inputPath: string, maxSizeMB: number = 50): Promis
         
         let currentWriteStream: fs.WriteStream | null = null;
         let currentSize = 0;
-        let partialLine = '';
         let partNumber = 1;
+        let isClosing = false;
+        let bufferedLines: string[] = [];
         
-        let isCreatingPart = false;
-        
-        const createPart = async () => {
-            if (isCreatingPart || !currentWriteStream) return;
+        // Helper to write a line (handles buffering during stream transitions)
+        const writeLine = (line: string) => {
+            if (isClosing) {
+                bufferedLines.push(line);
+                return;
+            }
             
-            isCreatingPart = true;
-            currentWriteStream.end();
+            if (!currentWriteStream) {
+                bufferedLines.push(line);
+                return;
+            }
             
-            await new Promise<void>((res) => {
-                if (currentWriteStream) {
-                    currentWriteStream.once('finish', () => {
-                        isCreatingPart = false;
-                        const partPath = path.join(dir, `${base}_part${partNumber}${ext}`);
-                        parts.push(partPath);
-                        currentWriteStream = fs.createWriteStream(partPath);
-                        currentSize = 0;
+            try {
+                const lineSize = Buffer.byteLength(line, 'utf8');
+                
+                // Check if we need a new part
+                if (currentSize + lineSize > maxSize && currentSize > 0) {
+                    // Start new part
+                    const oldStream = currentWriteStream;
+                    isClosing = true;
+                    bufferedLines.push(line);
+                    
+                    oldStream.end(() => {
+                        // Create new part
+                        const newPartPath = path.join(dir, `${base}_part${partNumber}${ext}`);
+                        parts.push(newPartPath);
                         partNumber++;
-                        res();
+                        
+                        currentWriteStream = fs.createWriteStream(newPartPath);
+                        currentSize = 0;
+                        isClosing = false;
+                        
+                        // Write buffered lines
+                        const linesToProcess = [...bufferedLines];
+                        bufferedLines = [];
+                        linesToProcess.forEach(l => writeLine(l));
                     });
                 } else {
-                    isCreatingPart = false;
-                    res();
+                    // Write to current stream
+                    currentWriteStream.write(line);
+                    currentSize += lineSize;
                 }
-            });
+            } catch (err) {
+                // If write fails, buffer and continue
+                bufferedLines.push(line);
+            }
         };
         
-        // Create first part synchronously
+        // Create first part
         const firstPartPath = path.join(dir, `${base}_part${partNumber}${ext}`);
         parts.push(firstPartPath);
         currentWriteStream = fs.createWriteStream(firstPartPath);
         currentSize = 0;
         partNumber++;
         
+        let partialLine = '';
+        
         const stream = fs.createReadStream(inputPath, {
             encoding: 'utf8',
-            highWaterMark: 64 * 1024
+            highWaterMark: 64 * 1024,
+            autoClose: true
         });
         
-        stream.on('data', async (chunk: string) => {
+        stream.on('data', (chunk: string) => {
             const data = partialLine + chunk;
             const lines = data.split('\n');
             partialLine = lines.pop() || '';
             
-            for (const line of lines) {
-                // Preserve all lines, including empty ones
-                const lineToWrite = line + '\n';
-                const lineSize = Buffer.byteLength(lineToWrite, 'utf8');
-                
-                if (currentSize + lineSize > maxSize && currentSize > 0) {
-                    await createPart();
-                }
-                
-                if (currentWriteStream) {
-                    currentWriteStream.write(lineToWrite);
-                    currentSize += lineSize;
-                }
-            }
+            lines.forEach(line => {
+                writeLine(line + '\n');
+            });
         });
         
         stream.on('end', () => {
-            if (partialLine && currentWriteStream) {
-                currentWriteStream.write(partialLine + '\n');
-                partialLine = '';
+            // Write final partial line
+            if (partialLine) {
+                writeLine(partialLine + '\n');
             }
             
-            if (currentWriteStream) {
-                currentWriteStream.end();
-            }
+            // Wait for any pending writes and close the last stream
+            const closeLastStream = () => {
+                if (currentWriteStream && !currentWriteStream.destroyed) {
+                    const streamToClose = currentWriteStream;
+                    currentWriteStream = null;
+                    
+                    streamToClose.end(() => {
+                        // Ensure all buffered lines are processed
+                        if (bufferedLines.length > 0) {
+                            const newPartPath = path.join(dir, `${base}_part${partNumber}${ext}`);
+                            parts.push(newPartPath);
+                            
+                            const finalStream = fs.createWriteStream(newPartPath);
+                            bufferedLines.forEach(line => {
+                                finalStream.write(line);
+                            });
+                            finalStream.end(() => {
+                                resolve(parts);
+                            });
+                        } else {
+                            resolve(parts);
+                        }
+                    });
+                } else if (bufferedLines.length > 0) {
+                    const newPartPath = path.join(dir, `${base}_part${partNumber}${ext}`);
+                    parts.push(newPartPath);
+                    
+                    const finalStream = fs.createWriteStream(newPartPath);
+                    bufferedLines.forEach(line => {
+                        finalStream.write(line);
+                    });
+                    finalStream.end(() => {
+                        resolve(parts);
+                    });
+                } else {
+                    resolve(parts);
+                }
+            };
             
-            // Wait for stream to finish
-            if (currentWriteStream) {
-                currentWriteStream.once('finish', () => {
-                    setTimeout(() => resolve(parts), 200);
-                });
-            } else {
-                setTimeout(() => resolve(parts), 200);
-            }
+            // Give some time for any pending async operations
+            setTimeout(closeLastStream, 100);
         });
         
         stream.on('error', (err) => reject(err));
