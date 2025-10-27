@@ -33,7 +33,9 @@
   },
   "license": "MIT",
   "activationEvents": [
-    "onCustomEditor:jsonl-gazelle.jsonlViewer"
+    "onStartupFinished",
+    "onCustomEditor:jsonl-gazelle.jsonlViewer",
+    "onCommand:jsonl-gazelle.openLargeFile"
   ],
   "main": "./out/extension.js",
   "contributes": {
@@ -45,7 +47,8 @@
           {
             "filenamePattern": "*.jsonl"
           }
-        ]
+        ],
+        "priority": "default"
       }
     ],
     "commands": [
@@ -58,6 +61,12 @@
         "command": "jsonl-gazelle.exportCSV",
         "title": "Export to CSV",
         "category": "JSONL Gazelle"
+      },
+      {
+        "command": "jsonl-gazelle.openLargeFile",
+        "title": "Split into Parts (100MB+)",
+        "category": "JSONL Gazelle",
+        "icon": "$(file)"
       }
     ],
     "menus": {
@@ -69,6 +78,17 @@
         {
           "command": "jsonl-gazelle.exportCSV",
           "when": "resourceExtname == .jsonl"
+        },
+        {
+          "command": "jsonl-gazelle.openLargeFile",
+          "when": "resourceExtname == .jsonl"
+        }
+      ],
+      "explorer/context": [
+        {
+          "command": "jsonl-gazelle.openLargeFile",
+          "when": "resourceExtname == .jsonl",
+          "group": "navigation"
         }
       ]
     }
