@@ -2169,6 +2169,9 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
                 return index >= 0 ? index : this.filteredRows.indexOf(row);
             });
 
+            // Generate pretty-printed content with line mapping
+            const prettyResult = this.convertJsonlToPrettyWithLineNumbers(this.rows);
+
             webviewPanel.webview.postMessage({
                 type: 'update',
                 data: {
@@ -2180,6 +2183,8 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
                     searchTerm: this.searchTerm,
                     parsedLines: this.parsedLines || [],
                     rawContent: this.rawContent || '',
+                    prettyContent: prettyResult.content,
+                    prettyLineMapping: prettyResult.lineMapping,
                     errorCount: this.errorCount,
                     loadingProgress: {
                         loadedLines: this.loadedLines,

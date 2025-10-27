@@ -572,17 +572,23 @@ export const scripts = `
 
         // Keyboard shortcuts for Find/Replace
         document.addEventListener('keydown', (e) => {
-            // Cmd/Ctrl + F: Open Find
+            // Cmd/Ctrl + F: Open Find (only for Table view, Monaco handles it for others)
             if ((e.metaKey || e.ctrlKey) && e.key === 'f') {
-                e.preventDefault();
-                openFindReplaceBar();
+                if (currentView === 'table') {
+                    e.preventDefault();
+                    openFindReplaceBar();
+                }
+                // For 'json' and 'raw' views, let Monaco's built-in Find widget handle it
             }
 
-            // Cmd/Ctrl + H: Open Find/Replace
+            // Cmd/Ctrl + H: Open Find/Replace (only for Table view)
             if ((e.metaKey || e.ctrlKey) && e.key === 'h') {
-                e.preventDefault();
-                openFindReplaceBar();
-                document.getElementById('replaceInput').focus();
+                if (currentView === 'table') {
+                    e.preventDefault();
+                    openFindReplaceBar();
+                    document.getElementById('replaceInput').focus();
+                }
+                // For 'json' and 'raw' views, let Monaco's built-in Find widget handle it
             }
 
             // Escape: Close bar
@@ -606,14 +612,17 @@ export const scripts = `
                 }
             }
 
-            // F3 or Cmd/Ctrl+G: Find next
+            // F3 or Cmd/Ctrl+G: Find next (only for Table view)
             if (e.key === 'F3' || ((e.metaKey || e.ctrlKey) && e.key === 'g')) {
-                e.preventDefault();
-                if (e.shiftKey) {
-                    findPrevious();
-                } else {
-                    findNext();
+                if (currentView === 'table') {
+                    e.preventDefault();
+                    if (e.shiftKey) {
+                        findPrevious();
+                    } else {
+                        findNext();
+                    }
                 }
+                // For 'json' and 'raw' views, let Monaco handle Find Next/Previous
             }
         });
 
