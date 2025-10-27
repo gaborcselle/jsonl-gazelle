@@ -242,15 +242,35 @@ export const scripts = `
                     const text = cell.dataset.rawValue !== undefined ? cell.dataset.rawValue : cell.textContent;
                     const matches = [...text.matchAll(pattern)];
 
+                    // Get the row index from the cell's parent row
+                    const row = cell.closest('tr');
+                    const rowIndex = row ? parseInt(row.dataset.index) || 0 : 0;
+                    const cellIndexInRow = Array.from(row.children).indexOf(cell);
+
                     matches.forEach(match => {
                         findReplaceState.matches.push({
                             element: cell,
                             text: text,
                             match: match[0],
                             index: match.index,
-                            cellIndex: index
+                            cellIndex: index,
+                            rowIndex: rowIndex,
+                            cellIndexInRow: cellIndexInRow,
+                            matchIndexInCell: match.index
                         });
                     });
+                });
+
+                // Sort matches by row, then by cell position in row, then by position in cell
+                // This ensures top-to-bottom, left-to-right order
+                findReplaceState.matches.sort((a, b) => {
+                    if (a.rowIndex !== b.rowIndex) {
+                        return a.rowIndex - b.rowIndex;
+                    }
+                    if (a.cellIndexInRow !== b.cellIndexInRow) {
+                        return a.cellIndexInRow - b.cellIndexInRow;
+                    }
+                    return a.matchIndexInCell - b.matchIndexInCell;
                 });
             } else if (currentView === 'json') {
                 // Search in JSON view
@@ -2406,11 +2426,11 @@ export const scripts = `
                 case 'json':
                     document.getElementById('jsonViewContainer').style.display = 'block';
                     document.getElementById('jsonViewContainer').classList.add('isolated');
-                    // Hide column controls for json view (but show Find & Replace)
+                    // Hide column controls for json view (Monaco has its own Find & Replace)
                     columnManagerBtn.style.display = 'none';
                     wrapTextControl.style.display = 'none';
-                    findReplaceBtn.style.display = 'flex';
-                    
+                    findReplaceBtn.style.display = 'none';
+
                     // Add event isolation to prevent bubbling
                     const jsonContainer = document.getElementById('jsonViewContainer');
                     jsonContainer.addEventListener('dblclick', function(e) {
@@ -2419,13 +2439,13 @@ export const scripts = `
                     jsonContainer.addEventListener('click', function(e) {
                         e.stopPropagation();
                     });
-                    
+
                     // Use setTimeout to allow the loading animation to show before rendering
                     // Longer delay for larger datasets to ensure smooth animation
                     const jsonDelay = currentData.rows.length > 1000 ? 100 : 50;
                     setTimeout(() => {
-                        updateJsonView();
-                        // Hide loading state after JSON view is rendered
+                        updatePrettyView();
+                        // Hide loading state after Pretty Print view is rendered
                         logo.classList.remove('loading');
                         loadingState.style.display = 'none';
                     }, jsonDelay);
@@ -2459,14 +2479,79 @@ export const scripts = `
             }, 0);
         }
         
-        function updateJsonView() {
-            renderJsonChunk(true);
-            requestAnimationFrame(() => {
-                ensureJsonViewportFilled();
-                restoreScrollPosition('json');
+        let prettyEditor = null;
+
+        function updatePrettyView() {
+            const editorContainer = document.getElementById('prettyEditor');
+            if (!editorContainer) return;
+
+            // Initialize Monaco Editor for Pretty Print
+            require.config({ paths: { 'vs': 'https://cdn.jsdelivr.net/npm/monaco-editor@0.44.0/min/vs' } });
+            require(['vs/editor/editor.main'], function () {
+                if (prettyEditor) {
+                    prettyEditor.dispose();
+                }
+
+                // Use pre-formatted pretty content from Extension Host
+                const prettyContent = currentData.prettyContent || '';
+                const lineMapping = currentData.prettyLineMapping || [];
+
+                prettyEditor = monaco.editor.create(editorContainer, {
+                    value: prettyContent,
+                    language: 'json',
+                    theme: 'vs-dark',
+                    automaticLayout: true,
+                    scrollBeyondLastLine: false,
+                    minimap: { enabled: false },
+                    wordWrap: 'on',
+                    lineNumbers: lineMapping.length > 0 ? (lineNumber) => {
+                        // Use custom line numbers based on mapping
+                        if (lineNumber <= lineMapping.length) {
+                            const mappedNumber = lineMapping[lineNumber - 1];
+                            // If mappedNumber is 0, don't show line number (empty string)
+                            return mappedNumber === 0 ? '' : mappedNumber.toString();
+                        }
+                        return lineNumber.toString();
+                    } : 'on',
+                    folding: true,
+                    fontSize: 12,
+                    fontFamily: 'var(--vscode-editor-font-family)'
+                });
+
+                // Disable JSON validation for JSONL files
+                monaco.languages.json.jsonDefaults.setDiagnosticsOptions({
+                    validate: false,
+                    allowComments: true,
+                    schemas: []
+                });
+
+                // Additionally disable validation for current model
+                const model = prettyEditor.getModel();
+                if (model) {
+                    monaco.editor.setModelMarkers(model, 'json', []);
+                }
+
+                // Add change listener with debounce
+                prettyEditor.onDidChangeModelContent(() => {
+                    clearTimeout(window.prettyEditTimeout);
+                    window.prettyEditTimeout = setTimeout(() => {
+                        vscode.postMessage({
+                            type: 'prettyContentChanged',
+                            newContent: prettyEditor.getValue()
+                        });
+                    }, 500);
+                });
+
+                // Handle Ctrl+S
+                prettyEditor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyS, () => {
+                    vscode.postMessage({
+                        type: 'prettyContentSave',
+                        newContent: prettyEditor.getValue()
+                    });
+                });
             });
         }
-        
+
         let rawEditor = null;
         
         function updateRawView() {

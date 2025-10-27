@@ -29,8 +29,7 @@ ${styles}
                 <div class="error-count" id="errorCount" style="display: none;"></div>
             </div>
             <button class="column-manager-btn" id="findReplaceBtn" title="Find and Replace in cells (Cmd+F)">
-                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"></circle><path d="m21 21-4.35-4.35"></path><path d="M9 15l6-6"></path></svg>
-                Find & Replace
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"></circle><path d="m21 21-4.35-4.35"></path></svg>
             </button>
             <button class="column-manager-btn" id="columnManagerBtn" title="Show/hide columns and reorder them">
                 <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3h7a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-7m0-18H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h7m0-18v18"></path></svg>
@@ -100,7 +99,7 @@ ${styles}
             
             <!-- Pretty Print View Container -->
             <div class="view-container" id="jsonViewContainer" style="display: none;">
-                <div class="json-view" id="jsonView"></div>
+                <div id="prettyEditor" style="height: 100%; width: 100%;"></div>
             </div>
             
             <!-- Raw View Container -->
