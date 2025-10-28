@@ -2419,6 +2419,9 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
         const gazelleIconUri = webview.asWebviewUri(
             vscode.Uri.joinPath(this.context.extensionUri, 'gazelle.svg')
         );
+        const gazelleAnimationUri = webview.asWebviewUri(
+            vscode.Uri.joinPath(this.context.extensionUri, 'gazelle-animation.gif')
+        );
 
         return `<!DOCTYPE html>
 <html lang="en">
@@ -3530,7 +3533,10 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
 </head>
 <body>
     <div class="header">
-        <img src="${gazelleIconUri}" class="logo" alt="JSONL Gazelle" id="logo" title="JSONL Gazelle" style="cursor: pointer;">
+        <div class="logo-container" style="position: relative; width: 32px; height: 32px;">
+            <img src="${gazelleIconUri}" class="logo" alt="JSONL Gazelle" id="logo" title="JSONL Gazelle" style="cursor: pointer;">
+            <img src="${gazelleAnimationUri}" class="logo-animation" id="logoAnimation" alt="Loading..." style="display: none; position: absolute; top: 0; left: 0; width: 32px; height: 32px;">
+        </div>
         <div class="loading-state" id="loadingState" style="display: none;">
             <div>Loading large file...</div>
             <div class="loading-progress" id="loadingProgress"></div>
@@ -3564,7 +3570,7 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
         
         <div class="table-container" id="tableContainer">
             <div class="indexing" id="indexingDiv">
-                <img src="${gazelleIconUri}" class="indexing-icon" alt="Indexing...">
+                <img src="${gazelleAnimationUri}" style="width: 32px; height: 32px;" alt="Indexing...">
                 <div>Indexing JSONL file...</div>
             </div>
             <!-- Table View Container -->
@@ -4672,8 +4678,10 @@ Available variables:
             const searchContainer = document.getElementById('searchContainer');
             
             if (data.isIndexing) {
-                // Initial loading - show spinning logo and hide controls
-                logo.classList.add('loading');
+                // Initial loading - show animated logo and hide controls
+                logo.style.display = 'none';
+                const logoAnimation = document.getElementById('logoAnimation');
+                if (logoAnimation) logoAnimation.style.display = 'block';
                 loadingState.style.display = 'flex';
                 searchContainer.classList.add('controls-hidden');
                 
@@ -4685,7 +4693,9 @@ Available variables:
             
             // Show loading progress if chunks are still loading
             if (data.loadingProgress && data.loadingProgress.loadingChunks) {
-                logo.classList.add('loading');
+                logo.style.display = 'none';
+                const logoAnimation = document.getElementById('logoAnimation');
+                if (logoAnimation) logoAnimation.style.display = 'block';
                 loadingState.style.display = 'flex';
                 searchContainer.classList.add('controls-hidden');
                 
@@ -4703,8 +4713,10 @@ Available variables:
                 document.getElementById('indexingDiv').style.display = 'none';
                 document.getElementById('dataTable').style.display = 'table';
             } else {
-                // Loading complete - show controls and stop spinning logo
-                logo.classList.remove('loading');
+                // Loading complete - show controls and hide animated logo
+                logo.style.display = 'block';
+                const logoAnimation = document.getElementById('logoAnimation');
+                if (logoAnimation) logoAnimation.style.display = 'none';
                 loadingState.style.display = 'none';
                 searchContainer.classList.remove('controls-hidden');
                 
@@ -5763,11 +5775,13 @@ Available variables:
             
             currentView = viewType;
             
-            // Show spinning gazelle during view switch
+            // Show animated gazelle during view switch
             const logo = document.getElementById('logo');
+            const logoAnimation = document.getElementById('logoAnimation');
             const loadingState = document.getElementById('loadingState');
             const searchContainer = document.getElementById('searchContainer');
-            logo.classList.add('loading');
+            logo.style.display = 'none';
+            if (logoAnimation) logoAnimation.style.display = 'block';
             loadingState.style.display = 'flex';
             loadingState.innerHTML = '<div>Switching view...</div>';
             
@@ -5799,7 +5813,8 @@ Available variables:
                     // Show search container for table view
                     searchContainer.style.display = 'flex';
                     // Hide loading state immediately for table view (already rendered)
-                    logo.classList.remove('loading');
+                    logo.style.display = 'block';
+                    if (logoAnimation) logoAnimation.style.display = 'none';
                     loadingState.style.display = 'none';
                     searchContainer.classList.remove('controls-hidden');
                     requestAnimationFrame(ensureTableViewportFilled);
@@ -5828,7 +5843,8 @@ Available variables:
                     setTimeout(() => {
                         updatePrettyView();
                         // Hide loading state after pretty view is rendered
-                        logo.classList.remove('loading');
+                        logo.style.display = 'block';
+                        if (logoAnimation) logoAnimation.style.display = 'none';
                         loadingState.style.display = 'none';
                         searchContainer.classList.remove('controls-hidden');
                     }, jsonDelay);
@@ -5846,7 +5862,8 @@ Available variables:
                     setTimeout(() => {
                         updateRawView();
                         // Hide loading state after raw view is rendered
-                        logo.classList.remove('loading');
+                        logo.style.display = 'block';
+                        if (logoAnimation) logoAnimation.style.display = 'none';
                         loadingState.style.display = 'none';
                         searchContainer.classList.remove('controls-hidden');
                         
