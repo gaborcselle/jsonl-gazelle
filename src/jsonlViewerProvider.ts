@@ -1031,34 +1031,34 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
             const insertIndex = position === 'before' ? refColumnIndex : refColumnIndex + 1;
             this.columns.splice(insertIndex, 0, newColumn);
 
-            // Add null values to all rows for the new column (will be filled by AI)
+            // Add "generating" values to all rows for the new column (will be filled by AI)
             this.rows.forEach(row => {
                 const newRow: JsonRow = {};
                 let inserted = false;
 
                 for (const key of Object.keys(row)) {
                     if (key === referenceColumn && position === 'before' && !inserted) {
-                        newRow[columnName] = null;
+                        newRow[columnName] = "generating";
                         inserted = true;
                     }
 
                     newRow[key] = row[key];
 
                     if (key === referenceColumn && position === 'after' && !inserted) {
-                        newRow[columnName] = null;
+                        newRow[columnName] = "generating";
                         inserted = true;
                     }
                 }
 
                 if (!inserted) {
-                    newRow[columnName] = null;
+                    newRow[columnName] = "generating";
                 }
 
                 Object.keys(row).forEach(key => delete row[key]);
                 Object.assign(row, newRow);
             });
 
-            // Update webview to show the column with null values
+            // Update webview to show the column with "generating" values
             this.updateWebview(webviewPanel);
 
             // Now fill the column with AI-generated content
