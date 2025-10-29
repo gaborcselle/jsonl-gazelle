@@ -125,7 +125,7 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
                                 await this.handleAddColumn(message.columnName, message.position, message.referenceColumn, webviewPanel, document);
                                 break;
                             case 'addAIColumn':
-                                await this.handleAddAIColumn(message.columnName, message.promptTemplate, message.position, message.referenceColumn, webviewPanel, document);
+                                await this.handleAddAIColumn(message.columnName, message.promptTemplate, message.position, message.referenceColumn, webviewPanel, document, message.enumValues);
                                 break;
                             case 'getSettings':
                                 await this.handleGetSettings(webviewPanel);
@@ -951,7 +951,8 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
         position: 'before' | 'after',
         referenceColumn: string,
         webviewPanel: vscode.WebviewPanel,
-        document: vscode.TextDocument
+        document: vscode.TextDocument,
+        enumValues?: string[] | null
     ) {
         // Set isUpdating flag at the very start to prevent any reloads
         this.isUpdating = true;
@@ -1062,7 +1063,7 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
             this.updateWebview(webviewPanel);
 
             // Now fill the column with AI-generated content
-            await this.fillColumnWithAI(columnName, promptTemplate, webviewPanel, document);
+            await this.fillColumnWithAI(columnName, promptTemplate, webviewPanel, document, enumValues || null);
 
         } catch (error) {
             // Rollback: Remove the column that was just added
@@ -1107,7 +1108,8 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
         columnName: string,
         promptTemplate: string,
         webviewPanel: vscode.WebviewPanel,
-        document: vscode.TextDocument
+        document: vscode.TextDocument,
+        enumValues: string[] | null = null
     ) {
         const totalRows = this.rows.length;
 
@@ -1129,7 +1131,7 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
                 const batch = [];
 
                 for (let j = i; j < endIndex; j++) {
-                    batch.push(this.generateAIValueForRow(j, promptTemplate, totalRows));
+                    batch.push(this.generateAIValueForRow(j, promptTemplate, totalRows, enumValues));
                 }
 
                 // Wait for all promises in the batch to resolve
@@ -1201,14 +1203,38 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
         }
     }
 
-    private async generateAIValueForRow(rowIndex: number, promptTemplate: string, totalRows: number): Promise<string> {
+    private async generateAIValueForRow(rowIndex: number, promptTemplate: string, totalRows: number, enumValues: string[] | null = null): Promise<string> {
         const row = this.rows[rowIndex];
 
-        // Replace template variables
-        const prompt = this.replaceTemplateVariables(promptTemplate, row, rowIndex, totalRows);
+        // Replace template variables (use empty string if template is empty)
+        let prompt = promptTemplate ? this.replaceTemplateVariables(promptTemplate, row, rowIndex, totalRows) : '';
+
+        // If enum values are provided, add them to the prompt with instructions
+        if (enumValues && enumValues.length > 0) {
+            // Shuffle enum values to avoid bias towards first value
+            // Create a shuffled copy to present values in random order
+            const shuffledEnum = [...enumValues].sort(() => Math.random() - 0.5);
+            const enumList = shuffledEnum.join(', ');
+            
+            // If prompt is empty, add a built-in request for enum selection
+            if (!prompt) {
+                prompt = `Based on the following row data, select the most appropriate value from the provided enum list that best matches the context:\n\n${JSON.stringify(row, null, 2)}`;
+            }
+            
+            prompt += `\n\nIMPORTANT: You must respond with EXACTLY one of these values: ${enumList}
+
+CRITICAL INSTRUCTIONS:
+- Analyze the input context carefully
+- Do NOT default to any particular value - consider ALL options equally
+- Each value in the list is equally valid - choose based on context matching
+- Select the value that BEST matches the input context
+- Vary your selection based on different contexts - do not use the same value for all inputs
+
+Available values (in random order): ${enumList}`;
+        }
 
         // Call the language model API (let errors bubble up)
-        const result = await this.callLanguageModel(prompt);
+        const result = await this.callLanguageModel(prompt, enumValues);
 
         return result;
     }
@@ -1242,7 +1268,7 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
         return result;
     }
 
-    private async callLanguageModel(prompt: string): Promise<string> {
+    private async callLanguageModel(prompt: string, enumValues: string[] | null = null): Promise<string> {
         const apiKey = await this.context.secrets.get('openaiApiKey');
         if (!apiKey) {
             throw new Error('OpenAI API key not configured. Please set it in AI Settings.');
@@ -1253,19 +1279,53 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
 
         const model = this.context.globalState.get<string>('openaiModel', 'gpt-4.1-mini');
 
+        const requestBody: any = {
+            model: model,
+            messages: [],
+            // Increase temperature when using enum to get more varied responses
+            temperature: enumValues && enumValues.length > 0 ? 0.9 : 0.7
+        };
+
+        // If enum values are provided, add system message and use structured outputs API
+        if (enumValues && enumValues.length > 0) {
+            // Add system message with clear instructions
+            requestBody.messages.push({
+                role: 'system',
+                content: `You are a helpful assistant. When asked to choose from a list of values, you must analyze the context and select the MOST APPROPRIATE value from the provided list. Do not default to the first value - carefully evaluate which value best fits the context.`
+            });
+            
+            // Create JSON schema for enum output
+            requestBody.response_format = {
+                type: 'json_schema',
+                json_schema: {
+                    name: 'enum_response',
+                    strict: true,
+                    schema: {
+                        type: 'object',
+                        properties: {
+                            value: {
+                                type: 'string',
+                                enum: enumValues,
+                                description: `You MUST select exactly ONE value from this list: ${enumValues.join(', ')}. Choose based on careful analysis of the input context, not by default.`
+                            }
+                        },
+                        required: ['value'],
+                        additionalProperties: false
+                    }
+                }
+            };
+        }
+        
+        // Add user message
+        requestBody.messages.push({ role: 'user', content: prompt });
+
         const response = await fetch('https://api.openai.com/v1/chat/completions', {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json',
                 'Authorization': `Bearer ${trimmedApiKey}`
             },
-            body: JSON.stringify({
-                model: model,
-                messages: [
-                    { role: 'user', content: prompt }
-                ],
-                temperature: 0.7
-            })
+            body: JSON.stringify(requestBody)
         });
 
         if (!response.ok) {
@@ -1274,6 +1334,40 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
         }
 
         const data = await response.json();
+        
+        // If using structured outputs, parse the JSON response
+        if (enumValues && enumValues.length > 0) {
+            const content = data.choices[0].message.content.trim();
+            
+            try {
+                // Try to parse as JSON first
+                const parsed = JSON.parse(content);
+                
+                // Validate that the returned value is in the enum list
+                if (parsed.value && enumValues.includes(parsed.value)) {
+                    return parsed.value;
+                }
+                
+                // If value is not in enum (shouldn't happen with strict mode), throw error
+                throw new Error(`Returned value "${parsed.value}" is not in the allowed enum list: ${enumValues.join(', ')}`);
+            } catch (error) {
+                // Fallback: if JSON parsing failed, try to match content as string
+                
+                // If the content is already a valid enum value (exact match), return it
+                if (enumValues.includes(content)) {
+                    return content;
+                }
+                
+                // Try case-insensitive match
+                const matchedValue = enumValues.find(val => val.toLowerCase() === content.toLowerCase());
+                if (matchedValue) {
+                    return matchedValue;
+                }
+                
+                throw new Error(`Failed to parse structured output: ${error instanceof Error ? error.message : 'Unknown error'}. Content: ${content.substring(0, 100)}`);
+            }
+        }
+        
         return data.choices[0].message.content.trim();
     }
 

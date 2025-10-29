@@ -878,8 +878,23 @@ export const scripts = `
             const modal = document.getElementById('aiColumnModal');
             const nameInput = document.getElementById('aiColumnName');
             const promptInput = document.getElementById('aiPrompt');
+            const useEnumCheckbox = document.getElementById('aiUseEnum');
+            const enumValuesInput = document.getElementById('aiEnumValues');
+            
             nameInput.value = '';
             promptInput.value = '';
+            useEnumCheckbox.checked = false;
+            enumValuesInput.value = '';
+            enumValuesInput.style.display = 'none';
+            enumValuesInput.disabled = true;
+            
+            // Reset prompt required attribute and label
+            const promptLabel = document.querySelector('label[for="aiPrompt"]');
+            promptInput.setAttribute('required', 'required');
+            if (promptLabel) {
+                promptLabel.textContent = promptLabel.textContent.replace(' (optional):', ':');
+            }
+            
             modal.classList.add('show');
 
             // Focus name input
@@ -888,27 +903,65 @@ export const scripts = `
 
         function closeAIColumnModal() {
             const modal = document.getElementById('aiColumnModal');
+            const useEnumCheckbox = document.getElementById('aiUseEnum');
+            const enumValuesInput = document.getElementById('aiEnumValues');
+            const promptInput = document.getElementById('aiPrompt');
+            const promptLabel = document.querySelector('label[for="aiPrompt"]');
+            
             modal.classList.remove('show');
             aiColumnPosition = null;
             aiColumnReferenceColumn = null;
+            useEnumCheckbox.checked = false;
+            enumValuesInput.value = '';
+            enumValuesInput.style.display = 'none';
+            enumValuesInput.disabled = true;
+            
+            // Reset prompt required attribute and label
+            promptInput.setAttribute('required', 'required');
+            if (promptLabel) {
+                promptLabel.textContent = promptLabel.textContent.replace(' (optional):', ':');
+            }
         }
 
         function confirmAIColumn() {
             const nameInput = document.getElementById('aiColumnName');
             const promptInput = document.getElementById('aiPrompt');
+            const useEnumCheckbox = document.getElementById('aiUseEnum');
+            const enumValuesInput = document.getElementById('aiEnumValues');
+            
             const columnName = nameInput.value.trim();
             const promptTemplate = promptInput.value.trim();
+            const useEnum = useEnumCheckbox.checked;
+            const enumValues = enumValuesInput.value.trim();
 
-            if (!columnName || !promptTemplate) {
-                return; // Don't proceed without both inputs
+            // Column name is always required
+            if (!columnName) {
+                return;
             }
+
+            // Prompt is required unless enum is selected
+            if (!useEnum && !promptTemplate) {
+                return;
+            }
+
+            // Enum values are required when enum is selected
+            if (useEnum && !enumValues) {
+                // Show error or warning
+                enumValuesInput.focus();
+                return;
+            }
+
+            const enumArray = useEnum && enumValues 
+                ? enumValues.split(',').map(v => v.trim()).filter(v => v.length > 0)
+                : null;
 
             vscode.postMessage({
                 type: 'addAIColumn',
                 columnName: columnName,
-                promptTemplate: promptTemplate,
+                promptTemplate: promptTemplate || '', // Send empty string if no prompt
                 position: aiColumnPosition,
-                referenceColumn: aiColumnReferenceColumn
+                referenceColumn: aiColumnReferenceColumn,
+                enumValues: enumArray
             });
 
             closeAIColumnModal();
@@ -935,6 +988,36 @@ export const scripts = `
         document.getElementById('aiPrompt').addEventListener('keydown', (e) => {
             if (e.key === 'Escape') {
                 closeAIColumnModal();
+            }
+        });
+        
+        // Enum checkbox toggle
+        document.getElementById('aiUseEnum').addEventListener('change', (e) => {
+            const useEnum = e.target.checked;
+            const enumValuesInput = document.getElementById('aiEnumValues');
+            const promptInput = document.getElementById('aiPrompt');
+            const promptLabel = document.querySelector('label[for="aiPrompt"]');
+            
+            if (useEnum) {
+                enumValuesInput.style.display = 'block';
+                enumValuesInput.disabled = false;
+                // Remove required attribute from prompt when enum is selected
+                promptInput.removeAttribute('required');
+                // Update label to indicate prompt is optional
+                if (promptLabel && !promptLabel.textContent.includes('(optional')) {
+                    promptLabel.textContent = promptLabel.textContent.replace(':', ' (optional):');
+                }
+                setTimeout(() => enumValuesInput.focus(), 100);
+            } else {
+                enumValuesInput.style.display = 'none';
+                enumValuesInput.disabled = true;
+                enumValuesInput.value = '';
+                // Add required attribute back to prompt when enum is not selected
+                promptInput.setAttribute('required', 'required');
+                // Restore original label
+                if (promptLabel) {
+                    promptLabel.textContent = promptLabel.textContent.replace(' (optional):', ':');
+                }
             }
         });
 
