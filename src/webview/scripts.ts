@@ -1343,8 +1343,10 @@ export const scripts = `
             const loadingProgress = document.getElementById('loadingProgress');
             
             if (data.isIndexing) {
-                // Initial loading - show spinning logo and hide controls
-                logo.classList.add('loading');
+                // Initial loading - show animated logo and hide controls
+                logo.style.display = 'none';
+                const logoAnimation = document.getElementById('logoAnimation');
+                if (logoAnimation) logoAnimation.style.display = 'block';
                 loadingState.style.display = 'flex';
                 
                 // Don't show the indexing div since we have header loading state
@@ -1355,7 +1357,9 @@ export const scripts = `
             
             // Show loading progress if chunks are still loading
             if (data.loadingProgress && data.loadingProgress.loadingChunks) {
-                logo.classList.add('loading');
+                logo.style.display = 'none';
+                const logoAnimation = document.getElementById('logoAnimation');
+                if (logoAnimation) logoAnimation.style.display = 'block';
                 loadingState.style.display = 'flex';
                 
                 const memoryInfo = data.loadingProgress.memoryOptimized ? 
@@ -1372,8 +1376,10 @@ export const scripts = `
                 document.getElementById('indexingDiv').style.display = 'none';
                 document.getElementById('dataTable').style.display = 'table';
             } else {
-                // Loading complete - show controls and stop spinning logo
-                logo.classList.remove('loading');
+                // Loading complete - show controls and hide animated logo
+                logo.style.display = 'block';
+                const logoAnimation = document.getElementById('logoAnimation');
+                if (logoAnimation) logoAnimation.style.display = 'none';
                 loadingState.style.display = 'none';
                 
                 document.getElementById('indexingDiv').style.display = 'none';
@@ -2398,10 +2404,12 @@ export const scripts = `
             
             currentView = viewType;
             
-            // Show spinning gazelle during view switch
+            // Show animated gazelle during view switch
             const logo = document.getElementById('logo');
+            const logoAnimation = document.getElementById('logoAnimation');
             const loadingState = document.getElementById('loadingState');
-            logo.classList.add('loading');
+            logo.style.display = 'none';
+            if (logoAnimation) logoAnimation.style.display = 'block';
             loadingState.style.display = 'flex';
             loadingState.innerHTML = '<div>Switching view...</div>';
             
@@ -2434,7 +2442,9 @@ export const scripts = `
                     findReplaceBtn.style.display = 'flex';
                     settingsBtn.style.display = 'flex';
                     // Hide loading state immediately for table view (already rendered)
-                    logo.classList.remove('loading');
+                    logo.style.display = 'block';
+                    const logoAnimation = document.getElementById('logoAnimation');
+                    if (logoAnimation) logoAnimation.style.display = 'none';
                     loadingState.style.display = 'none';
                     // Re-render table to apply any active search filters
                     renderTableChunk(true);
@@ -2463,8 +2473,10 @@ export const scripts = `
                     const jsonDelay = currentData.rows.length > 1000 ? 100 : 50;
                     setTimeout(() => {
                         updatePrettyView();
-                        // Hide loading state after Pretty Print view is rendered
-                        logo.classList.remove('loading');
+                        // Hide loading state after pretty view is rendered
+                        logo.style.display = 'block';
+                        const logoAnimation = document.getElementById('logoAnimation');
+                        if (logoAnimation) logoAnimation.style.display = 'none';
                         loadingState.style.display = 'none';
                     }, jsonDelay);
                     break;
@@ -2482,7 +2494,9 @@ export const scripts = `
                     setTimeout(() => {
                         updateRawView();
                         // Hide loading state after raw view is rendered
-                        logo.classList.remove('loading');
+                        logo.style.display = 'block';
+                        const logoAnimation = document.getElementById('logoAnimation');
+                        if (logoAnimation) logoAnimation.style.display = 'none';
                         loadingState.style.display = 'none';
 
                         // Automatically open file in VS Code editor
