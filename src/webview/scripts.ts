@@ -2325,7 +2325,7 @@ export const scripts = `
                     });
 
                     openaiKey.value = message.settings.openaiKey || '';
-                    openaiModel.value = message.settings.openaiModel || 'gpt-4o-mini';
+                    openaiModel.value = message.settings.openaiModel || 'gpt-4.1-mini';
 
                     // Update visibility based on provider
                     updateProviderSettings();

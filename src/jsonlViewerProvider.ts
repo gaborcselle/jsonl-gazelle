@@ -1251,7 +1251,7 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
         // Trim the API key to remove any whitespace
         const trimmedApiKey = apiKey.trim();
 
-        const model = this.context.globalState.get<string>('openaiModel', 'gpt-4o-mini');
+        const model = this.context.globalState.get<string>('openaiModel', 'gpt-4.1-mini');
 
         const response = await fetch('https://api.openai.com/v1/chat/completions', {
             method: 'POST',
@@ -1429,7 +1429,7 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
     private async handleGetSettings(webviewPanel: vscode.WebviewPanel) {
         try {
             const openaiKey = await this.context.secrets.get('openaiApiKey') || '';
-            const openaiModel = this.context.globalState.get<string>('openaiModel', 'gpt-4o-mini');
+            const openaiModel = this.context.globalState.get<string>('openaiModel', 'gpt-4.1-mini');
 
             webviewPanel.webview.postMessage({
                 type: 'settingsLoaded',

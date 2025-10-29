@@ -47,7 +47,7 @@ interface ColumnInfo {
 The extension includes built-in OpenAI API integration for processing JSONL data:
 
 ```typescript
-private async askAI(question: string, model: string = 'gpt-4o-mini') {
+private async askAI(question: string, model: string = 'gpt-4.1-mini') {
     // Processes each row with field reference syntax
     // {{fieldname.subname[0]}} gets replaced with actual values
 }
