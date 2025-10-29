@@ -58,22 +58,33 @@ export const scripts = `
             e.preventDefault();
             e.stopPropagation();
             
-            // Enable fixed layout when user starts resizing
+            // Don't start resizing on click - only on mouse movement
+            // Just prepare the resize data
             const table = document.getElementById('dataTable');
+            const colgroup = document.getElementById('tableColgroup');
+            const thead = table.querySelector('thead tr');
+            
+            // Ensure fixed layout and initialize column widths if needed
             if (table.style.tableLayout !== 'fixed') {
-                // Freeze all current widths before switching to fixed layout
-                const colgroup = document.getElementById('tableColgroup');
-                const thead = table.querySelector('thead tr');
                 if (colgroup && thead) {
                     const headers = thead.querySelectorAll('th');
                     const cols = colgroup.querySelectorAll('col');
                     headers.forEach((header, index) => {
-                        if (cols[index] && !cols[index].style.width) {
-                            const width = header.getBoundingClientRect().width;
-                            cols[index].style.width = width + 'px';
-                            
-                            // Save width for persistence
+                        if (cols[index]) {
+                            // Use saved width if available, otherwise measure current width
+                            let width;
                             const columnPath = cols[index].dataset.columnPath;
+                            if (columnPath && savedColumnWidths[columnPath]) {
+                                width = parseInt(savedColumnWidths[columnPath], 10);
+                            } else {
+                                width = header.getBoundingClientRect().width;
+                            }
+                            
+                            // Set explicit width for all columns
+                            cols[index].style.width = width + 'px';
+                            header.style.width = width + 'px';
+                            
+                            // Save width for persistence (except row number column)
                             if (columnPath) {
                                 savedColumnWidths[columnPath] = width + 'px';
                             }
@@ -83,29 +94,59 @@ export const scripts = `
                 table.style.tableLayout = 'fixed';
             }
             
-            isResizing = true;
+            // Get current width from colgroup or header
+            let currentWidth = th.offsetWidth;
+            const columnIndex = Array.from(th.parentNode.children).indexOf(th);
+            if (colgroup) {
+                const cols = colgroup.querySelectorAll('col');
+                if (cols[columnIndex] && cols[columnIndex].style.width) {
+                    currentWidth = parseInt(cols[columnIndex].style.width, 10);
+                }
+            }
+            
+            // Store resize data but don't set isResizing yet
             resizeData = {
                 th: th,
                 columnPath: columnPath,
                 startX: e.clientX,
-                startWidth: th.offsetWidth
+                startWidth: currentWidth,
+                hasMoved: false
             };
             
+            // Add listeners but only start resizing on actual movement
             document.body.classList.add('resizing');
-            document.addEventListener('mousemove', handleResize);
+            document.addEventListener('mousemove', handleResizeMove);
             document.addEventListener('mouseup', stopResize);
         }
         
-        function handleResize(e) {
-            if (!isResizing || !resizeData) return;
+        function handleResizeMove(e) {
+            if (!resizeData) {
+                stopResize();
+                return;
+            }
             
             const deltaX = e.clientX - resizeData.startX;
+            
+            // Only start resizing if mouse has actually moved
+            if (!resizeData.hasMoved && Math.abs(deltaX) < 1) {
+                return; // No movement, don't resize
+            }
+            
+            // Start resizing on first movement
+            if (!resizeData.hasMoved) {
+                resizeData.hasMoved = true;
+                isResizing = true;
+            }
+            
+            if (!isResizing) return;
+            
+            // Calculate new width: start width + pixels moved
             const newWidth = Math.max(50, resizeData.startWidth + deltaX);
             
             // Update the column width
             resizeData.th.style.width = newWidth + 'px';
             
-            // Update the corresponding col element in colgroup (if exists)
+            // Update the corresponding col element in colgroup
             const columnIndex = Array.from(resizeData.th.parentNode.children).indexOf(resizeData.th);
             const table = document.getElementById('dataTable');
             const colgroup = document.getElementById('tableColgroup');
@@ -123,9 +164,8 @@ export const scripts = `
                 }
             }
             
-            // Update all cells in this column (if not using fixed layout)
+            // Update all cells in this column
             const rows = table.querySelectorAll('tr');
-            
             rows.forEach(row => {
                 const cell = row.children[columnIndex];
                 if (cell) {
@@ -135,12 +175,10 @@ export const scripts = `
         }
         
         function stopResize() {
-            if (!isResizing) return;
-            
             isResizing = false;
             resizeData = null;
             document.body.classList.remove('resizing');
-            document.removeEventListener('mousemove', handleResize);
+            document.removeEventListener('mousemove', handleResizeMove);
             document.removeEventListener('mouseup', stopResize);
         }
 

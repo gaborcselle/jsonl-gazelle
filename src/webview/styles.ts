@@ -110,7 +110,7 @@ export const styles = `
         }
         
         table {
-            width: 100%;
+            width: fit-content;
             border-collapse: collapse;
             font-size: 12px;
             font-family: var(--vscode-editor-font-family);
