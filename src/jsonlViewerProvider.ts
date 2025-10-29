@@ -137,7 +137,7 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
                                 vscode.window.showWarningMessage('OpenAI API key is required for AI features. Please configure it in settings.');
                                 break;
                             case 'saveSettings':
-                                await this.handleSaveSettings(message.settings);
+                                await this.handleSaveSettings(message.settings, webviewPanel, message.openOriginalModal || false);
                                 break;
                             case 'generateAIRows':
                                 await this.handleGenerateAIRows(message.rowIndex, message.contextRowCount, message.rowCount, message.promptTemplate, webviewPanel, document);
@@ -1462,16 +1462,28 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
         }
     }
 
-    private async handleSaveSettings(settings: { openaiKey: string; openaiModel: string }) {
+    private async handleSaveSettings(settings: { openaiKey: string; openaiModel: string }, webviewPanel: vscode.WebviewPanel, openOriginalModal: boolean) {
         try {
             await this.context.globalState.update('openaiModel', settings.openaiModel);
 
             // Trim and save API key if provided
+            let keySaved = false;
             if (settings.openaiKey && settings.openaiKey.trim()) {
                 await this.context.secrets.store('openaiApiKey', settings.openaiKey.trim());
+                keySaved = true;
             }
 
             vscode.window.showInformationMessage('AI settings saved successfully');
+
+            // If key was saved and original modal should be opened, check key and notify webview
+            if (keySaved && openOriginalModal) {
+                // Verify key is stored
+                const storedKey = await this.context.secrets.get('openaiApiKey');
+                webviewPanel.webview.postMessage({
+                    type: 'settingsSaved',
+                    hasAPIKey: !!storedKey
+                });
+            }
         } catch (error) {
             vscode.window.showErrorMessage(`Failed to save settings: ${error instanceof Error ? error.message : 'Unknown error'}`);
             console.error('Error saving settings:', error);

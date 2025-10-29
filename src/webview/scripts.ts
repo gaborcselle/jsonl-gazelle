@@ -939,8 +939,22 @@ export const scripts = `
         });
 
         // Settings Modal
-        function openSettingsModal() {
+        // Store which modal should be opened after settings are saved
+        let pendingModalCallback = null;
+        let pendingModalArgs = null;
+
+        function openSettingsModal(showWarning = false, modalCallback = null, ...modalArgs) {
             const modal = document.getElementById('settingsModal');
+
+            // Store the callback and args if provided
+            pendingModalCallback = modalCallback;
+            pendingModalArgs = modalArgs;
+
+            // Show or hide warning based on parameter
+            const warningElement = document.getElementById('apiKeyWarning');
+            if (warningElement) {
+                warningElement.style.display = showWarning ? 'block' : 'none';
+            }
 
             // Request current settings from backend
             vscode.postMessage({ type: 'getSettings' });
@@ -965,7 +979,8 @@ export const scripts = `
                         vscode.postMessage({ 
                             type: 'showAPIKeyWarning' 
                         });
-                        openSettingsModal();
+                        // Open settings modal with warning and callback to open the original modal
+                        openSettingsModal(true, modalFunction, ...args);
                     }
                 }
             };
@@ -978,7 +993,7 @@ export const scripts = `
                 vscode.postMessage({ 
                     type: 'showAPIKeyWarning' 
                 });
-                openSettingsModal();
+                openSettingsModal(true, modalFunction, ...args);
             }, 5000);
             
             window.addEventListener('message', checkAPIKeyListener);
@@ -987,21 +1002,52 @@ export const scripts = `
         function closeSettingsModal() {
             const modal = document.getElementById('settingsModal');
             modal.classList.remove('show');
+            // Clear pending callback when closing
+            pendingModalCallback = null;
+            pendingModalArgs = null;
         }
 
         function saveSettings() {
             const openaiKey = document.getElementById('openaiKey').value;
             const openaiModel = document.getElementById('openaiModel').value;
 
+            // Store callback and args before they're cleared
+            const callback = pendingModalCallback;
+            const args = pendingModalArgs;
+
             vscode.postMessage({
                 type: 'saveSettings',
                 settings: {
                     openaiKey: openaiKey,
                     openaiModel: openaiModel
-                }
+                },
+                // Include callback info if available
+                openOriginalModal: !!callback
             });
 
             closeSettingsModal();
+
+            // If there was a pending modal callback and key was provided, wait for confirmation
+            if (callback && openaiKey && openaiKey.trim()) {
+                // Listen for settings saved confirmation from backend
+                const settingsSavedListener = (event) => {
+                    const message = event.data;
+                    if (message.type === 'settingsSaved') {
+                        window.removeEventListener('message', settingsSavedListener);
+                        
+                        if (message.hasAPIKey) {
+                            // Open the original modal
+                            callback(...args);
+                        }
+                    }
+                };
+                
+                window.addEventListener('message', settingsSavedListener);
+                // Cleanup after 5 seconds
+                setTimeout(() => {
+                    window.removeEventListener('message', settingsSavedListener);
+                }, 5000);
+            }
         }
 
         // Settings Modal event listeners

@@ -272,6 +272,10 @@ Available variables:
                 <button class="modal-close" id="settingsCloseBtn">&times;</button>
             </div>
             <div class="modal-body">
+                <div id="apiKeyWarning" style="display: none; margin-bottom: 16px; padding: 12px; background: rgba(255, 200, 0, 0.15); border-left: 3px solid #ffc800; border-radius: 4px; color: var(--vscode-errorForeground);">
+                    <strong style="display: block; margin-bottom: 4px;">⚠️ OpenAI API Key Required</strong>
+                    <span style="font-size: 12px;">The OpenAI API key is not set. Please enter your API key below to use AI features.</span>
+                </div>
                 
                     <label for="openaiKey" style="display: block; margin-bottom: 8px; font-weight: 500;">OpenAI API Key:</label>
                     <input type="text" id="openaiKey" class="column-name-input" placeholder="sk-..." />
@@ -290,9 +294,9 @@ Available variables:
                     </div>
                 </div>
 
-                <div class="modal-actions" style="margin-top: 16px;">
+                <div class="modal-actions" style="margin-top: 16px; margin-bottom: 16px;">
                     <button class="modal-button modal-button-primary" id="settingsSaveBtn">Save Settings</button>
-                    <button class="modal-button modal-button-secondary" id="settingsCancelBtn">Cancel</button>
+                    <button class="modal-button modal-button-secondary" id="settingsCancelBtn" style="margin-right: 16px;">Cancel</button>
                 </div>
             </div>
         </div>
