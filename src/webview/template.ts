@@ -255,6 +255,14 @@ Available variables:
                     • <code>{{rows_after}}</code> - number of rows after this one
                 </div>
 
+                <div style="margin-top: 16px; padding: 12px; background: rgba(255, 255, 255, 0.03); border-radius: 6px; border: 1px solid var(--vscode-input-border);">
+                    <label style="display: flex; align-items: center; margin-bottom: 8px; cursor: pointer;">
+                        <input type="checkbox" id="aiUseEnum" style="margin-right: 8px; cursor: pointer;" />
+                        <span style="font-weight: 500;">Restrict output to enum values</span>
+                    </label>
+                    <input type="text" id="aiEnumValues" class="column-name-input" placeholder="Enter values separated by comma, e.g., 1, 2, 3" 
+                           style="margin-top: 8px; display: none;" disabled />
+                </div>
 
                 <div class="modal-actions" style="margin-top: 16px;">
                     <button class="modal-button modal-button-primary" id="aiColumnConfirmBtn">Generate Column</button>
