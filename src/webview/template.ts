@@ -2,7 +2,7 @@
  * Webview HTML template
  */
 
-export function getHtmlTemplate(gazelleIconUri: string, styles: string, scripts: string): string {
+export function getHtmlTemplate(gazelleIconUri: string, gazelleAnimationUri: string, styles: string, scripts: string): string {
     return `<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -17,7 +17,10 @@ ${styles}
 <body>
     <div class="main-content">
         <div class="view-controls">
-            <img src="${gazelleIconUri}" class="logo" alt="JSONL Gazelle" id="logo" title="JSONL Gazelle" style="cursor: pointer;">
+            <div class="logo-container" style="position: relative; width: 32px; height: 32px;">
+                <img src="${gazelleIconUri}" class="logo" alt="JSONL Gazelle" id="logo" title="JSONL Gazelle" style="cursor: pointer;">
+                <img src="${gazelleAnimationUri}" class="logo-animation" id="logoAnimation" alt="Loading..." style="display: none; position: absolute; top: 0; left: 0; width: 32px; height: 32px;">
+            </div>
             <div class="loading-state" id="loadingState" style="display: none;">
                 <div>Loading large file...</div>
                 <div class="loading-progress" id="loadingProgress"></div>
@@ -85,7 +88,7 @@ ${styles}
 
         <div class="table-container" id="tableContainer">
             <div class="indexing" id="indexingDiv">
-                <img src="${gazelleIconUri}" class="indexing-icon" alt="Indexing...">
+                <img src="${gazelleAnimationUri}" style="width: 32px; height: 32px;" alt="Indexing...">
                 <div>Indexing JSONL file...</div>
             </div>
             <!-- Table View Container -->

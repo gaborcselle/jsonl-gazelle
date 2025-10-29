@@ -2156,8 +2156,11 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
         const gazelleIconUri = webview.asWebviewUri(
             vscode.Uri.joinPath(this.context.extensionUri, 'gazelle.svg')
         );
+        const gazelleAnimationUri = webview.asWebviewUri(
+            vscode.Uri.joinPath(this.context.extensionUri, 'gazelle-animation.gif')
+        );
 
-        return getHtmlTemplate(gazelleIconUri.toString(), styles, scripts);
+        return getHtmlTemplate(gazelleIconUri.toString(), gazelleAnimationUri.toString(), styles, scripts);
     }
 
     
