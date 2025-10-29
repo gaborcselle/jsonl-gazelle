@@ -77,6 +77,13 @@ The generated file is automatically excluded from git via `.gitignore` to keep t
 ## What's next / Roadmap
 - [ ] Find / Replace: Implement VS-code Find / Replace / Replace All with Regex option and highlighting
 - [ ] Split codebase: Split the codebase into smaller separate files
+- [ ] Split codebase: Split the codebase into smaller separate files, maybe one per tab
+- [ ] Table view: Fix table column behavior: Instead of trying to fill the full width, the columns should be allowed to resize as needed
+- [ ] File bar bug: For the files that are oversize, could we show their filename in white as usual (instead of red), and then still show the little warning icon with the guidance to right click?
+- [ ] Retest the AI column generation feature
+- [ ] Retest the AI row generation feature
+- [ ] Add an option to the AI column generation feature to only allow an enum of values as output (e.g. Yes/No, 1-5, etc.) use the OpenAI structured outputs API to do this
+- [ ] While the AI column is filling, the value should show as "generating" or "5th in line ..." instead of as "null"
 - [X] Large files: For JSONL files over 100MB (VS Code limit), add a right-click menu to split the file into smaller parts
 - [X] Pretty print view: Align line numbers with line numbers in source file
 - [X] Pretty print view: Syntax highlighting
