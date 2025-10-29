@@ -87,8 +87,7 @@ class LargeFileDecorationProvider implements vscode.FileDecorationProvider {
                 
                 return {
                     badge: '⚠️',
-                    tooltip: 'File too large. Right-click and select "Split into Parts (100MB+)" to split the file',
-                    color: new vscode.ThemeColor('errorForeground')
+                    tooltip: 'File too large. Right-click and select "Split into Parts (100MB+)" to split the file'
                 };
             }
         } catch (error) {
