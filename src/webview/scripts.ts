@@ -156,10 +156,26 @@ export const scripts = `
 
         // Find/Replace Modal Functions
         function openFindReplaceBar() {
+            // For Monaco editors (json/raw views), trigger Monaco's find widget
+            if (currentView === 'json' && prettyEditor) {
+                prettyEditor.getAction('actions.find').run();
+                return;
+            } else if (currentView === 'raw' && rawEditor) {
+                rawEditor.getAction('actions.find').run();
+                return;
+            }
+            
+            // For table view, show custom find bar
             const bar = document.getElementById('findReplaceBar');
-            bar.style.display = 'block';
-            document.getElementById('findInput').focus();
-            performFind(); // Initial find with current input
+            
+            // Toggle: if already visible, close it; otherwise open it
+            if (bar.style.display === 'block') {
+                closeFindReplaceBar();
+            } else {
+                bar.style.display = 'block';
+                document.getElementById('findInput').focus();
+                performFind(); // Initial find with current input
+            }
         }
 
         function closeFindReplaceBar() {
@@ -354,6 +370,7 @@ export const scripts = `
                 return;
             }
 
+            // Go to next match (wrap to start if at end)
             findReplaceState.currentMatchIndex =
                 (findReplaceState.currentMatchIndex + 1) % findReplaceState.matches.length;
             highlightCurrentMatch();
@@ -365,6 +382,7 @@ export const scripts = `
                 return;
             }
 
+            // Go to previous match (wrap to end if at start)
             findReplaceState.currentMatchIndex =
                 (findReplaceState.currentMatchIndex - 1 + findReplaceState.matches.length) % findReplaceState.matches.length;
             highlightCurrentMatch();
@@ -572,13 +590,18 @@ export const scripts = `
 
         // Keyboard shortcuts for Find/Replace
         document.addEventListener('keydown', (e) => {
-            // Cmd/Ctrl + F: Open Find (only for Table view, Monaco handles it for others)
+            // Cmd/Ctrl + F: Open Find
             if ((e.metaKey || e.ctrlKey) && e.key === 'f') {
                 if (currentView === 'table') {
                     e.preventDefault();
                     openFindReplaceBar();
+                } else if (currentView === 'json' && prettyEditor) {
+                    e.preventDefault();
+                    prettyEditor.getAction('actions.find').run();
+                } else if (currentView === 'raw' && rawEditor) {
+                    e.preventDefault();
+                    rawEditor.getAction('actions.find').run();
                 }
-                // For 'json' and 'raw' views, let Monaco's built-in Find widget handle it
             }
 
             // Cmd/Ctrl + H: Open Find/Replace (only for Table view)
@@ -591,9 +614,13 @@ export const scripts = `
                 // For 'json' and 'raw' views, let Monaco's built-in Find widget handle it
             }
 
-            // Escape: Close bar
-            if (e.key === 'Escape' && document.getElementById('findReplaceBar').style.display === 'block') {
-                closeFindReplaceBar();
+            // Escape: Close Find/Replace bar or Column Manager modal
+            if (e.key === 'Escape') {
+                if (document.getElementById('findReplaceBar').style.display === 'block') {
+                    closeFindReplaceBar();
+                } else if (document.getElementById('columnManagerModal').classList.contains('show')) {
+                    closeColumnManager();
+                }
             }
 
             // Enter in find input: Find next
@@ -876,35 +903,11 @@ export const scripts = `
         // Settings Modal
         function openSettingsModal() {
             const modal = document.getElementById('settingsModal');
-            const aiProviderSelect = document.getElementById('aiProvider');
-
-            // Ensure default selection is set before requesting settings
-            if (!aiProviderSelect.value) {
-                aiProviderSelect.value = 'copilot';
-            }
 
             // Request current settings from backend
             vscode.postMessage({ type: 'getSettings' });
 
             modal.classList.add('show');
-
-            // Initialize provider settings display
-            setTimeout(() => updateProviderSettings(), 50);
-        }
-
-        function updateProviderSettings() {
-            const providerSelect = document.getElementById('aiProvider');
-            const provider = providerSelect.value || 'copilot'; // Default to copilot if empty
-            const copilotSettings = document.getElementById('copilotSettings');
-            const openaiSettings = document.getElementById('openaiSettings');
-
-            if (provider === 'copilot') {
-                copilotSettings.style.display = 'block';
-                openaiSettings.style.display = 'none';
-            } else {
-                copilotSettings.style.display = 'none';
-                openaiSettings.style.display = 'block';
-            }
         }
 
         function checkAPIKeyAndOpenModal(modalFunction, ...args) {
@@ -949,14 +952,12 @@ export const scripts = `
         }
 
         function saveSettings() {
-            const aiProvider = document.getElementById('aiProvider').value;
             const openaiKey = document.getElementById('openaiKey').value;
             const openaiModel = document.getElementById('openaiModel').value;
 
             vscode.postMessage({
                 type: 'saveSettings',
                 settings: {
-                    aiProvider: aiProvider,
                     openaiKey: openaiKey,
                     openaiModel: openaiModel
                 }
@@ -970,7 +971,6 @@ export const scripts = `
         document.getElementById('settingsCloseBtn').addEventListener('click', closeSettingsModal);
         document.getElementById('settingsCancelBtn').addEventListener('click', closeSettingsModal);
         document.getElementById('settingsSaveBtn').addEventListener('click', saveSettings);
-        document.getElementById('aiProvider').addEventListener('change', updateProviderSettings);
         document.getElementById('settingsModal').addEventListener('click', (e) => {
             if (e.target.id === 'settingsModal') {
                 closeSettingsModal();
@@ -1667,8 +1667,8 @@ export const scripts = `
 
                 // Store column path and raw value on the cell element for Find/Replace
                 td.dataset.columnPath = column.path;
-                // Store the actual value (not JSON stringified) for accurate find/replace
-                td.dataset.rawValue = value !== undefined && value !== null ? String(value) : '';
+                // Store the JSON stringified value for accurate find/replace (handles objects properly)
+                td.dataset.rawValue = valueStr;
 
                 if (column.isExpanded) {
                     td.classList.add('expanded-column');
@@ -2372,6 +2372,11 @@ export const scripts = `
             // Hide any open context menus when switching views
             hideContextMenu();
             
+            // Hide Find/Replace bar when switching views (only shown in table view)
+            if (currentView === 'table' && viewType !== 'table') {
+                closeFindReplaceBar();
+            }
+            
             // Update data model when switching away from raw view (without saving)
             if (currentView === 'raw' && viewType !== 'raw') {
                 // Get current content from Monaco editor and update data model without saving
@@ -2416,6 +2421,7 @@ export const scripts = `
             const columnManagerBtn = document.getElementById('columnManagerBtn');
             const wrapTextControl = document.querySelector('.wrap-text-control');
             const findReplaceBtn = document.getElementById('findReplaceBtn');
+            const settingsBtn = document.getElementById('settingsBtn');
 
             // Show selected view container
             switch (viewType) {
@@ -2426,6 +2432,7 @@ export const scripts = `
                     columnManagerBtn.style.display = 'flex';
                     wrapTextControl.style.display = 'flex';
                     findReplaceBtn.style.display = 'flex';
+                    settingsBtn.style.display = 'flex';
                     // Hide loading state immediately for table view (already rendered)
                     logo.classList.remove('loading');
                     loadingState.style.display = 'none';
@@ -2435,10 +2442,12 @@ export const scripts = `
                 case 'json':
                     document.getElementById('jsonViewContainer').style.display = 'block';
                     document.getElementById('jsonViewContainer').classList.add('isolated');
-                    // Hide column controls for json view (Monaco has its own Find & Replace)
+                    // Hide column controls for json view
                     columnManagerBtn.style.display = 'none';
                     wrapTextControl.style.display = 'none';
-                    findReplaceBtn.style.display = 'none';
+                    settingsBtn.style.display = 'none';
+                    // Show find button (triggers Monaco's find widget)
+                    findReplaceBtn.style.display = 'flex';
 
                     // Add event isolation to prevent bubbling
                     const jsonContainer = document.getElementById('jsonViewContainer');
@@ -2461,10 +2470,12 @@ export const scripts = `
                     break;
                 case 'raw':
                     document.getElementById('rawViewContainer').style.display = 'block';
-                    // Hide column controls for raw view (Monaco has its own Find & Replace)
+                    // Hide column controls for raw view
                     columnManagerBtn.style.display = 'none';
                     wrapTextControl.style.display = 'none';
-                    findReplaceBtn.style.display = 'none';
+                    settingsBtn.style.display = 'none';
+                    // Show find button (triggers Monaco's find widget)
+                    findReplaceBtn.style.display = 'flex';
                     // Use setTimeout to allow the loading animation to show before rendering
                     // Longer delay for larger datasets to ensure smooth animation
                     const rawDelay = currentData.rawContent && currentData.rawContent.length > 100000 ? 100 : 50;

@@ -50,11 +50,11 @@ ${styles}
                 <div class="find-replace-input-group">
                     <input type="text" id="findInput" class="find-replace-input" placeholder="Find" />
                     <span class="find-match-count" id="findMatchCount"></span>
-                    <button class="find-nav-btn" id="findPrevBtn" title="Previous match (Shift+Enter)">
-                        <svg width="14" height="14" viewBox="0 0 16 16"><path fill="currentColor" d="M8 10L3 5h10z"/></svg>
-                    </button>
                     <button class="find-nav-btn" id="findNextBtn" title="Next match (Enter)">
                         <svg width="14" height="14" viewBox="0 0 16 16"><path fill="currentColor" d="M8 6l5 5H3z"/></svg>
+                    </button>
+                    <button class="find-nav-btn" id="findPrevBtn" title="Previous match (Shift+Enter)">
+                        <svg width="14" height="14" viewBox="0 0 16 16"><path fill="currentColor" d="M8 10L3 5h10z"/></svg>
                     </button>
                 </div>
                 <div class="find-replace-input-group">
@@ -269,19 +269,7 @@ Available variables:
                 <button class="modal-close" id="settingsCloseBtn">&times;</button>
             </div>
             <div class="modal-body">
-                <label for="aiProvider" style="display: block; margin-bottom: 8px; font-weight: 500;">AI Provider:</label>
-                <select id="aiProvider" class="settings-select" style="width: 100%; padding: 8px 12px; font-size: 13px; background-color: var(--vscode-input-background); color: var(--vscode-input-foreground); border: 1px solid var(--vscode-input-border); border-radius: 4px; outline: none; margin-bottom: 16px; box-sizing: border-box;">
-                    <option value="copilot" selected>GitHub Copilot (VS Code)</option>
-                    <option value="openai">OpenAI API</option>
-                </select>
-
-                <div id="copilotSettings" style="display: block;">
-                    <div class="ai-info-box" style="margin-bottom: 16px; padding: 12px; background: rgba(100, 150, 255, 0.1); border-radius: 6px; font-size: 12px; color: var(--vscode-descriptionForeground);">
-                        <strong>GitHub Copilot:</strong> Uses your VS Code GitHub Copilot subscription. Make sure you have GitHub Copilot enabled in VS Code.
-                    </div>
-                </div>
-
-                <div id="openaiSettings" style="display: none;">
+                
                     <label for="openaiKey" style="display: block; margin-bottom: 8px; font-weight: 500;">OpenAI API Key:</label>
                     <input type="text" id="openaiKey" class="column-name-input" placeholder="sk-..." />
 
