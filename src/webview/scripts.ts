@@ -1155,12 +1155,22 @@ export const scripts = `
             const contextRowCountInput = document.getElementById('contextRowCount');
             const rowCountInput = document.getElementById('rowCount');
             const promptInput = document.getElementById('aiRowsPrompt');
+            const advancedSection = document.getElementById('aiRowsAdvancedSection');
+            const advancedToggle = document.getElementById('aiRowsAdvancedToggle');
 
             // Set defaults
             contextRowCountInput.value = '10';
             rowCountInput.value = '5';
             if (!promptInput.value || promptInput.value === promptInput.placeholder) {
                 promptInput.value = 'Based on these example rows:\\n{{context_rows}}\\n\\nGenerate {{row_count}} new unique rows with the EXACT same structure and all the same fields. Make the data realistic and different from the examples above.';
+            }
+
+            // Hide advanced section by default when opening
+            if (advancedSection) {
+                advancedSection.style.display = 'none';
+            }
+            if (advancedToggle) {
+                advancedToggle.textContent = 'Advanced';
             }
 
             modal.classList.add('show');
@@ -1204,6 +1214,16 @@ export const scripts = `
                 closeAIRowsModal();
             }
         });
+        const aiRowsAdvancedToggleBtn = document.getElementById('aiRowsAdvancedToggle');
+        if (aiRowsAdvancedToggleBtn) {
+            aiRowsAdvancedToggleBtn.addEventListener('click', () => {
+                const section = document.getElementById('aiRowsAdvancedSection');
+                if (!section) return;
+                const isHidden = section.style.display === 'none';
+                section.style.display = isHidden ? 'block' : 'none';
+                aiRowsAdvancedToggleBtn.textContent = isHidden ? 'Hide Advanced' : 'Advanced';
+            });
+        }
 
         // Modal drag and drop
         let draggedModalItem = null;
