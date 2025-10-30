@@ -58,22 +58,33 @@ export const scripts = `
             e.preventDefault();
             e.stopPropagation();
             
-            // Enable fixed layout when user starts resizing
+            // Don't start resizing on click - only on mouse movement
+            // Just prepare the resize data
             const table = document.getElementById('dataTable');
+            const colgroup = document.getElementById('tableColgroup');
+            const thead = table.querySelector('thead tr');
+            
+            // Ensure fixed layout and initialize column widths if needed
             if (table.style.tableLayout !== 'fixed') {
-                // Freeze all current widths before switching to fixed layout
-                const colgroup = document.getElementById('tableColgroup');
-                const thead = table.querySelector('thead tr');
                 if (colgroup && thead) {
                     const headers = thead.querySelectorAll('th');
                     const cols = colgroup.querySelectorAll('col');
                     headers.forEach((header, index) => {
-                        if (cols[index] && !cols[index].style.width) {
-                            const width = header.getBoundingClientRect().width;
-                            cols[index].style.width = width + 'px';
-                            
-                            // Save width for persistence
+                        if (cols[index]) {
+                            // Use saved width if available, otherwise measure current width
+                            let width;
                             const columnPath = cols[index].dataset.columnPath;
+                            if (columnPath && savedColumnWidths[columnPath]) {
+                                width = parseInt(savedColumnWidths[columnPath], 10);
+                            } else {
+                                width = header.getBoundingClientRect().width;
+                            }
+                            
+                            // Set explicit width for all columns
+                            cols[index].style.width = width + 'px';
+                            header.style.width = width + 'px';
+                            
+                            // Save width for persistence (except row number column)
                             if (columnPath) {
                                 savedColumnWidths[columnPath] = width + 'px';
                             }
@@ -83,29 +94,59 @@ export const scripts = `
                 table.style.tableLayout = 'fixed';
             }
             
-            isResizing = true;
+            // Get current width from colgroup or header
+            let currentWidth = th.offsetWidth;
+            const columnIndex = Array.from(th.parentNode.children).indexOf(th);
+            if (colgroup) {
+                const cols = colgroup.querySelectorAll('col');
+                if (cols[columnIndex] && cols[columnIndex].style.width) {
+                    currentWidth = parseInt(cols[columnIndex].style.width, 10);
+                }
+            }
+            
+            // Store resize data but don't set isResizing yet
             resizeData = {
                 th: th,
                 columnPath: columnPath,
                 startX: e.clientX,
-                startWidth: th.offsetWidth
+                startWidth: currentWidth,
+                hasMoved: false
             };
             
+            // Add listeners but only start resizing on actual movement
             document.body.classList.add('resizing');
-            document.addEventListener('mousemove', handleResize);
+            document.addEventListener('mousemove', handleResizeMove);
             document.addEventListener('mouseup', stopResize);
         }
         
-        function handleResize(e) {
-            if (!isResizing || !resizeData) return;
+        function handleResizeMove(e) {
+            if (!resizeData) {
+                stopResize();
+                return;
+            }
             
             const deltaX = e.clientX - resizeData.startX;
+            
+            // Only start resizing if mouse has actually moved
+            if (!resizeData.hasMoved && Math.abs(deltaX) < 1) {
+                return; // No movement, don't resize
+            }
+            
+            // Start resizing on first movement
+            if (!resizeData.hasMoved) {
+                resizeData.hasMoved = true;
+                isResizing = true;
+            }
+            
+            if (!isResizing) return;
+            
+            // Calculate new width: start width + pixels moved
             const newWidth = Math.max(50, resizeData.startWidth + deltaX);
             
             // Update the column width
             resizeData.th.style.width = newWidth + 'px';
             
-            // Update the corresponding col element in colgroup (if exists)
+            // Update the corresponding col element in colgroup
             const columnIndex = Array.from(resizeData.th.parentNode.children).indexOf(resizeData.th);
             const table = document.getElementById('dataTable');
             const colgroup = document.getElementById('tableColgroup');
@@ -123,9 +164,8 @@ export const scripts = `
                 }
             }
             
-            // Update all cells in this column (if not using fixed layout)
+            // Update all cells in this column
             const rows = table.querySelectorAll('tr');
-            
             rows.forEach(row => {
                 const cell = row.children[columnIndex];
                 if (cell) {
@@ -135,12 +175,10 @@ export const scripts = `
         }
         
         function stopResize() {
-            if (!isResizing) return;
-            
             isResizing = false;
             resizeData = null;
             document.body.classList.remove('resizing');
-            document.removeEventListener('mousemove', handleResize);
+            document.removeEventListener('mousemove', handleResizeMove);
             document.removeEventListener('mouseup', stopResize);
         }
 
@@ -840,8 +878,23 @@ export const scripts = `
             const modal = document.getElementById('aiColumnModal');
             const nameInput = document.getElementById('aiColumnName');
             const promptInput = document.getElementById('aiPrompt');
+            const useEnumCheckbox = document.getElementById('aiUseEnum');
+            const enumValuesInput = document.getElementById('aiEnumValues');
+            
             nameInput.value = '';
             promptInput.value = '';
+            useEnumCheckbox.checked = false;
+            enumValuesInput.value = '';
+            enumValuesInput.style.display = 'none';
+            enumValuesInput.disabled = true;
+            
+            // Reset prompt required attribute and label
+            const promptLabel = document.querySelector('label[for="aiPrompt"]');
+            promptInput.setAttribute('required', 'required');
+            if (promptLabel) {
+                promptLabel.textContent = promptLabel.textContent.replace(' (optional):', ':');
+            }
+            
             modal.classList.add('show');
 
             // Focus name input
@@ -850,27 +903,65 @@ export const scripts = `
 
         function closeAIColumnModal() {
             const modal = document.getElementById('aiColumnModal');
+            const useEnumCheckbox = document.getElementById('aiUseEnum');
+            const enumValuesInput = document.getElementById('aiEnumValues');
+            const promptInput = document.getElementById('aiPrompt');
+            const promptLabel = document.querySelector('label[for="aiPrompt"]');
+            
             modal.classList.remove('show');
             aiColumnPosition = null;
             aiColumnReferenceColumn = null;
+            useEnumCheckbox.checked = false;
+            enumValuesInput.value = '';
+            enumValuesInput.style.display = 'none';
+            enumValuesInput.disabled = true;
+            
+            // Reset prompt required attribute and label
+            promptInput.setAttribute('required', 'required');
+            if (promptLabel) {
+                promptLabel.textContent = promptLabel.textContent.replace(' (optional):', ':');
+            }
         }
 
         function confirmAIColumn() {
             const nameInput = document.getElementById('aiColumnName');
             const promptInput = document.getElementById('aiPrompt');
+            const useEnumCheckbox = document.getElementById('aiUseEnum');
+            const enumValuesInput = document.getElementById('aiEnumValues');
+            
             const columnName = nameInput.value.trim();
             const promptTemplate = promptInput.value.trim();
+            const useEnum = useEnumCheckbox.checked;
+            const enumValues = enumValuesInput.value.trim();
 
-            if (!columnName || !promptTemplate) {
-                return; // Don't proceed without both inputs
+            // Column name is always required
+            if (!columnName) {
+                return;
             }
+
+            // Prompt is required unless enum is selected
+            if (!useEnum && !promptTemplate) {
+                return;
+            }
+
+            // Enum values are required when enum is selected
+            if (useEnum && !enumValues) {
+                // Show error or warning
+                enumValuesInput.focus();
+                return;
+            }
+
+            const enumArray = useEnum && enumValues 
+                ? enumValues.split(',').map(v => v.trim()).filter(v => v.length > 0)
+                : null;
 
             vscode.postMessage({
                 type: 'addAIColumn',
                 columnName: columnName,
-                promptTemplate: promptTemplate,
+                promptTemplate: promptTemplate || '', // Send empty string if no prompt
                 position: aiColumnPosition,
-                referenceColumn: aiColumnReferenceColumn
+                referenceColumn: aiColumnReferenceColumn,
+                enumValues: enumArray
             });
 
             closeAIColumnModal();
@@ -899,10 +990,54 @@ export const scripts = `
                 closeAIColumnModal();
             }
         });
+        
+        // Enum checkbox toggle
+        document.getElementById('aiUseEnum').addEventListener('change', (e) => {
+            const useEnum = e.target.checked;
+            const enumValuesInput = document.getElementById('aiEnumValues');
+            const promptInput = document.getElementById('aiPrompt');
+            const promptLabel = document.querySelector('label[for="aiPrompt"]');
+            
+            if (useEnum) {
+                enumValuesInput.style.display = 'block';
+                enumValuesInput.disabled = false;
+                // Remove required attribute from prompt when enum is selected
+                promptInput.removeAttribute('required');
+                // Update label to indicate prompt is optional
+                if (promptLabel && !promptLabel.textContent.includes('(optional')) {
+                    promptLabel.textContent = promptLabel.textContent.replace(':', ' (optional):');
+                }
+                setTimeout(() => enumValuesInput.focus(), 100);
+            } else {
+                enumValuesInput.style.display = 'none';
+                enumValuesInput.disabled = true;
+                enumValuesInput.value = '';
+                // Add required attribute back to prompt when enum is not selected
+                promptInput.setAttribute('required', 'required');
+                // Restore original label
+                if (promptLabel) {
+                    promptLabel.textContent = promptLabel.textContent.replace(' (optional):', ':');
+                }
+            }
+        });
 
         // Settings Modal
-        function openSettingsModal() {
+        // Store which modal should be opened after settings are saved
+        let pendingModalCallback = null;
+        let pendingModalArgs = null;
+
+        function openSettingsModal(showWarning = false, modalCallback = null, ...modalArgs) {
             const modal = document.getElementById('settingsModal');
+
+            // Store the callback and args if provided
+            pendingModalCallback = modalCallback;
+            pendingModalArgs = modalArgs;
+
+            // Show or hide warning based on parameter
+            const warningElement = document.getElementById('apiKeyWarning');
+            if (warningElement) {
+                warningElement.style.display = showWarning ? 'block' : 'none';
+            }
 
             // Request current settings from backend
             vscode.postMessage({ type: 'getSettings' });
@@ -927,7 +1062,8 @@ export const scripts = `
                         vscode.postMessage({ 
                             type: 'showAPIKeyWarning' 
                         });
-                        openSettingsModal();
+                        // Open settings modal with warning and callback to open the original modal
+                        openSettingsModal(true, modalFunction, ...args);
                     }
                 }
             };
@@ -940,7 +1076,7 @@ export const scripts = `
                 vscode.postMessage({ 
                     type: 'showAPIKeyWarning' 
                 });
-                openSettingsModal();
+                openSettingsModal(true, modalFunction, ...args);
             }, 5000);
             
             window.addEventListener('message', checkAPIKeyListener);
@@ -949,21 +1085,52 @@ export const scripts = `
         function closeSettingsModal() {
             const modal = document.getElementById('settingsModal');
             modal.classList.remove('show');
+            // Clear pending callback when closing
+            pendingModalCallback = null;
+            pendingModalArgs = null;
         }
 
         function saveSettings() {
             const openaiKey = document.getElementById('openaiKey').value;
             const openaiModel = document.getElementById('openaiModel').value;
 
+            // Store callback and args before they're cleared
+            const callback = pendingModalCallback;
+            const args = pendingModalArgs;
+
             vscode.postMessage({
                 type: 'saveSettings',
                 settings: {
                     openaiKey: openaiKey,
                     openaiModel: openaiModel
-                }
+                },
+                // Include callback info if available
+                openOriginalModal: !!callback
             });
 
             closeSettingsModal();
+
+            // If there was a pending modal callback and key was provided, wait for confirmation
+            if (callback && openaiKey && openaiKey.trim()) {
+                // Listen for settings saved confirmation from backend
+                const settingsSavedListener = (event) => {
+                    const message = event.data;
+                    if (message.type === 'settingsSaved') {
+                        window.removeEventListener('message', settingsSavedListener);
+                        
+                        if (message.hasAPIKey) {
+                            // Open the original modal
+                            callback(...args);
+                        }
+                    }
+                };
+                
+                window.addEventListener('message', settingsSavedListener);
+                // Cleanup after 5 seconds
+                setTimeout(() => {
+                    window.removeEventListener('message', settingsSavedListener);
+                }, 5000);
+            }
         }
 
         // Settings Modal event listeners
@@ -1343,8 +1510,10 @@ export const scripts = `
             const loadingProgress = document.getElementById('loadingProgress');
             
             if (data.isIndexing) {
-                // Initial loading - show spinning logo and hide controls
-                logo.classList.add('loading');
+                // Initial loading - show animated logo and hide controls
+                logo.style.display = 'none';
+                const logoAnimation = document.getElementById('logoAnimation');
+                if (logoAnimation) logoAnimation.style.display = 'block';
                 loadingState.style.display = 'flex';
                 
                 // Don't show the indexing div since we have header loading state
@@ -1355,7 +1524,9 @@ export const scripts = `
             
             // Show loading progress if chunks are still loading
             if (data.loadingProgress && data.loadingProgress.loadingChunks) {
-                logo.classList.add('loading');
+                logo.style.display = 'none';
+                const logoAnimation = document.getElementById('logoAnimation');
+                if (logoAnimation) logoAnimation.style.display = 'block';
                 loadingState.style.display = 'flex';
                 
                 const memoryInfo = data.loadingProgress.memoryOptimized ? 
@@ -1372,8 +1543,10 @@ export const scripts = `
                 document.getElementById('indexingDiv').style.display = 'none';
                 document.getElementById('dataTable').style.display = 'table';
             } else {
-                // Loading complete - show controls and stop spinning logo
-                logo.classList.remove('loading');
+                // Loading complete - show controls and hide animated logo
+                logo.style.display = 'block';
+                const logoAnimation = document.getElementById('logoAnimation');
+                if (logoAnimation) logoAnimation.style.display = 'none';
                 loadingState.style.display = 'none';
                 
                 document.getElementById('indexingDiv').style.display = 'none';
@@ -2398,10 +2571,12 @@ export const scripts = `
             
             currentView = viewType;
             
-            // Show spinning gazelle during view switch
+            // Show animated gazelle during view switch
             const logo = document.getElementById('logo');
+            const logoAnimation = document.getElementById('logoAnimation');
             const loadingState = document.getElementById('loadingState');
-            logo.classList.add('loading');
+            logo.style.display = 'none';
+            if (logoAnimation) logoAnimation.style.display = 'block';
             loadingState.style.display = 'flex';
             loadingState.innerHTML = '<div>Switching view...</div>';
             
@@ -2434,7 +2609,9 @@ export const scripts = `
                     findReplaceBtn.style.display = 'flex';
                     settingsBtn.style.display = 'flex';
                     // Hide loading state immediately for table view (already rendered)
-                    logo.classList.remove('loading');
+                    logo.style.display = 'block';
+                    const logoAnimation = document.getElementById('logoAnimation');
+                    if (logoAnimation) logoAnimation.style.display = 'none';
                     loadingState.style.display = 'none';
                     // Re-render table to apply any active search filters
                     renderTableChunk(true);
@@ -2463,8 +2640,10 @@ export const scripts = `
                     const jsonDelay = currentData.rows.length > 1000 ? 100 : 50;
                     setTimeout(() => {
                         updatePrettyView();
-                        // Hide loading state after Pretty Print view is rendered
-                        logo.classList.remove('loading');
+                        // Hide loading state after pretty view is rendered
+                        logo.style.display = 'block';
+                        const logoAnimation = document.getElementById('logoAnimation');
+                        if (logoAnimation) logoAnimation.style.display = 'none';
                         loadingState.style.display = 'none';
                     }, jsonDelay);
                     break;
@@ -2482,7 +2661,9 @@ export const scripts = `
                     setTimeout(() => {
                         updateRawView();
                         // Hide loading state after raw view is rendered
-                        logo.classList.remove('loading');
+                        logo.style.display = 'block';
+                        const logoAnimation = document.getElementById('logoAnimation');
+                        if (logoAnimation) logoAnimation.style.display = 'none';
                         loadingState.style.display = 'none';
 
                         // Automatically open file in VS Code editor
