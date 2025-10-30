@@ -722,10 +722,27 @@ export const styles = `
         
         .label-with-info {
             display: flex;
-            align-items: center;
+            align-items: baseline;
             gap: 8px;
             margin-top: 16px;
             margin-bottom: 8px;
+        }
+
+        /* AI Prompt two-column layout helper */
+        .ai-prompt-row {
+            display: flex;
+            gap: 12px;
+            align-items: stretch;
+        }
+
+        @media (max-width: 1100px) {
+            .ai-prompt-row {
+                flex-direction: column;
+            }
+            #aiInfoPanel {
+                width: 100% !important;
+                min-width: 0 !important;
+            }
         }
         
         .field-row {

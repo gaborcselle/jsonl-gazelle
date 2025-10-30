@@ -1203,34 +1203,18 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
         }
     }
 
-    private async generateAIValueForRow(rowIndex: number, promptTemplate: string, totalRows: number, enumValues: string[] | null = null): Promise<string> {
+    private async generateAIValueForRow(rowIndex: number, promptTemplate: string, totalRows: number, enumValues: string[] | null = null): Promise<string | number | boolean> {
         const row = this.rows[rowIndex];
 
         // Replace template variables (use empty string if template is empty)
         let prompt = promptTemplate ? this.replaceTemplateVariables(promptTemplate, row, rowIndex, totalRows) : '';
 
-        // If enum values are provided, add them to the prompt with instructions
+        // When using enum with Structured Outputs, do not include the options list in the prompt.
+        // The JSON Schema strictly constrains allowed values; keep only row context in the prompt.
         if (enumValues && enumValues.length > 0) {
-            // Shuffle enum values to avoid bias towards first value
-            // Create a shuffled copy to present values in random order
-            const shuffledEnum = [...enumValues].sort(() => Math.random() - 0.5);
-            const enumList = shuffledEnum.join(', ');
-            
-            // If prompt is empty, add a built-in request for enum selection
             if (!prompt) {
-                prompt = `Based on the following row data, select the most appropriate value from the provided enum list that best matches the context:\n\n${JSON.stringify(row, null, 2)}`;
+                prompt = `Given the following row JSON, select the single best value based on the context. Return exactly one value.\n\nRow:\n${JSON.stringify(row, null, 2)}`;
             }
-            
-            prompt += `\n\nIMPORTANT: You must respond with EXACTLY one of these values: ${enumList}
-
-CRITICAL INSTRUCTIONS:
-- Analyze the input context carefully
-- Do NOT default to any particular value - consider ALL options equally
-- Each value in the list is equally valid - choose based on context matching
-- Select the value that BEST matches the input context
-- Vary your selection based on different contexts - do not use the same value for all inputs
-
-Available values (in random order): ${enumList}`;
         }
 
         // Call the language model API (let errors bubble up)
@@ -1268,33 +1252,36 @@ Available values (in random order): ${enumList}`;
         return result;
     }
 
-    private async callLanguageModel(prompt: string, enumValues: string[] | null = null): Promise<string> {
+    private async callLanguageModel(prompt: string, enumValues: string[] | null = null): Promise<string | number | boolean> {
         const apiKey = await this.context.secrets.get('openaiApiKey');
         if (!apiKey) {
             throw new Error('OpenAI API key not configured. Please set it in AI Settings.');
         }
 
-        // Trim the API key to remove any whitespace
         const trimmedApiKey = apiKey.trim();
-
         const model = this.context.globalState.get<string>('openaiModel', 'gpt-4.1-mini');
 
         const requestBody: any = {
             model: model,
             messages: [],
-            // Increase temperature when using enum to get more varied responses
-            temperature: enumValues && enumValues.length > 0 ? 0.9 : 0.7
+            // Lower temperature for enum selections
+            temperature: enumValues && enumValues.length > 0 ? 0.1 : 0.7,
+            // Add top_p for better control
+            top_p: enumValues && enumValues.length > 0 ? 0.1 : 1
         };
 
-        // If enum values are provided, add system message and use structured outputs API
         if (enumValues && enumValues.length > 0) {
-            // Add system message with clear instructions
+            const buckets = this.getTypedEnumBuckets(enumValues);
+            const valueSchema = this.buildEnumValueSchema(buckets);
+
+            // Enhanced system prompt with randomized value order
+            const shuffledValues = this.shuffleArray([...enumValues]);
+
             requestBody.messages.push({
                 role: 'system',
-                content: `You are a helpful assistant. When asked to choose from a list of values, you must analyze the context and select the MOST APPROPRIATE value from the provided list. Do not default to the first value - carefully evaluate which value best fits the context.`
+                content: `CRITICAL SELECTION INSTRUCTIONS:\n\n1. CONTEXT ANALYSIS: Carefully analyze the input context and match it to the most appropriate value\n\n2. NO BIAS: Do NOT default to any particular value. Each option is equally valid.\n\n3. RANDOM ORDER: Values are presented in random order to prevent positional bias: [${shuffledValues.join(', ')}]\n\n4. VARIED SELECTION: Your selections MUST vary based on different input contexts\n\n5. STRICT MATCHING: Choose based on semantic matching, not default patterns\n\nIMPORTANT: If multiple values seem equally appropriate, choose the one that has been selected LESS frequently in recent interactions.`
             });
-            
-            // Create JSON schema for enum output
+
             requestBody.response_format = {
                 type: 'json_schema',
                 json_schema: {
@@ -1303,20 +1290,22 @@ Available values (in random order): ${enumList}`;
                     schema: {
                         type: 'object',
                         properties: {
-                            value: {
-                                type: 'string',
-                                enum: enumValues,
-                                description: `You MUST select exactly ONE value from this list: ${enumValues.join(', ')}. Choose based on careful analysis of the input context, not by default.`
-                            }
+                            value: Object.assign({}, valueSchema, {
+                                description: `Select exactly ONE value. Consider context carefully and avoid repetitive patterns. Current values in random order: ${shuffledValues.join(', ')}`
+                            })
                         },
                         required: ['value'],
                         additionalProperties: false
                     }
                 }
             };
+
+            // Add seed for reproducibility (if supported by the model)
+            if (model.includes('gpt-4') || model.includes('gpt-3.5')) {
+                requestBody.seed = this.generateSessionSeed();
+            }
         }
-        
-        // Add user message
+
         requestBody.messages.push({ role: 'user', content: prompt });
 
         const response = await fetch('https://api.openai.com/v1/chat/completions', {
@@ -1327,48 +1316,113 @@ Available values (in random order): ${enumList}`;
             },
             body: JSON.stringify(requestBody)
         });
-
         if (!response.ok) {
             const error = await response.text();
             throw new Error(`OpenAI API error: ${response.status} - ${error}`);
         }
-
         const data = await response.json();
-        
-        // If using structured outputs, parse the JSON response
+
         if (enumValues && enumValues.length > 0) {
             const content = data.choices[0].message.content.trim();
-            
+
             try {
-                // Try to parse as JSON first
                 const parsed = JSON.parse(content);
-                
-                // Validate that the returned value is in the enum list
-                if (parsed.value && enumValues.includes(parsed.value)) {
-                    return parsed.value;
+                const isAllowed = this.isValueInEnum(parsed.value, enumValues);
+                if (isAllowed) {
+                    return parsed.value as string | number | boolean;
                 }
-                
-                // If value is not in enum (shouldn't happen with strict mode), throw error
-                throw new Error(`Returned value "${parsed.value}" is not in the allowed enum list: ${enumValues.join(', ')}`);
+                throw new Error(`Returned value "${parsed.value}" is not in the allowed enum set.`);
             } catch (error) {
-                // Fallback: if JSON parsing failed, try to match content as string
-                
-                // If the content is already a valid enum value (exact match), return it
-                if (enumValues.includes(content)) {
-                    return content;
-                }
-                
-                // Try case-insensitive match
-                const matchedValue = enumValues.find(val => val.toLowerCase() === content.toLowerCase());
-                if (matchedValue) {
-                    return matchedValue;
-                }
-                
                 throw new Error(`Failed to parse structured output: ${error instanceof Error ? error.message : 'Unknown error'}. Content: ${content.substring(0, 100)}`);
             }
         }
-        
+
         return data.choices[0].message.content.trim();
+    }
+
+    // Helpers for typed enums
+    private enumCache = new Map<string, { kind: 'boolean' | 'integer' | 'number' | 'string'; value: boolean | number | string }>();
+    private parseEnumValue(raw: string): { kind: 'boolean' | 'integer' | 'number' | 'string'; value: boolean | number | string } {
+        if (this.enumCache.has(raw)) {
+            return this.enumCache.get(raw)!;
+        }
+
+        const s = raw.trim();
+
+        // Boolean values (case-sensitive check)
+        if (s === 'true') {
+            const result = { kind: 'boolean' as const, value: true as const };
+            this.enumCache.set(raw, result);
+            return result;
+        }
+        if (s === 'false') {
+            const result = { kind: 'boolean' as const, value: false as const };
+            this.enumCache.set(raw, result);
+            return result;
+        }
+
+        // Numbers — fast path via Number()
+        const num = Number(s);
+        if (!Number.isNaN(num) && s !== '') {
+            const result = Number.isInteger(num)
+                ? { kind: 'integer' as const, value: num }
+                : { kind: 'number' as const, value: num };
+            this.enumCache.set(raw, result);
+            return result;
+        }
+
+        // Default — treat as string
+        const result = { kind: 'string' as const, value: raw };
+        this.enumCache.set(raw, result);
+        return result;
+    }
+
+    private getTypedEnumBuckets(enumValues: string[]): { booleans: boolean[]; integers: number[]; numbers: number[]; strings: string[] } {
+        const typed = enumValues.map(v => this.parseEnumValue(v));
+        return {
+            booleans: typed.filter(t => t.kind === 'boolean').map(t => t.value as boolean),
+            integers: typed.filter(t => t.kind === 'integer').map(t => t.value as number),
+            numbers: typed.filter(t => t.kind === 'number').map(t => t.value as number),
+            strings: typed.filter(t => t.kind === 'string').map(t => t.value as string)
+        };
+    }
+
+    private buildEnumValueSchema(buckets: { booleans: boolean[]; integers: number[]; numbers: number[]; strings: string[] }): any {
+        const schemas: any[] = [];
+        if (buckets.booleans.length > 0) schemas.push({ type: 'boolean', enum: buckets.booleans });
+        if (buckets.integers.length > 0) schemas.push({ type: 'integer', enum: buckets.integers });
+        if (buckets.numbers.length > 0) schemas.push({ type: 'number', enum: buckets.numbers });
+        if (buckets.strings.length > 0) schemas.push({ type: 'string', enum: buckets.strings });
+        return schemas.length === 1 ? schemas[0] : { anyOf: schemas };
+    }
+
+    private isValueInEnum(value: unknown, enumValues: string[]): boolean {
+        const allowed = enumValues.map(v => this.parseEnumValue(v).value);
+
+        // Strict type and value validation
+        return allowed.some((allowedValue) => {
+            if (typeof value !== typeof allowedValue) return false;
+
+            if (typeof value === 'number' && typeof allowedValue === 'number') {
+                return value === allowedValue;
+            }
+
+            return value === allowedValue;
+        });
+    }
+
+    // Helper methods: randomization and seed
+    private shuffleArray<T>(array: T[]): T[] {
+        const shuffled = [...array];
+        for (let i = shuffled.length - 1; i > 0; i--) {
+            const j = Math.floor(Math.random() * (i + 1));
+            [shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
+        }
+        return shuffled;
+    }
+
+    private generateSessionSeed(): number {
+        return Math.floor(Math.random() * 10000);
     }
 
     private convertJsonlToPrettyWithLineNumbers(rows: JsonRow[]): { content: string, lineMapping: number[] } {
@@ -1643,12 +1697,14 @@ Available values (in random order): ${enumList}`;
                 // Parse the result
                 let generatedRows: any[];
                 try {
+                    // Ensure string for regex parsing
+                    const resultText = typeof result === 'string' ? result : JSON.stringify(result);
                     // Try to extract JSON array from the response
-                    const jsonMatch = result.match(/\[[\s\S]*\]/);
+                    const jsonMatch = resultText.match(/\[[\s\S]*\]/);
                     if (jsonMatch) {
                         generatedRows = JSON.parse(jsonMatch[0]);
                     } else {
-                        generatedRows = JSON.parse(result);
+                        generatedRows = JSON.parse(resultText);
                     }
 
                     if (!Array.isArray(generatedRows)) {
@@ -1658,7 +1714,8 @@ Available values (in random order): ${enumList}`;
                     // Fix data types based on context rows
                     generatedRows = generatedRows.map(row => this.fixDataTypes(row, firstRow));
                 } catch (parseError) {
-                    throw new Error(`Failed to parse AI response as JSON: ${parseError instanceof Error ? parseError.message : 'Unknown error'}\n\nResponse: ${result}`);
+                    const resultText = typeof result === 'string' ? result : JSON.stringify(result);
+                    throw new Error(`Failed to parse AI response as JSON: ${parseError instanceof Error ? parseError.message : 'Unknown error'}\n\nResponse: ${resultText}`);
                 }
 
                 progress.report({ increment: 25, message: 'Inserting rows...' });
