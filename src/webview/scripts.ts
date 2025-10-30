@@ -2476,32 +2476,11 @@ export const scripts = `
                     }
                     break;
                 case 'settingsLoaded':
-                    const aiProvider = document.getElementById('aiProvider');
                     const openaiKey = document.getElementById('openaiKey');
                     const openaiModel = document.getElementById('openaiModel');
 
-                    // Set provider value with fallback to copilot
-                    const providerValue = message.settings.aiProvider || 'copilot';
-
-                    // Set by value
-                    aiProvider.value = providerValue;
-
-                    // Also set selectedIndex explicitly for webview compatibility
-                    const selectedOption = Array.from(aiProvider.options).findIndex(opt => opt.value === providerValue);
-                    if (selectedOption !== -1) {
-                        aiProvider.selectedIndex = selectedOption;
-                    }
-
-                    // Fallback: set selected attribute on options
-                    Array.from(aiProvider.options).forEach(opt => {
-                        opt.selected = opt.value === providerValue;
-                    });
-
                     openaiKey.value = message.settings.openaiKey || '';
                     openaiModel.value = message.settings.openaiModel || 'gpt-4.1-mini';
-
-                    // Update visibility based on provider
-                    updateProviderSettings();
                     break;
             }
         });
