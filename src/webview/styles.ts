@@ -111,6 +111,7 @@ export const styles = `
         
         table {
             width: fit-content;
+            min-width: 100%;
             border-collapse: collapse;
             font-size: 12px;
             font-family: var(--vscode-editor-font-family);
@@ -180,7 +181,7 @@ export const styles = `
         td {
             padding: 6px 8px;
             border-bottom: 1px solid var(--vscode-panel-border);
-            max-width: 200px;
+            max-width: 500px;
             overflow: hidden;
             text-overflow: ellipsis;
             white-space: nowrap;
