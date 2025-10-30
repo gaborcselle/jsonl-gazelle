@@ -1595,7 +1595,7 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
         try {
             // Check if OpenAI API key exists
             const openaiKey = await this.context.secrets.get('openaiApiKey');
-            const hasAPIKey = !!openaiKey;
+            const hasAPIKey = !!(openaiKey && openaiKey.trim());
 
             webviewPanel.webview.postMessage({
                 type: 'apiKeyCheckResult',
@@ -1614,11 +1614,17 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
         try {
             await this.context.globalState.update('openaiModel', settings.openaiModel);
 
-            // Trim and save API key if provided
+            // Save or delete API key based on input
             let keySaved = false;
-            if (settings.openaiKey && settings.openaiKey.trim()) {
-                await this.context.secrets.store('openaiApiKey', settings.openaiKey.trim());
-                keySaved = true;
+            if (typeof settings.openaiKey === 'string') {
+                const trimmed = settings.openaiKey.trim();
+                if (trimmed) {
+                    await this.context.secrets.store('openaiApiKey', trimmed);
+                    keySaved = true;
+                } else {
+                    // Empty input means delete stored key
+                    await this.context.secrets.delete('openaiApiKey');
+                }
             }
 
             vscode.window.showInformationMessage('AI settings saved successfully');
