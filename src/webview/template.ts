@@ -2,7 +2,7 @@
  * Webview HTML template
  */
 
-export function getHtmlTemplate(gazelleIconUri: string, styles: string, scripts: string): string {
+export function getHtmlTemplate(gazelleIconUri: string, gazelleAnimationUri: string, styles: string, scripts: string): string {
     return `<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -17,7 +17,10 @@ ${styles}
 <body>
     <div class="main-content">
         <div class="view-controls">
-            <img src="${gazelleIconUri}" class="logo" alt="JSONL Gazelle" id="logo" title="JSONL Gazelle" style="cursor: pointer;">
+            <div class="logo-container" style="position: relative; width: 32px; height: 32px;">
+                <img src="${gazelleIconUri}" class="logo" alt="JSONL Gazelle" id="logo" title="JSONL Gazelle" style="cursor: pointer;">
+                <img src="${gazelleAnimationUri}" class="logo-animation" id="logoAnimation" alt="Loading..." style="display: none; position: absolute; top: 0; left: 0; width: 32px; height: 32px;">
+            </div>
             <div class="loading-state" id="loadingState" style="display: none;">
                 <div>Loading large file...</div>
                 <div class="loading-progress" id="loadingProgress"></div>
@@ -85,7 +88,7 @@ ${styles}
 
         <div class="table-container" id="tableContainer">
             <div class="indexing" id="indexingDiv">
-                <img src="${gazelleIconUri}" class="indexing-icon" alt="Indexing...">
+                <img src="${gazelleAnimationUri}" style="width: 32px; height: 32px;" alt="Indexing...">
                 <div>Indexing JSONL file...</div>
             </div>
             <!-- Table View Container -->
@@ -252,6 +255,14 @@ Available variables:
                     • <code>{{rows_after}}</code> - number of rows after this one
                 </div>
 
+                <div style="margin-top: 16px; padding: 12px; background: rgba(255, 255, 255, 0.03); border-radius: 6px; border: 1px solid var(--vscode-input-border);">
+                    <label style="display: flex; align-items: center; margin-bottom: 8px; cursor: pointer;">
+                        <input type="checkbox" id="aiUseEnum" style="margin-right: 8px; cursor: pointer;" />
+                        <span style="font-weight: 500;">Restrict output to enum values</span>
+                    </label>
+                    <input type="text" id="aiEnumValues" class="column-name-input" placeholder="Enter values separated by comma, e.g., 1, 2, 3" 
+                           style="margin-top: 8px; display: none;" disabled />
+                </div>
 
                 <div class="modal-actions" style="margin-top: 16px;">
                     <button class="modal-button modal-button-primary" id="aiColumnConfirmBtn">Generate Column</button>
@@ -269,6 +280,10 @@ Available variables:
                 <button class="modal-close" id="settingsCloseBtn">&times;</button>
             </div>
             <div class="modal-body">
+                <div id="apiKeyWarning" style="display: none; margin-bottom: 16px; padding: 12px; background: rgba(255, 200, 0, 0.15); border-left: 3px solid #ffc800; border-radius: 4px; color: var(--vscode-errorForeground);">
+                    <strong style="display: block; margin-bottom: 4px;">⚠️ OpenAI API Key Required</strong>
+                    <span style="font-size: 12px;">The OpenAI API key is not set. Please enter your API key below to use AI features.</span>
+                </div>
                 
                     <label for="openaiKey" style="display: block; margin-bottom: 8px; font-weight: 500;">OpenAI API Key:</label>
                     <input type="text" id="openaiKey" class="column-name-input" placeholder="sk-..." />
@@ -287,9 +302,9 @@ Available variables:
                     </div>
                 </div>
 
-                <div class="modal-actions" style="margin-top: 16px;">
+                <div class="modal-actions" style="margin-top: 16px; margin-bottom: 16px;">
                     <button class="modal-button modal-button-primary" id="settingsSaveBtn">Save Settings</button>
-                    <button class="modal-button modal-button-secondary" id="settingsCancelBtn">Cancel</button>
+                    <button class="modal-button modal-button-secondary" id="settingsCancelBtn" style="margin-right: 16px;">Cancel</button>
                 </div>
             </div>
         </div>
