@@ -728,6 +728,29 @@ export const styles = `
             margin-bottom: 8px;
         }
         
+        .field-row {
+            display: flex;
+            align-items: center;
+            gap: 4px;
+        }
+        
+        .column-name-input-inline {
+            flex: 1;
+            padding: 8px 12px;
+            font-size: 13px;
+            background-color: var(--vscode-input-background);
+            color: var(--vscode-input-foreground);
+            border: 1px solid var(--vscode-input-border);
+            border-radius: 4px;
+            outline: none;
+            font-family: var(--vscode-font-family);
+            box-sizing: border-box;
+        }
+        
+        .column-name-input-inline:focus {
+            border-color: var(--vscode-focusBorder);
+        }
+        
         .ai-info-panel code {
             background-color: var(--vscode-textCodeBlock-background);
             color: var(--vscode-textPreformat-foreground);
