@@ -227,14 +227,17 @@ ${styles}
                 <button class="modal-close" id="aiColumnCloseBtn">&times;</button>
             </div>
             <div class="modal-body">
-                <label for="aiColumnName" style="display: block; margin-bottom: 8px; font-weight: 500;">Column Name:</label>
-                <input type="text" id="aiColumnName" class="column-name-input" placeholder="e.g., summary, category, score" />
-
-                <div class="label-with-info">
-                    <label for="aiPrompt" style="display: inline-block; margin-top: 16px; margin-bottom: 8px; font-weight: 500;">AI Prompt Template:</label>
-                    <button class="modal-info-btn" id="aiColumnInfoBtn">ℹ</button>
+                <div class="field-row">
+                    <label for="aiColumnName" style="margin-right: 8px; font-weight: 500; white-space: nowrap;">Column Name:</label>
+                    <input type="text" id="aiColumnName" class="column-name-input-inline" placeholder="e.g., summary, category, score" />
                 </div>
-                <textarea id="aiPrompt" class="ai-prompt-textarea" rows="10" placeholder="Example: Categorize this item: {{row.name}} with price {{row.price}}
+
+                <div style="margin-top: 12px;">
+                    <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 8px;">
+                        <label for="aiPrompt" style="font-weight: 500;">AI Prompt:</label>
+                        <button class="modal-info-btn" id="aiColumnInfoBtn">ℹ</button>
+                    </div>
+                    <textarea id="aiPrompt" class="ai-prompt-textarea" rows="10" placeholder="Example: Categorize this item: {{row.name}} with price {{row.price}}
 
 Available variables:
 - {{row}} - entire row as JSON
@@ -253,6 +256,7 @@ Available variables:
                     • <code>{{row_number}}</code> - current row number<br>
                     • <code>{{rows_before}}</code> - number of rows before this one<br>
                     • <code>{{rows_after}}</code> - number of rows after this one
+                </div>
                 </div>
 
                 <div style="margin-top: 16px; padding: 12px; background: rgba(255, 255, 255, 0.03); border-radius: 6px; border: 1px solid var(--vscode-input-border);">
