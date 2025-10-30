@@ -324,13 +324,16 @@ Available variables:
                 <label for="rowCount" style="display: block; margin-top: 16px; margin-bottom: 8px; font-weight: 500;">Number of Rows to Generate:</label>
                 <input type="number" id="rowCount" class="column-name-input" value="5" min="1" max="50" placeholder="5" />
 
-                <label for="aiRowsPrompt" style="display: block; margin-top: 16px; margin-bottom: 8px; font-weight: 500;">AI Prompt:</label>
-                <textarea id="aiRowsPrompt" class="ai-prompt-textarea" rows="8" placeholder="Generate more rows like these, but make them different from the lines below.
+				<button id="aiRowsAdvancedToggle" class="modal-button modal-button-primary" style="margin-top: 16px;">Advanced</button>
+				<div id="aiRowsAdvancedSection" style="display: none;">
+					<label for="aiRowsPrompt" style="display: block; margin-top: 16px; margin-bottom: 8px; font-weight: 500;">AI Prompt:</label>
+					<textarea id="aiRowsPrompt" class="ai-prompt-textarea" rows="8" placeholder="Generate more rows like these, but make them different from the lines provided.
 
-                Available variables:
-                - {{context_rows}} - JSON array of previous rows
-                - {{row_count}} - number of rows to generate
-                - {{existing_count}} - total existing rows">Generate more rows like these, but make them different from the lines below.</textarea>
+					Available variables:
+					- {{context_rows}} - JSON array of previous rows
+					- {{row_count}} - number of rows to generate
+					- {{existing_count}} - total existing rows">Generate more rows like these, but make them different from the lines provided.</textarea>
+				</div>
 
                 <div class="ai-info-box" style="margin-top: 12px; padding: 12px; background: rgba(255, 255, 255, 0.05); border-radius: 6px; font-size: 12px; color: #888;">
                     <strong>Note:</strong> The AI will use the specified number of previous rows as context to generate new similar rows. The generated rows will be inserted below the selected row.
