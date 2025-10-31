@@ -145,6 +145,9 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
                             case 'generateAIRows':
                                 await this.handleGenerateAIRows(message.rowIndex, message.contextRowCount, message.rowCount, message.promptTemplate, webviewPanel, document);
                                 break;
+                            case 'requestColumnSuggestions':
+                                await this.handleRequestColumnSuggestions(message.referenceColumn, webviewPanel);
+                                break;
                         }
                     } catch (error) {
                         console.error('Error handling webview message:', error);
@@ -1310,6 +1313,12 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
             if (model.includes('gpt-4') || model.includes('gpt-3.5')) {
                 requestBody.seed = this.generateSessionSeed();
             }
+        } else {
+            // For non-enum requests, add system prompt to ensure concise responses
+            requestBody.messages.push({
+                role: 'system',
+                content: `You are a data processing assistant. Respond with ONLY the requested value or result, without any explanations, prefixes, or additional text. Return only the raw data value (number, string, boolean, etc.) that should be stored in the column.`
+            });
         }
 
         requestBody.messages.push({ role: 'user', content: prompt });
@@ -1343,7 +1352,10 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
             }
         }
 
-        return data.choices[0].message.content.trim();
+        // Use parseEnumValue to automatically convert string numbers/booleans to proper types
+        const content = data.choices[0].message.content.trim();
+        const parsed = this.parseEnumValue(content);
+        return parsed.value;
     }
 
     // Helpers for typed enums
@@ -2619,6 +2631,186 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
         } catch (error) {
             console.error('Error unstringifying column:', error);
             vscode.window.showErrorMessage(`Failed to unstringify column "${columnPath}": ${error instanceof Error ? error.message : 'Unknown error'}`);
+        }
+    }
+
+    private async handleRequestColumnSuggestions(referenceColumn: string, webviewPanel: vscode.WebviewPanel) {
+        try {
+            // Get sample rows (up to 10 rows for context)
+            const sampleRows = this.rows.slice(0, Math.min(10, this.rows.length));
+            
+            if (sampleRows.length === 0) {
+                webviewPanel.webview.postMessage({
+                    type: 'columnSuggestions',
+                    suggestions: [],
+                    error: 'No data available to analyze'
+                });
+                return;
+            }
+
+            // Get existing column names to avoid suggesting duplicates
+            const existingColumns = this.columns.map(col => col.path);
+
+            // Build prompt for OpenAI
+            const sampleDataStr = JSON.stringify(sampleRows.slice(0, 5), null, 2); // Use first 5 for the prompt
+            const existingColumnsStr = existingColumns.join(', ');
+
+            const prompt = `Analyze the following JSON data and suggest 5-8 useful new columns that could be derived or computed from this data.
+
+Existing columns: ${existingColumnsStr}
+
+Sample data:
+${sampleDataStr}
+
+For each suggested column, provide:
+1. A descriptive column name (snake_case or camelCase)
+2. A detailed prompt template that can be used with template variables like {{row.fieldname}}, {{row.fieldname[0]}}, etc.
+
+Template variable syntax:
+- {{row}} - entire row as JSON
+- {{row.fieldname}} - specific field value
+- {{row.fieldname[0]}} - array element
+- {{row_number}} - current row number (1-based)
+- {{rows_before}} - number of rows before this one
+- {{rows_after}} - number of rows after this one
+
+Return a JSON array with this structure:
+[
+  {
+    "columnName": "descriptive_column_name",
+    "prompt": "Detailed prompt template using template variables. Example: Extract the sentiment of {{row.text}} and categorize it as positive, negative, or neutral."
+  },
+  ...
+]
+
+Focus on:
+- Columns that would add value (categorization, extraction, transformation, analysis)
+- Useful aggregations or computations
+- Text analysis (sentiment, keywords, summaries)
+- Data enrichment possibilities
+- Quality indicators or validations
+
+Do not suggest columns that already exist. Return ONLY valid JSON array, no markdown formatting, no explanations.`;
+
+            // Call OpenAI with structured output
+            const apiKey = await this.context.secrets.get('openaiApiKey');
+            if (!apiKey) {
+                webviewPanel.webview.postMessage({
+                    type: 'columnSuggestions',
+                    suggestions: [],
+                    error: 'OpenAI API key not configured. Please set it in AI Settings.'
+                });
+                return;
+            }
+
+            const trimmedApiKey = apiKey.trim();
+            const model = this.context.globalState.get<string>('openaiModel', 'gpt-4.1-mini');
+
+            const requestBody: any = {
+                model: model,
+                messages: [
+                    {
+                        role: 'system',
+                        content: 'You are a helpful assistant that analyzes data structures and suggests useful derived columns. Always return valid JSON arrays.'
+                    },
+                    {
+                        role: 'user',
+                        content: prompt
+                    }
+                ],
+                temperature: 0.7,
+                response_format: {
+                    type: 'json_schema',
+                    json_schema: {
+                        name: 'column_suggestions',
+                        strict: true,
+                        schema: {
+                            type: 'object',
+                            properties: {
+                                suggestions: {
+                                    type: 'array',
+                                    items: {
+                                        type: 'object',
+                                        properties: {
+                                            columnName: {
+                                                type: 'string',
+                                                description: 'The suggested column name'
+                                            },
+                                            prompt: {
+                                                type: 'string',
+                                                description: 'The prompt template for generating this column'
+                                            }
+                                        },
+                                        required: ['columnName', 'prompt'],
+                                        additionalProperties: false
+                                    }
+                                }
+                            },
+                            required: ['suggestions'],
+                            additionalProperties: false
+                        }
+                    }
+                }
+            };
+
+            const response = await fetch('https://api.openai.com/v1/chat/completions', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': `Bearer ${trimmedApiKey}`
+                },
+                body: JSON.stringify(requestBody)
+            });
+
+            if (!response.ok) {
+                const error = await response.text();
+                webviewPanel.webview.postMessage({
+                    type: 'columnSuggestions',
+                    suggestions: [],
+                    error: `OpenAI API error: ${response.status} - ${error.substring(0, 200)}`
+                });
+                return;
+            }
+
+            const data = await response.json();
+            const content = data.choices[0].message.content.trim();
+
+            try {
+                const parsed = JSON.parse(content);
+                // Extract suggestions array from the response object
+                const suggestions = parsed.suggestions || (Array.isArray(parsed) ? parsed : []);
+                
+                // Validate and filter suggestions
+                const validSuggestions = Array.isArray(suggestions) 
+                    ? suggestions.filter(s => 
+                        s && 
+                        typeof s.columnName === 'string' && 
+                        typeof s.prompt === 'string' &&
+                        !existingColumns.includes(s.columnName)
+                      ).slice(0, 8) // Limit to 8 suggestions
+                    : [];
+
+                webviewPanel.webview.postMessage({
+                    type: 'columnSuggestions',
+                    suggestions: validSuggestions,
+                    error: null
+                });
+            } catch (parseError) {
+                console.error('Error parsing suggestions:', parseError);
+                webviewPanel.webview.postMessage({
+                    type: 'columnSuggestions',
+                    suggestions: [],
+                    error: `Failed to parse AI response: ${parseError instanceof Error ? parseError.message : 'Unknown error'}`
+                });
+            }
+
+        } catch (error) {
+            console.error('Error requesting column suggestions:', error);
+            webviewPanel.webview.postMessage({
+                type: 'columnSuggestions',
+                suggestions: [],
+                error: error instanceof Error ? error.message : 'Unknown error occurred'
+            });
         }
     }
 

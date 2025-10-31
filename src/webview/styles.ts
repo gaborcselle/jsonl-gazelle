@@ -652,6 +652,7 @@ export const styles = `
         .ai-column-modal {
             width: 580px;
             max-width: 90vw;
+            max-height: 90vh;
         }
 
         .settings-modal {
@@ -980,6 +981,13 @@ export const styles = `
         
         .modal-button-primary:hover {
             background-color: var(--vscode-button-hoverBackground);
+        }
+        
+        .modal-button-primary:disabled,
+        .modal-button:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+            pointer-events: none;
         }
         
         .modal-button-secondary {
