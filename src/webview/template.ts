@@ -238,7 +238,7 @@ ${styles}
                         <button class="modal-info-btn" id="aiColumnInfoBtn">?</button>
                     </div>
                     <div class="ai-prompt-row" style="display: flex; gap: 12px; align-items: stretch;">
-                        <textarea id="aiPrompt" class="ai-prompt-textarea" rows="10" style="flex: 1;" placeholder="Example: Categorize this item: {{row.name}} with price {{row.price}}
+                        <textarea id="aiPrompt" class="ai-prompt-textarea" rows="10" style="flex: 1;" placeholder="Example: Assign a U.S. school grade (K–12 or college) that best matches the reading level of {{row.model_output}}.
 
 Available variables:
 - {{row}} - entire row as JSON
@@ -249,7 +249,7 @@ Available variables:
 - {{rows_after}} - number of rows after this one"></textarea>
 
                         <div class="ai-info-panel" id="aiInfoPanel" style="display: none; width: 40%; min-width: 260px; padding: 12px; background: rgba(255, 255, 255, 0.05); border-radius: 6px; font-size: 12px; color: #888;">
-                            <strong>Example:</strong> Categorize this item: {{row.name}} with price {{row.price}}<br><br>
+                            <strong>Example:</strong> Assign a U.S. school grade (K–12 or college) that best matches the reading level of {{row.model_output}}.<br><br>
                             <strong>Available variables:</strong><br>
                             • <code>{{row}}</code> - entire row as JSON<br>
                             • <code>{{row.fieldname}}</code> - specific field value<br>
