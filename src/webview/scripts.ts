@@ -870,6 +870,8 @@ export const scripts = `
         // AI Column Modal
         let aiColumnPosition = null;
         let aiColumnReferenceColumn = null;
+        let aiColumnEscHandler = null;
+        let aiColumnEnumInputHandler = null;
 
         function openAIColumnModal(position, referenceColumn) {
             aiColumnPosition = position;
@@ -897,6 +899,28 @@ export const scripts = `
             
             modal.classList.add('show');
 
+            // Add ESC handler for modal
+            aiColumnEscHandler = (e) => {
+                if (e.key === 'Escape') {
+                    closeAIColumnModal();
+                }
+            };
+            document.addEventListener('keydown', aiColumnEscHandler);
+            
+            // Add input handler for enum values input
+            aiColumnEnumInputHandler = (e) => {
+                // Clear previous timer
+                if (enumInputDebounceTimer) {
+                    clearTimeout(enumInputDebounceTimer);
+                }
+                
+                // Set new timer with 500ms delay
+                enumInputDebounceTimer = setTimeout(() => {
+                    showEnumDropdown(e.target.value);
+                }, 500);
+            };
+            enumValuesInput.addEventListener('input', aiColumnEnumInputHandler);
+
             // Focus name input
             setTimeout(() => nameInput.focus(), 100);
         }
@@ -915,6 +939,27 @@ export const scripts = `
             enumValuesInput.value = '';
             enumValuesInput.style.display = 'none';
             enumValuesInput.disabled = true;
+            
+            // Hide dropdown
+            hideEnumDropdown();
+            
+            // Clear debounce timer
+            if (enumInputDebounceTimer) {
+                clearTimeout(enumInputDebounceTimer);
+                enumInputDebounceTimer = null;
+            }
+            
+            // Remove ESC handler
+            if (aiColumnEscHandler) {
+                document.removeEventListener('keydown', aiColumnEscHandler);
+                aiColumnEscHandler = null;
+            }
+            
+            // Remove input handler
+            if (aiColumnEnumInputHandler) {
+                enumValuesInput.removeEventListener('input', aiColumnEnumInputHandler);
+                aiColumnEnumInputHandler = null;
+            }
             
             // Reset prompt required attribute and label
             promptInput.setAttribute('required', 'required');
@@ -980,16 +1025,6 @@ export const scripts = `
                 closeAIColumnModal();
             }
         });
-        document.getElementById('aiColumnName').addEventListener('keydown', (e) => {
-            if (e.key === 'Escape') {
-                closeAIColumnModal();
-            }
-        });
-        document.getElementById('aiPrompt').addEventListener('keydown', (e) => {
-            if (e.key === 'Escape') {
-                closeAIColumnModal();
-            }
-        });
         
         // Enum checkbox toggle
         document.getElementById('aiUseEnum').addEventListener('change', (e) => {
@@ -1007,11 +1042,14 @@ export const scripts = `
                 if (promptLabel && !promptLabel.textContent.includes('(optional')) {
                     promptLabel.textContent = promptLabel.textContent.replace(':', ' (optional):');
                 }
+                // Request recent enum values from backend
+                vscode.postMessage({ type: 'getRecentEnumValues' });
                 setTimeout(() => enumValuesInput.focus(), 100);
             } else {
                 enumValuesInput.style.display = 'none';
                 enumValuesInput.disabled = true;
                 enumValuesInput.value = '';
+                hideEnumDropdown();
                 // Add required attribute back to prompt when enum is not selected
                 promptInput.setAttribute('required', 'required');
                 // Restore original label
@@ -1019,6 +1057,74 @@ export const scripts = `
                     promptLabel.textContent = promptLabel.textContent.replace(' (optional):', ':');
                 }
             }
+        });
+        
+        // Enum dropdown management
+        let recentEnumValues = [];
+        let enumInputDebounceTimer = null;
+        
+        function hideEnumDropdown() {
+            const dropdown = document.getElementById('enumHistoryDropdown');
+            dropdown.style.display = 'none';
+        }
+        
+        function showEnumDropdown(filterText = '') {
+            if (recentEnumValues.length === 0) {
+                hideEnumDropdown();
+                return;
+            }
+            
+            const dropdown = document.getElementById('enumHistoryDropdown');
+            
+            // Filter values based on input text
+            let valuesToShow = recentEnumValues;
+            if (filterText.length > 0) {
+                const filterLower = filterText.toLowerCase();
+                valuesToShow = recentEnumValues.filter(value => 
+                    value.toLowerCase().startsWith(filterLower)
+                );
+            }
+            
+            if (valuesToShow.length === 0) {
+                hideEnumDropdown();
+                return;
+            }
+            
+            dropdown.innerHTML = valuesToShow.map(value => 
+                \`<div class="enum-history-item">\${value}</div>\`
+            ).join('');
+            
+            dropdown.style.display = 'block';
+            
+            // Add mousedown handlers to dropdown items (not click) to handle blur issue
+            dropdown.querySelectorAll('.enum-history-item').forEach(item => {
+                item.addEventListener('mousedown', (e) => {
+                    e.preventDefault(); // Prevent input blur
+                    const enumValuesInput = document.getElementById('aiEnumValues');
+                    enumValuesInput.value = item.textContent;
+                    hideEnumDropdown();
+                    // Keep focus on input
+                    setTimeout(() => enumValuesInput.focus(), 10);
+                });
+            });
+        }
+        
+        // Handle focus/blur on enum input
+        document.getElementById('aiEnumValues').addEventListener('focus', () => {
+            const enumValuesInput = document.getElementById('aiEnumValues');
+            showEnumDropdown(enumValuesInput.value);
+        });
+        
+        document.getElementById('aiEnumValues').addEventListener('blur', (e) => {
+            // Use setTimeout to allow click on dropdown item before hiding
+            setTimeout(() => {
+                const dropdown = document.getElementById('enumHistoryDropdown');
+                const activeElement = document.activeElement;
+                // Only hide if focus didn't move to dropdown
+                if (activeElement !== dropdown && !dropdown.contains(activeElement)) {
+                    hideEnumDropdown();
+                }
+            }, 200);
         });
 
         // Settings Modal
@@ -2501,6 +2607,9 @@ export const scripts = `
 
                     openaiKey.value = message.settings.openaiKey || '';
                     openaiModel.value = message.settings.openaiModel || 'gpt-4.1-mini';
+                    break;
+                case 'recentEnumValuesLoaded':
+                    recentEnumValues = message.recentValues || [];
                     break;
             }
         });

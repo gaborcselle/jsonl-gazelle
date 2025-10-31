@@ -130,6 +130,9 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
                             case 'getSettings':
                                 await this.handleGetSettings(webviewPanel);
                                 break;
+                            case 'getRecentEnumValues':
+                                await this.handleGetRecentEnumValues(webviewPanel);
+                                break;
                             case 'checkAPIKey':
                                 await this.handleCheckAPIKey(webviewPanel);
                                 break;
@@ -1065,6 +1068,11 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
             // Now fill the column with AI-generated content
             await this.fillColumnWithAI(columnName, promptTemplate, webviewPanel, document, enumValues || null);
 
+            // Save recent enum values to global state
+            if (enumValues && enumValues.length > 0) {
+                await this.saveRecentEnumValues(enumValues);
+            }
+
         } catch (error) {
             // Rollback: Remove the column that was just added
             const columnIndex = this.columns.findIndex(col => col.path === columnName);
@@ -1588,6 +1596,52 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
             });
         } catch (error) {
             console.error('Error loading settings:', error);
+        }
+    }
+
+    private async saveRecentEnumValues(enumValues: string[]): Promise<void> {
+        try {
+            const existing = this.context.globalState.get<string[]>('recentEnumValues', []);
+            const enumKey = enumValues.join(',');
+            
+            // Remove if already exists to avoid duplicates
+            const filtered = existing.filter(item => item !== enumKey);
+            
+            // Add to the beginning
+            filtered.unshift(enumKey);
+            
+            // Keep only last 5
+            const trimmed = filtered.slice(0, 5);
+            
+            await this.context.globalState.update('recentEnumValues', trimmed);
+        } catch (error) {
+            console.error('Error saving recent enum values:', error);
+        }
+    }
+
+    private getRecentEnumValues(): string[] {
+        try {
+            return this.context.globalState.get<string[]>('recentEnumValues', []);
+        } catch (error) {
+            console.error('Error getting recent enum values:', error);
+            return [];
+        }
+    }
+
+    private async handleGetRecentEnumValues(webviewPanel: vscode.WebviewPanel) {
+        try {
+            const recentValues = this.getRecentEnumValues();
+
+            webviewPanel.webview.postMessage({
+                type: 'recentEnumValuesLoaded',
+                recentValues
+            });
+        } catch (error) {
+            console.error('Error loading recent enum values:', error);
+            webviewPanel.webview.postMessage({
+                type: 'recentEnumValuesLoaded',
+                recentValues: []
+            });
         }
     }
 
