@@ -925,6 +925,38 @@ export const styles = `
             border-color: var(--vscode-focusBorder);
         }
         
+        .enum-history-dropdown {
+            position: absolute;
+            top: 100%;
+            left: 0;
+            right: 0;
+            background-color: var(--vscode-dropdown-background);
+            border: 1px solid var(--vscode-dropdown-border);
+            border-radius: 4px;
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2);
+            z-index: 10001;
+            max-height: 200px;
+            overflow-y: auto;
+            margin-top: 2px;
+        }
+        
+        .enum-history-item {
+            padding: 8px 12px;
+            cursor: pointer;
+            border-bottom: 1px solid var(--vscode-dropdown-border);
+            font-size: 13px;
+            color: var(--vscode-foreground);
+            transition: background-color 0.2s;
+        }
+        
+        .enum-history-item:hover {
+            background-color: var(--vscode-list-hoverBackground);
+        }
+        
+        .enum-history-item:last-child {
+            border-bottom: none;
+        }
+        
         .modal-actions {
             display: flex;
             gap: 10px;

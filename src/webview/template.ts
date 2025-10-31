@@ -226,7 +226,7 @@ ${styles}
                 <h3>Insert Column with AI</h3>
                 <button class="modal-close" id="aiColumnCloseBtn">&times;</button>
             </div>
-            <div class="modal-body">
+            <div class="modal-body" style="overflow: visible;">
                 <div class="field-row">
                     <label for="aiColumnName" style="margin-right: 8px; font-weight: 500; white-space: nowrap;">Column Name:</label>
                     <input type="text" id="aiColumnName" class="column-name-input-inline" placeholder="e.g., summary, category, score" />
@@ -266,8 +266,11 @@ Available variables:
                         <input type="checkbox" id="aiUseEnum" style="margin-right: 8px; cursor: pointer;" />
                         <span style="font-weight: 500;">Restrict output to enum values</span>
                     </label>
-                    <input type="text" id="aiEnumValues" class="column-name-input" placeholder="Enter values separated by comma, e.g., 1, 2, 3" 
-                           style="margin-top: 8px; display: none;" disabled />
+                    <div style="position: relative; display: grid; grid-template-rows: auto auto;">
+                        <input type="text" id="aiEnumValues" class="column-name-input" placeholder="Enter values separated by comma, e.g., 1, 2, 3" 
+                               style="margin-top: 8px; display: none; width: 100%; box-sizing: border-box;" disabled />
+                        <div id="enumHistoryDropdown" class="enum-history-dropdown" style="display: none;"></div>
+                    </div>
                 </div>
 
                 <div class="modal-actions" style="margin-top: 16px;">
