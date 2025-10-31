@@ -1282,12 +1282,10 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
             const buckets = this.getTypedEnumBuckets(enumValues);
             const valueSchema = this.buildEnumValueSchema(buckets);
 
-            // Enhanced system prompt with randomized value order
-            const shuffledValues = this.shuffleArray([...enumValues]);
-
+            // Simple system prompt - enum constraints are handled by structured outputs JSON Schema
             requestBody.messages.push({
                 role: 'system',
-                content: `CRITICAL SELECTION INSTRUCTIONS:\n\n1. CONTEXT ANALYSIS: Carefully analyze the input context and match it to the most appropriate value\n\n2. NO BIAS: Do NOT default to any particular value. Each option is equally valid.\n\n3. RANDOM ORDER: Values are presented in random order to prevent positional bias: [${shuffledValues.join(', ')}]\n\n4. VARIED SELECTION: Your selections MUST vary based on different input contexts\n\n5. STRICT MATCHING: Choose based on semantic matching, not default patterns\n\nIMPORTANT: If multiple values seem equally appropriate, choose the one that has been selected LESS frequently in recent interactions.`
+                content: `Analyze the input context and select the most appropriate value from the allowed options. Choose based on semantic matching with the context provided.`
             });
 
             requestBody.response_format = {
@@ -1299,7 +1297,7 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
                         type: 'object',
                         properties: {
                             value: Object.assign({}, valueSchema, {
-                                description: `Select exactly ONE value. Consider context carefully and avoid repetitive patterns. Current values in random order: ${shuffledValues.join(', ')}`
+                                description: `Select exactly ONE value from the allowed options based on the context.`
                             })
                         },
                         required: ['value'],
