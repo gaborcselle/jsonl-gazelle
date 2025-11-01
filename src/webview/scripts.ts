@@ -2777,9 +2777,16 @@ export const scripts = `
                 case 'settingsLoaded':
                     const openaiKey = document.getElementById('openaiKey');
                     const openaiModel = document.getElementById('openaiModel');
+                    const warningElement = document.getElementById('apiKeyWarning');
 
                     openaiKey.value = message.settings.openaiKey || '';
                     openaiModel.value = message.settings.openaiModel || 'gpt-4.1-mini';
+                    
+                    // Update warning visibility based on whether API key exists
+                    if (warningElement) {
+                        const hasAPIKey = message.settings.openaiKey && message.settings.openaiKey.trim().length > 0;
+                        warningElement.style.display = hasAPIKey ? 'none' : 'block';
+                    }
                     break;
                 case 'recentEnumValuesLoaded':
                     recentEnumValues = message.recentValues || [];

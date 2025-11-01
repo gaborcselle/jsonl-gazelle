@@ -75,17 +75,8 @@ This will create `test-data/large.jsonl` with:
 The generated file is automatically excluded from git via `.gitignore` to keep the repository lightweight.
 
 ## What's next / Roadmap
-- [ ] Table view column width logic: If there's only one column, for example in `escaped-json.jsonl`, that column should fill the entire horizontal width
-- [ ] Table view column width logic: For files with columns that have a lot of info, like `nested.jsonl`, make the columns with the longer values wider than is currently
-- [ ] AI dialog: When the OpenAI key is not set, and you click to insert a column with AI, the AI settings dialog should appear with a warning that the key is not set. Entering a key and clicking OK results in us returning to the AI column screen.
-- [ ] Insert Rows with AI: When the OpenAI key is not set, ask for the OpenAI key as above.
-- [ ] Insert Rows with AI: Hide the AI Prompt, but show it if you click "Advanced". Change last word of the prompt from "below" to "provided"
-- [ ] AI dialog: Make column name and its text field a single line to save vertical space. Reduce vertical padding to "AI Prompt", there's too much space.
-- [ ] AI dialog: "AI Prompt Template" should just be called "AI Prompt". 
-- [ ] AI dialog: Remember recent values (along with any enum settings), and allow the user to prefill them from a dropdown. (Don't show the dropdown if the user has never used the feature.) 
-- [ ] AI dialog: Make the (i) more like a (?) and make sure the baseline of teh ?is aligned with the text. Clicking on it should show the templace language to the right of the AI Prompt instead of below - on laptop screens, this dialog takes up too much vertical space.
-- [ ] AI dialog: Change the example to "Assign a U.S. school grade (K–12 or college) that best matches the reading level of `{{row.model_output}}`."
-- [ ] AI dialog: port the enum option to OpenAI's structured outputs from the current prompt-based implementation
+- [ ] AI column dialog: Remember recent values (along with any enum settings), and allow the user to prefill them from a dropdown. (Don't show the dropdown if the user has never used the feature.) 
+- [ ] AI column dialog: port the enum option to OpenAI's structured outputs from the current prompt-based implementation
 - [ ] Test the AI column generation feature, e.g. for when you give it `{{row.paths}}` that exist in some rows but not in others
 - [ ] Test the AI row generation feature
 - [ ] Suggest feature in AI add column dialog: Add a "Suggest new column" to the column menu. It will prompt OpenAI with some of the example data to make suggestions for new columns to add, with the provided template language. It will suggest a bunch of column names + prompts to choose from. The user can then run that and add a new column.
