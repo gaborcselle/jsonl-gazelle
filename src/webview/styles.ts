@@ -111,6 +111,7 @@ export const styles = `
         
         table {
             width: fit-content;
+            min-width: 100%;
             border-collapse: collapse;
             font-size: 12px;
             font-family: var(--vscode-editor-font-family);
@@ -180,7 +181,7 @@ export const styles = `
         td {
             padding: 6px 8px;
             border-bottom: 1px solid var(--vscode-panel-border);
-            max-width: 200px;
+            max-width: 500px;
             overflow: hidden;
             text-overflow: ellipsis;
             white-space: nowrap;
@@ -651,6 +652,7 @@ export const styles = `
         .ai-column-modal {
             width: 580px;
             max-width: 90vw;
+            max-height: 90vh;
         }
 
         .settings-modal {
@@ -721,10 +723,50 @@ export const styles = `
         
         .label-with-info {
             display: flex;
-            align-items: center;
+            align-items: baseline;
             gap: 8px;
             margin-top: 16px;
             margin-bottom: 8px;
+        }
+
+        /* AI Prompt two-column layout helper */
+        .ai-prompt-row {
+            display: flex;
+            gap: 12px;
+            align-items: stretch;
+        }
+
+        @media (max-width: 1100px) {
+            .ai-prompt-row {
+                flex-direction: column;
+            }
+            #aiInfoPanel {
+                width: 100% !important;
+                min-width: 0 !important;
+            }
+        }
+        
+        .field-row {
+            display: flex;
+            align-items: center;
+            gap: 4px;
+        }
+        
+        .column-name-input-inline {
+            flex: 1;
+            padding: 8px 12px;
+            font-size: 13px;
+            background-color: var(--vscode-input-background);
+            color: var(--vscode-input-foreground);
+            border: 1px solid var(--vscode-input-border);
+            border-radius: 4px;
+            outline: none;
+            font-family: var(--vscode-font-family);
+            box-sizing: border-box;
+        }
+        
+        .column-name-input-inline:focus {
+            border-color: var(--vscode-focusBorder);
         }
         
         .ai-info-panel code {
@@ -884,6 +926,38 @@ export const styles = `
             border-color: var(--vscode-focusBorder);
         }
         
+        .enum-history-dropdown {
+            position: absolute;
+            top: 100%;
+            left: 0;
+            right: 0;
+            background-color: var(--vscode-dropdown-background);
+            border: 1px solid var(--vscode-dropdown-border);
+            border-radius: 4px;
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2);
+            z-index: 10001;
+            max-height: 200px;
+            overflow-y: auto;
+            margin-top: 2px;
+        }
+        
+        .enum-history-item {
+            padding: 8px 12px;
+            cursor: pointer;
+            border-bottom: 1px solid var(--vscode-dropdown-border);
+            font-size: 13px;
+            color: var(--vscode-foreground);
+            transition: background-color 0.2s;
+        }
+        
+        .enum-history-item:hover {
+            background-color: var(--vscode-list-hoverBackground);
+        }
+        
+        .enum-history-item:last-child {
+            border-bottom: none;
+        }
+        
         .modal-actions {
             display: flex;
             gap: 10px;
@@ -907,6 +981,13 @@ export const styles = `
         
         .modal-button-primary:hover {
             background-color: var(--vscode-button-hoverBackground);
+        }
+        
+        .modal-button-primary:disabled,
+        .modal-button:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+            pointer-events: none;
         }
         
         .modal-button-secondary {

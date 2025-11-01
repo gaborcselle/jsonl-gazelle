@@ -130,6 +130,9 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
                             case 'getSettings':
                                 await this.handleGetSettings(webviewPanel);
                                 break;
+                            case 'getRecentEnumValues':
+                                await this.handleGetRecentEnumValues(webviewPanel);
+                                break;
                             case 'checkAPIKey':
                                 await this.handleCheckAPIKey(webviewPanel);
                                 break;
@@ -141,6 +144,9 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
                                 break;
                             case 'generateAIRows':
                                 await this.handleGenerateAIRows(message.rowIndex, message.contextRowCount, message.rowCount, message.promptTemplate, webviewPanel, document);
+                                break;
+                            case 'requestColumnSuggestions':
+                                await this.handleRequestColumnSuggestions(message.referenceColumn, webviewPanel);
                                 break;
                         }
                     } catch (error) {
@@ -1065,6 +1071,11 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
             // Now fill the column with AI-generated content
             await this.fillColumnWithAI(columnName, promptTemplate, webviewPanel, document, enumValues || null);
 
+            // Save recent enum values to global state
+            if (enumValues && enumValues.length > 0) {
+                await this.saveRecentEnumValues(enumValues);
+            }
+
         } catch (error) {
             // Rollback: Remove the column that was just added
             const columnIndex = this.columns.findIndex(col => col.path === columnName);
@@ -1203,34 +1214,18 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
         }
     }
 
-    private async generateAIValueForRow(rowIndex: number, promptTemplate: string, totalRows: number, enumValues: string[] | null = null): Promise<string> {
+    private async generateAIValueForRow(rowIndex: number, promptTemplate: string, totalRows: number, enumValues: string[] | null = null): Promise<string | number | boolean> {
         const row = this.rows[rowIndex];
 
         // Replace template variables (use empty string if template is empty)
         let prompt = promptTemplate ? this.replaceTemplateVariables(promptTemplate, row, rowIndex, totalRows) : '';
 
-        // If enum values are provided, add them to the prompt with instructions
+        // When using enum with Structured Outputs, do not include the options list in the prompt.
+        // The JSON Schema strictly constrains allowed values; keep only row context in the prompt.
         if (enumValues && enumValues.length > 0) {
-            // Shuffle enum values to avoid bias towards first value
-            // Create a shuffled copy to present values in random order
-            const shuffledEnum = [...enumValues].sort(() => Math.random() - 0.5);
-            const enumList = shuffledEnum.join(', ');
-            
-            // If prompt is empty, add a built-in request for enum selection
             if (!prompt) {
-                prompt = `Based on the following row data, select the most appropriate value from the provided enum list that best matches the context:\n\n${JSON.stringify(row, null, 2)}`;
+                prompt = `Given the following row JSON, select the single best value based on the context. Return exactly one value.\n\nRow:\n${JSON.stringify(row, null, 2)}`;
             }
-            
-            prompt += `\n\nIMPORTANT: You must respond with EXACTLY one of these values: ${enumList}
-
-CRITICAL INSTRUCTIONS:
-- Analyze the input context carefully
-- Do NOT default to any particular value - consider ALL options equally
-- Each value in the list is equally valid - choose based on context matching
-- Select the value that BEST matches the input context
-- Vary your selection based on different contexts - do not use the same value for all inputs
-
-Available values (in random order): ${enumList}`;
         }
 
         // Call the language model API (let errors bubble up)
@@ -1268,33 +1263,34 @@ Available values (in random order): ${enumList}`;
         return result;
     }
 
-    private async callLanguageModel(prompt: string, enumValues: string[] | null = null): Promise<string> {
+    private async callLanguageModel(prompt: string, enumValues: string[] | null = null): Promise<string | number | boolean> {
         const apiKey = await this.context.secrets.get('openaiApiKey');
         if (!apiKey) {
             throw new Error('OpenAI API key not configured. Please set it in AI Settings.');
         }
 
-        // Trim the API key to remove any whitespace
         const trimmedApiKey = apiKey.trim();
-
         const model = this.context.globalState.get<string>('openaiModel', 'gpt-4.1-mini');
 
         const requestBody: any = {
             model: model,
             messages: [],
-            // Increase temperature when using enum to get more varied responses
-            temperature: enumValues && enumValues.length > 0 ? 0.9 : 0.7
+            // Lower temperature for enum selections
+            temperature: enumValues && enumValues.length > 0 ? 0.1 : 0.7,
+            // Add top_p for better control
+            top_p: enumValues && enumValues.length > 0 ? 0.1 : 1
         };
 
-        // If enum values are provided, add system message and use structured outputs API
         if (enumValues && enumValues.length > 0) {
-            // Add system message with clear instructions
+            const buckets = this.getTypedEnumBuckets(enumValues);
+            const valueSchema = this.buildEnumValueSchema(buckets);
+
+            // Simple system prompt - enum constraints are handled by structured outputs JSON Schema
             requestBody.messages.push({
                 role: 'system',
-                content: `You are a helpful assistant. When asked to choose from a list of values, you must analyze the context and select the MOST APPROPRIATE value from the provided list. Do not default to the first value - carefully evaluate which value best fits the context.`
+                content: `Analyze the input context and select the most appropriate value from the allowed options. Choose based on semantic matching with the context provided.`
             });
-            
-            // Create JSON schema for enum output
+
             requestBody.response_format = {
                 type: 'json_schema',
                 json_schema: {
@@ -1303,20 +1299,28 @@ Available values (in random order): ${enumList}`;
                     schema: {
                         type: 'object',
                         properties: {
-                            value: {
-                                type: 'string',
-                                enum: enumValues,
-                                description: `You MUST select exactly ONE value from this list: ${enumValues.join(', ')}. Choose based on careful analysis of the input context, not by default.`
-                            }
+                            value: Object.assign({}, valueSchema, {
+                                description: `Select exactly ONE value from the allowed options based on the context.`
+                            })
                         },
                         required: ['value'],
                         additionalProperties: false
                     }
                 }
             };
+
+            // Add seed for reproducibility (if supported by the model)
+            if (model.includes('gpt-4') || model.includes('gpt-3.5')) {
+                requestBody.seed = this.generateSessionSeed();
+            }
+        } else {
+            // For non-enum requests, add system prompt to ensure concise responses
+            requestBody.messages.push({
+                role: 'system',
+                content: `You are a data processing assistant. Respond with ONLY the requested value or result, without any explanations, prefixes, or additional text. Return only the raw data value (number, string, boolean, etc.) that should be stored in the column.`
+            });
         }
-        
-        // Add user message
+
         requestBody.messages.push({ role: 'user', content: prompt });
 
         const response = await fetch('https://api.openai.com/v1/chat/completions', {
@@ -1327,48 +1331,116 @@ Available values (in random order): ${enumList}`;
             },
             body: JSON.stringify(requestBody)
         });
-
         if (!response.ok) {
             const error = await response.text();
             throw new Error(`OpenAI API error: ${response.status} - ${error}`);
         }
-
         const data = await response.json();
-        
-        // If using structured outputs, parse the JSON response
+
         if (enumValues && enumValues.length > 0) {
             const content = data.choices[0].message.content.trim();
-            
+
             try {
-                // Try to parse as JSON first
                 const parsed = JSON.parse(content);
-                
-                // Validate that the returned value is in the enum list
-                if (parsed.value && enumValues.includes(parsed.value)) {
-                    return parsed.value;
+                const isAllowed = this.isValueInEnum(parsed.value, enumValues);
+                if (isAllowed) {
+                    return parsed.value as string | number | boolean;
                 }
-                
-                // If value is not in enum (shouldn't happen with strict mode), throw error
-                throw new Error(`Returned value "${parsed.value}" is not in the allowed enum list: ${enumValues.join(', ')}`);
+                throw new Error(`Returned value "${parsed.value}" is not in the allowed enum set.`);
             } catch (error) {
-                // Fallback: if JSON parsing failed, try to match content as string
-                
-                // If the content is already a valid enum value (exact match), return it
-                if (enumValues.includes(content)) {
-                    return content;
-                }
-                
-                // Try case-insensitive match
-                const matchedValue = enumValues.find(val => val.toLowerCase() === content.toLowerCase());
-                if (matchedValue) {
-                    return matchedValue;
-                }
-                
                 throw new Error(`Failed to parse structured output: ${error instanceof Error ? error.message : 'Unknown error'}. Content: ${content.substring(0, 100)}`);
             }
         }
-        
-        return data.choices[0].message.content.trim();
+
+        // Use parseEnumValue to automatically convert string numbers/booleans to proper types
+        const content = data.choices[0].message.content.trim();
+        const parsed = this.parseEnumValue(content);
+        return parsed.value;
+    }
+
+    // Helpers for typed enums
+    private enumCache = new Map<string, { kind: 'boolean' | 'integer' | 'number' | 'string'; value: boolean | number | string }>();
+    private parseEnumValue(raw: string): { kind: 'boolean' | 'integer' | 'number' | 'string'; value: boolean | number | string } {
+        if (this.enumCache.has(raw)) {
+            return this.enumCache.get(raw)!;
+        }
+
+        const s = raw.trim();
+
+        // Boolean values (case-sensitive check)
+        if (s === 'true') {
+            const result = { kind: 'boolean' as const, value: true as const };
+            this.enumCache.set(raw, result);
+            return result;
+        }
+        if (s === 'false') {
+            const result = { kind: 'boolean' as const, value: false as const };
+            this.enumCache.set(raw, result);
+            return result;
+        }
+
+        // Numbers — fast path via Number()
+        const num = Number(s);
+        if (!Number.isNaN(num) && s !== '') {
+            const result = Number.isInteger(num)
+                ? { kind: 'integer' as const, value: num }
+                : { kind: 'number' as const, value: num };
+            this.enumCache.set(raw, result);
+            return result;
+        }
+
+        // Default — treat as string
+        const result = { kind: 'string' as const, value: raw };
+        this.enumCache.set(raw, result);
+        return result;
+    }
+
+    private getTypedEnumBuckets(enumValues: string[]): { booleans: boolean[]; integers: number[]; numbers: number[]; strings: string[] } {
+        const typed = enumValues.map(v => this.parseEnumValue(v));
+        return {
+            booleans: typed.filter(t => t.kind === 'boolean').map(t => t.value as boolean),
+            integers: typed.filter(t => t.kind === 'integer').map(t => t.value as number),
+            numbers: typed.filter(t => t.kind === 'number').map(t => t.value as number),
+            strings: typed.filter(t => t.kind === 'string').map(t => t.value as string)
+        };
+    }
+
+    private buildEnumValueSchema(buckets: { booleans: boolean[]; integers: number[]; numbers: number[]; strings: string[] }): any {
+        const schemas: any[] = [];
+        if (buckets.booleans.length > 0) schemas.push({ type: 'boolean', enum: buckets.booleans });
+        if (buckets.integers.length > 0) schemas.push({ type: 'integer', enum: buckets.integers });
+        if (buckets.numbers.length > 0) schemas.push({ type: 'number', enum: buckets.numbers });
+        if (buckets.strings.length > 0) schemas.push({ type: 'string', enum: buckets.strings });
+        return schemas.length === 1 ? schemas[0] : { anyOf: schemas };
+    }
+
+    private isValueInEnum(value: unknown, enumValues: string[]): boolean {
+        const allowed = enumValues.map(v => this.parseEnumValue(v).value);
+
+        // Strict type and value validation
+        return allowed.some((allowedValue) => {
+            if (typeof value !== typeof allowedValue) return false;
+
+            if (typeof value === 'number' && typeof allowedValue === 'number') {
+                return value === allowedValue;
+            }
+
+            return value === allowedValue;
+        });
+    }
+
+    // Helper methods: randomization and seed
+    private shuffleArray<T>(array: T[]): T[] {
+        const shuffled = [...array];
+        for (let i = shuffled.length - 1; i > 0; i--) {
+            const j = Math.floor(Math.random() * (i + 1));
+            [shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
+        }
+        return shuffled;
+    }
+
+    private generateSessionSeed(): number {
+        return Math.floor(Math.random() * 10000);
     }
 
     private convertJsonlToPrettyWithLineNumbers(rows: JsonRow[]): { content: string, lineMapping: number[] } {
@@ -1537,11 +1609,57 @@ Available values (in random order): ${enumList}`;
         }
     }
 
+    private async saveRecentEnumValues(enumValues: string[]): Promise<void> {
+        try {
+            const existing = this.context.globalState.get<string[]>('recentEnumValues', []);
+            const enumKey = enumValues.join(',');
+            
+            // Remove if already exists to avoid duplicates
+            const filtered = existing.filter(item => item !== enumKey);
+            
+            // Add to the beginning
+            filtered.unshift(enumKey);
+            
+            // Keep only last 5
+            const trimmed = filtered.slice(0, 5);
+            
+            await this.context.globalState.update('recentEnumValues', trimmed);
+        } catch (error) {
+            console.error('Error saving recent enum values:', error);
+        }
+    }
+
+    private getRecentEnumValues(): string[] {
+        try {
+            return this.context.globalState.get<string[]>('recentEnumValues', []);
+        } catch (error) {
+            console.error('Error getting recent enum values:', error);
+            return [];
+        }
+    }
+
+    private async handleGetRecentEnumValues(webviewPanel: vscode.WebviewPanel) {
+        try {
+            const recentValues = this.getRecentEnumValues();
+
+            webviewPanel.webview.postMessage({
+                type: 'recentEnumValuesLoaded',
+                recentValues
+            });
+        } catch (error) {
+            console.error('Error loading recent enum values:', error);
+            webviewPanel.webview.postMessage({
+                type: 'recentEnumValuesLoaded',
+                recentValues: []
+            });
+        }
+    }
+
     private async handleCheckAPIKey(webviewPanel: vscode.WebviewPanel) {
         try {
             // Check if OpenAI API key exists
             const openaiKey = await this.context.secrets.get('openaiApiKey');
-            const hasAPIKey = !!openaiKey;
+            const hasAPIKey = !!(openaiKey && openaiKey.trim());
 
             webviewPanel.webview.postMessage({
                 type: 'apiKeyCheckResult',
@@ -1560,11 +1678,17 @@ Available values (in random order): ${enumList}`;
         try {
             await this.context.globalState.update('openaiModel', settings.openaiModel);
 
-            // Trim and save API key if provided
+            // Save or delete API key based on input
             let keySaved = false;
-            if (settings.openaiKey && settings.openaiKey.trim()) {
-                await this.context.secrets.store('openaiApiKey', settings.openaiKey.trim());
-                keySaved = true;
+            if (typeof settings.openaiKey === 'string') {
+                const trimmed = settings.openaiKey.trim();
+                if (trimmed) {
+                    await this.context.secrets.store('openaiApiKey', trimmed);
+                    keySaved = true;
+                } else {
+                    // Empty input means delete stored key
+                    await this.context.secrets.delete('openaiApiKey');
+                }
             }
 
             vscode.window.showInformationMessage('AI settings saved successfully');
@@ -1643,12 +1767,14 @@ Available values (in random order): ${enumList}`;
                 // Parse the result
                 let generatedRows: any[];
                 try {
+                    // Ensure string for regex parsing
+                    const resultText = typeof result === 'string' ? result : JSON.stringify(result);
                     // Try to extract JSON array from the response
-                    const jsonMatch = result.match(/\[[\s\S]*\]/);
+                    const jsonMatch = resultText.match(/\[[\s\S]*\]/);
                     if (jsonMatch) {
                         generatedRows = JSON.parse(jsonMatch[0]);
                     } else {
-                        generatedRows = JSON.parse(result);
+                        generatedRows = JSON.parse(resultText);
                     }
 
                     if (!Array.isArray(generatedRows)) {
@@ -1658,7 +1784,8 @@ Available values (in random order): ${enumList}`;
                     // Fix data types based on context rows
                     generatedRows = generatedRows.map(row => this.fixDataTypes(row, firstRow));
                 } catch (parseError) {
-                    throw new Error(`Failed to parse AI response as JSON: ${parseError instanceof Error ? parseError.message : 'Unknown error'}\n\nResponse: ${result}`);
+                    const resultText = typeof result === 'string' ? result : JSON.stringify(result);
+                    throw new Error(`Failed to parse AI response as JSON: ${parseError instanceof Error ? parseError.message : 'Unknown error'}\n\nResponse: ${resultText}`);
                 }
 
                 progress.report({ increment: 25, message: 'Inserting rows...' });
@@ -2504,6 +2631,186 @@ Available values (in random order): ${enumList}`;
         } catch (error) {
             console.error('Error unstringifying column:', error);
             vscode.window.showErrorMessage(`Failed to unstringify column "${columnPath}": ${error instanceof Error ? error.message : 'Unknown error'}`);
+        }
+    }
+
+    private async handleRequestColumnSuggestions(referenceColumn: string, webviewPanel: vscode.WebviewPanel) {
+        try {
+            // Get sample rows (up to 10 rows for context)
+            const sampleRows = this.rows.slice(0, Math.min(10, this.rows.length));
+            
+            if (sampleRows.length === 0) {
+                webviewPanel.webview.postMessage({
+                    type: 'columnSuggestions',
+                    suggestions: [],
+                    error: 'No data available to analyze'
+                });
+                return;
+            }
+
+            // Get existing column names to avoid suggesting duplicates
+            const existingColumns = this.columns.map(col => col.path);
+
+            // Build prompt for OpenAI
+            const sampleDataStr = JSON.stringify(sampleRows.slice(0, 5), null, 2); // Use first 5 for the prompt
+            const existingColumnsStr = existingColumns.join(', ');
+
+            const prompt = `Analyze the following JSON data and suggest 5-8 useful new columns that could be derived or computed from this data.
+
+Existing columns: ${existingColumnsStr}
+
+Sample data:
+${sampleDataStr}
+
+For each suggested column, provide:
+1. A descriptive column name (snake_case or camelCase)
+2. A detailed prompt template that can be used with template variables like {{row.fieldname}}, {{row.fieldname[0]}}, etc.
+
+Template variable syntax:
+- {{row}} - entire row as JSON
+- {{row.fieldname}} - specific field value
+- {{row.fieldname[0]}} - array element
+- {{row_number}} - current row number (1-based)
+- {{rows_before}} - number of rows before this one
+- {{rows_after}} - number of rows after this one
+
+Return a JSON array with this structure:
+[
+  {
+    "columnName": "descriptive_column_name",
+    "prompt": "Detailed prompt template using template variables. Example: Extract the sentiment of {{row.text}} and categorize it as positive, negative, or neutral."
+  },
+  ...
+]
+
+Focus on:
+- Columns that would add value (categorization, extraction, transformation, analysis)
+- Useful aggregations or computations
+- Text analysis (sentiment, keywords, summaries)
+- Data enrichment possibilities
+- Quality indicators or validations
+
+Do not suggest columns that already exist. Return ONLY valid JSON array, no markdown formatting, no explanations.`;
+
+            // Call OpenAI with structured output
+            const apiKey = await this.context.secrets.get('openaiApiKey');
+            if (!apiKey) {
+                webviewPanel.webview.postMessage({
+                    type: 'columnSuggestions',
+                    suggestions: [],
+                    error: 'OpenAI API key not configured. Please set it in AI Settings.'
+                });
+                return;
+            }
+
+            const trimmedApiKey = apiKey.trim();
+            const model = this.context.globalState.get<string>('openaiModel', 'gpt-4.1-mini');
+
+            const requestBody: any = {
+                model: model,
+                messages: [
+                    {
+                        role: 'system',
+                        content: 'You are a helpful assistant that analyzes data structures and suggests useful derived columns. Always return valid JSON arrays.'
+                    },
+                    {
+                        role: 'user',
+                        content: prompt
+                    }
+                ],
+                temperature: 0.7,
+                response_format: {
+                    type: 'json_schema',
+                    json_schema: {
+                        name: 'column_suggestions',
+                        strict: true,
+                        schema: {
+                            type: 'object',
+                            properties: {
+                                suggestions: {
+                                    type: 'array',
+                                    items: {
+                                        type: 'object',
+                                        properties: {
+                                            columnName: {
+                                                type: 'string',
+                                                description: 'The suggested column name'
+                                            },
+                                            prompt: {
+                                                type: 'string',
+                                                description: 'The prompt template for generating this column'
+                                            }
+                                        },
+                                        required: ['columnName', 'prompt'],
+                                        additionalProperties: false
+                                    }
+                                }
+                            },
+                            required: ['suggestions'],
+                            additionalProperties: false
+                        }
+                    }
+                }
+            };
+
+            const response = await fetch('https://api.openai.com/v1/chat/completions', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': `Bearer ${trimmedApiKey}`
+                },
+                body: JSON.stringify(requestBody)
+            });
+
+            if (!response.ok) {
+                const error = await response.text();
+                webviewPanel.webview.postMessage({
+                    type: 'columnSuggestions',
+                    suggestions: [],
+                    error: `OpenAI API error: ${response.status} - ${error.substring(0, 200)}`
+                });
+                return;
+            }
+
+            const data = await response.json();
+            const content = data.choices[0].message.content.trim();
+
+            try {
+                const parsed = JSON.parse(content);
+                // Extract suggestions array from the response object
+                const suggestions = parsed.suggestions || (Array.isArray(parsed) ? parsed : []);
+                
+                // Validate and filter suggestions
+                const validSuggestions = Array.isArray(suggestions) 
+                    ? suggestions.filter(s => 
+                        s && 
+                        typeof s.columnName === 'string' && 
+                        typeof s.prompt === 'string' &&
+                        !existingColumns.includes(s.columnName)
+                      ).slice(0, 8) // Limit to 8 suggestions
+                    : [];
+
+                webviewPanel.webview.postMessage({
+                    type: 'columnSuggestions',
+                    suggestions: validSuggestions,
+                    error: null
+                });
+            } catch (parseError) {
+                console.error('Error parsing suggestions:', parseError);
+                webviewPanel.webview.postMessage({
+                    type: 'columnSuggestions',
+                    suggestions: [],
+                    error: `Failed to parse AI response: ${parseError instanceof Error ? parseError.message : 'Unknown error'}`
+                });
+            }
+
+        } catch (error) {
+            console.error('Error requesting column suggestions:', error);
+            webviewPanel.webview.postMessage({
+                type: 'columnSuggestions',
+                suggestions: [],
+                error: error instanceof Error ? error.message : 'Unknown error occurred'
+            });
         }
     }
 

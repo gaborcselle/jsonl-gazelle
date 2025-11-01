@@ -226,15 +226,35 @@ ${styles}
                 <h3>Insert Column with AI</h3>
                 <button class="modal-close" id="aiColumnCloseBtn">&times;</button>
             </div>
-            <div class="modal-body">
-                <label for="aiColumnName" style="display: block; margin-bottom: 8px; font-weight: 500;">Column Name:</label>
-                <input type="text" id="aiColumnName" class="column-name-input" placeholder="e.g., summary, category, score" />
-
-                <div class="label-with-info">
-                    <label for="aiPrompt" style="display: inline-block; margin-top: 16px; margin-bottom: 8px; font-weight: 500;">AI Prompt Template:</label>
-                    <button class="modal-info-btn" id="aiColumnInfoBtn">ℹ</button>
+            <div class="modal-body" style="overflow: visible;">
+                <div class="field-row" style="display: flex; align-items: center; gap: 8px;">
+                    <label for="aiColumnName" style="margin-right: 8px; font-weight: 500; white-space: nowrap;">Column Name:</label>
+                    <input type="text" id="aiColumnName" class="column-name-input-inline" placeholder="e.g., summary, category, score" style="flex: 1;" />
+                    <button class="modal-button modal-button-primary" id="aiSuggestBtn" style="white-space: nowrap; padding: 6px 12px; font-size: 13px;">
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="display: inline-block; vertical-align: middle; margin-right: 4px;"><path d="M12 2v20M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"></path></svg>
+                        Suggest
+                    </button>
                 </div>
-                <textarea id="aiPrompt" class="ai-prompt-textarea" rows="10" placeholder="Example: Categorize this item: {{row.name}} with price {{row.price}}
+
+                <div id="aiSuggestionsContainer" style="display: none; margin-top: 12px; padding: 10px; background: rgba(255, 255, 255, 0.03); border-radius: 6px; border: 1px solid var(--vscode-input-border);">
+                    <div id="aiSuggestionsLoading" style="text-align: center; padding: 15px; color: #888; font-size: 13px;">
+                        Analyzing data and generating suggestions...
+                    </div>
+                    <div id="aiSuggestionsList" style="display: none; max-height: 180px; overflow-y: auto;">
+                        <!-- Suggestions will be inserted here -->
+                    </div>
+                    <div id="aiSuggestionsError" style="display: none; padding: 8px; background: rgba(255, 0, 0, 0.1); border-left: 3px solid var(--vscode-errorForeground); border-radius: 4px; color: var(--vscode-errorForeground); font-size: 12px;">
+                        <strong>Error:</strong> <span id="aiSuggestionsErrorMessage"></span>
+                    </div>
+                </div>
+
+                <div style="margin-top: 12px;">
+                    <div style="display: flex; align-items: baseline; gap: 8px; margin-bottom: 8px;">
+                        <label for="aiPrompt" style="font-weight: 500;">AI Prompt:</label>
+                        <button class="modal-info-btn" id="aiColumnInfoBtn">?</button>
+                    </div>
+                    <div class="ai-prompt-row" style="display: flex; gap: 12px; align-items: stretch;">
+                        <textarea id="aiPrompt" class="ai-prompt-textarea" rows="10" style="flex: 1;" placeholder="Example: Assign a U.S. school grade (K–12 or college) that best matches the reading level of {{row.model_output}}.
 
 Available variables:
 - {{row}} - entire row as JSON
@@ -244,15 +264,17 @@ Available variables:
 - {{rows_before}} - number of rows before this one
 - {{rows_after}} - number of rows after this one"></textarea>
 
-                <div class="ai-info-panel" id="aiInfoPanel" style="display: none; margin-top: 12px; padding: 12px; background: rgba(255, 255, 255, 0.05); border-radius: 6px; font-size: 12px; color: #888;">
-                    <strong>Example:</strong> Categorize this item: {{row.name}} with price {{row.price}}<br><br>
-                    <strong>Available variables:</strong><br>
-                    • <code>{{row}}</code> - entire row as JSON<br>
-                    • <code>{{row.fieldname}}</code> - specific field value<br>
-                    • <code>{{row.fieldname[0]}}</code> - array element<br>
-                    • <code>{{row_number}}</code> - current row number<br>
-                    • <code>{{rows_before}}</code> - number of rows before this one<br>
-                    • <code>{{rows_after}}</code> - number of rows after this one
+                        <div class="ai-info-panel" id="aiInfoPanel" style="display: none; width: 40%; min-width: 260px; padding: 12px; background: rgba(255, 255, 255, 0.05); border-radius: 6px; font-size: 12px; color: #888;">
+                            <strong>Example:</strong> Assign a U.S. school grade (K–12 or college) that best matches the reading level of {{row.model_output}}.<br><br>
+                            <strong>Available variables:</strong><br>
+                            • <code>{{row}}</code> - entire row as JSON<br>
+                            • <code>{{row.fieldname}}</code> - specific field value<br>
+                            • <code>{{row.fieldname[0]}}</code> - array element<br>
+                            • <code>{{row_number}}</code> - current row number<br>
+                            • <code>{{rows_before}}</code> - number of rows before this one<br>
+                            • <code>{{rows_after}}</code> - number of rows after this one
+                        </div>
+                    </div>
                 </div>
 
                 <div style="margin-top: 16px; padding: 12px; background: rgba(255, 255, 255, 0.03); border-radius: 6px; border: 1px solid var(--vscode-input-border);">
@@ -260,8 +282,11 @@ Available variables:
                         <input type="checkbox" id="aiUseEnum" style="margin-right: 8px; cursor: pointer;" />
                         <span style="font-weight: 500;">Restrict output to enum values</span>
                     </label>
-                    <input type="text" id="aiEnumValues" class="column-name-input" placeholder="Enter values separated by comma, e.g., 1, 2, 3" 
-                           style="margin-top: 8px; display: none;" disabled />
+                    <div style="position: relative; display: grid; grid-template-rows: auto auto;">
+                        <input type="text" id="aiEnumValues" class="column-name-input" placeholder="Enter values separated by comma, e.g., 1, 2, 3" 
+                               style="margin-top: 8px; display: none; width: 100%; box-sizing: border-box;" disabled />
+                        <div id="enumHistoryDropdown" class="enum-history-dropdown" style="display: none;"></div>
+                    </div>
                 </div>
 
                 <div class="modal-actions" style="margin-top: 16px;">
@@ -324,13 +349,16 @@ Available variables:
                 <label for="rowCount" style="display: block; margin-top: 16px; margin-bottom: 8px; font-weight: 500;">Number of Rows to Generate:</label>
                 <input type="number" id="rowCount" class="column-name-input" value="5" min="1" max="50" placeholder="5" />
 
-                <label for="aiRowsPrompt" style="display: block; margin-top: 16px; margin-bottom: 8px; font-weight: 500;">AI Prompt:</label>
-                <textarea id="aiRowsPrompt" class="ai-prompt-textarea" rows="8" placeholder="Generate more rows like these, but make them different from the lines below.
+				<button id="aiRowsAdvancedToggle" class="modal-button modal-button-primary" style="margin-top: 16px;">Advanced</button>
+				<div id="aiRowsAdvancedSection" style="display: none;">
+					<label for="aiRowsPrompt" style="display: block; margin-top: 16px; margin-bottom: 8px; font-weight: 500;">AI Prompt:</label>
+					<textarea id="aiRowsPrompt" class="ai-prompt-textarea" rows="8" placeholder="Generate more rows like these, but make them different from the lines provided.
 
-                Available variables:
-                - {{context_rows}} - JSON array of previous rows
-                - {{row_count}} - number of rows to generate
-                - {{existing_count}} - total existing rows">Generate more rows like these, but make them different from the lines below.</textarea>
+					Available variables:
+					- {{context_rows}} - JSON array of previous rows
+					- {{row_count}} - number of rows to generate
+					- {{existing_count}} - total existing rows">Generate more rows like these, but make them different from the lines provided.</textarea>
+				</div>
 
                 <div class="ai-info-box" style="margin-top: 12px; padding: 12px; background: rgba(255, 255, 255, 0.05); border-radius: 6px; font-size: 12px; color: #888;">
                     <strong>Note:</strong> The AI will use the specified number of previous rows as context to generate new similar rows. The generated rows will be inserted below the selected row.
