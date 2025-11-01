@@ -870,6 +870,11 @@ export const scripts = `
         // AI Column Modal
         let aiColumnPosition = null;
         let aiColumnReferenceColumn = null;
+        let aiColumnEscHandler = null;
+        let aiColumnEnumInputHandler = null;
+        let aiColumnModalClickHandler = null;
+        let aiColumnCloseBtnHandler = null;
+        let aiColumnCancelBtnHandler = null;
 
         function openAIColumnModal(position, referenceColumn) {
             aiColumnPosition = position;
@@ -888,6 +893,10 @@ export const scripts = `
             enumValuesInput.style.display = 'none';
             enumValuesInput.disabled = true;
             
+            // Hide suggestions container
+            const suggestionsContainer = document.getElementById('aiSuggestionsContainer');
+            suggestionsContainer.style.display = 'none';
+            
             // Reset prompt required attribute and label
             const promptLabel = document.querySelector('label[for="aiPrompt"]');
             promptInput.setAttribute('required', 'required');
@@ -896,6 +905,51 @@ export const scripts = `
             }
             
             modal.classList.add('show');
+
+            // Add mousedown handler for closing modal on backdrop click
+            if (!aiColumnModalClickHandler) {
+                aiColumnModalClickHandler = (e) => {
+                    // Close only if click is on the backdrop, not on modal content
+                    if (!e.target.closest('.modal-content')) {
+                        closeAIColumnModal();
+                    }
+                };
+                modal.addEventListener('mousedown', aiColumnModalClickHandler);
+            }
+
+            // Add close and cancel button handlers
+            const closeBtn = document.getElementById('aiColumnCloseBtn');
+            const cancelBtn = document.getElementById('aiColumnCancelBtn');
+            if (!aiColumnCloseBtnHandler) {
+                aiColumnCloseBtnHandler = () => closeAIColumnModal();
+                closeBtn.addEventListener('click', aiColumnCloseBtnHandler);
+            }
+            if (!aiColumnCancelBtnHandler) {
+                aiColumnCancelBtnHandler = () => closeAIColumnModal();
+                cancelBtn.addEventListener('click', aiColumnCancelBtnHandler);
+            }
+
+            // Add ESC handler for modal
+            aiColumnEscHandler = (e) => {
+                if (e.key === 'Escape') {
+                    closeAIColumnModal();
+                }
+            };
+            document.addEventListener('keydown', aiColumnEscHandler);
+            
+            // Add input handler for enum values input
+            aiColumnEnumInputHandler = (e) => {
+                // Clear previous timer
+                if (enumInputDebounceTimer) {
+                    clearTimeout(enumInputDebounceTimer);
+                }
+                
+                // Set new timer with 500ms delay
+                enumInputDebounceTimer = setTimeout(() => {
+                    showEnumDropdown(e.target.value);
+                }, 500);
+            };
+            enumValuesInput.addEventListener('input', aiColumnEnumInputHandler);
 
             // Focus name input
             setTimeout(() => nameInput.focus(), 100);
@@ -907,6 +961,12 @@ export const scripts = `
             const enumValuesInput = document.getElementById('aiEnumValues');
             const promptInput = document.getElementById('aiPrompt');
             const promptLabel = document.querySelector('label[for="aiPrompt"]');
+            const suggestBtn = document.getElementById('aiSuggestBtn');
+            
+            // Re-enable suggest button if it was disabled
+            if (suggestBtn) {
+                suggestBtn.disabled = false;
+            }
             
             modal.classList.remove('show');
             aiColumnPosition = null;
@@ -915,6 +975,64 @@ export const scripts = `
             enumValuesInput.value = '';
             enumValuesInput.style.display = 'none';
             enumValuesInput.disabled = true;
+            
+            // Hide dropdown
+            hideEnumDropdown();
+            
+            // Hide suggestions container
+            const suggestionsContainer = document.getElementById('aiSuggestionsContainer');
+            if (suggestionsContainer) {
+                suggestionsContainer.style.display = 'none';
+            }
+            
+            // Remove enum dropdown handlers
+            const dropdown = document.getElementById('enumHistoryDropdown');
+            if (dropdown) {
+                if (enumDropdownMousedownHandler) {
+                    dropdown.removeEventListener('mousedown', enumDropdownMousedownHandler);
+                    enumDropdownMousedownHandler = null;
+                }
+                if (enumDropdownMouseupHandler) {
+                    dropdown.removeEventListener('mouseup', enumDropdownMouseupHandler);
+                    enumDropdownMouseupHandler = null;
+                }
+            }
+            
+            // Clear debounce timer
+            if (enumInputDebounceTimer) {
+                clearTimeout(enumInputDebounceTimer);
+                enumInputDebounceTimer = null;
+            }
+            
+            // Remove ESC handler
+            if (aiColumnEscHandler) {
+                document.removeEventListener('keydown', aiColumnEscHandler);
+                aiColumnEscHandler = null;
+            }
+            
+            // Remove input handler
+            if (aiColumnEnumInputHandler) {
+                enumValuesInput.removeEventListener('input', aiColumnEnumInputHandler);
+                aiColumnEnumInputHandler = null;
+            }
+            
+            // Remove mousedown handler for backdrop click
+            if (aiColumnModalClickHandler) {
+                modal.removeEventListener('mousedown', aiColumnModalClickHandler);
+                aiColumnModalClickHandler = null;
+            }
+            
+            // Remove close and cancel button handlers
+            const closeBtn = document.getElementById('aiColumnCloseBtn');
+            const cancelBtn = document.getElementById('aiColumnCancelBtn');
+            if (aiColumnCloseBtnHandler && closeBtn) {
+                closeBtn.removeEventListener('click', aiColumnCloseBtnHandler);
+                aiColumnCloseBtnHandler = null;
+            }
+            if (aiColumnCancelBtnHandler && cancelBtn) {
+                cancelBtn.removeEventListener('click', aiColumnCancelBtnHandler);
+                aiColumnCancelBtnHandler = null;
+            }
             
             // Reset prompt required attribute and label
             promptInput.setAttribute('required', 'required');
@@ -967,28 +1085,100 @@ export const scripts = `
             closeAIColumnModal();
         }
 
+        function handleSuggestClick() {
+            const suggestionsContainer = document.getElementById('aiSuggestionsContainer');
+            const loadingDiv = document.getElementById('aiSuggestionsLoading');
+            const listDiv = document.getElementById('aiSuggestionsList');
+            const errorDiv = document.getElementById('aiSuggestionsError');
+            const suggestBtn = document.getElementById('aiSuggestBtn');
+            
+            // Disable suggest button
+            if (suggestBtn) {
+                suggestBtn.disabled = true;
+            }
+            
+            // Show container and loading
+            suggestionsContainer.style.display = 'block';
+            loadingDiv.style.display = 'block';
+            listDiv.style.display = 'none';
+            errorDiv.style.display = 'none';
+            listDiv.innerHTML = '';
+            
+            // Request suggestions from backend
+            vscode.postMessage({
+                type: 'requestColumnSuggestions',
+                referenceColumn: aiColumnReferenceColumn
+            });
+        }
+
+        function handleAISuggestions(suggestions, error) {
+            const loadingDiv = document.getElementById('aiSuggestionsLoading');
+            const listDiv = document.getElementById('aiSuggestionsList');
+            const errorDiv = document.getElementById('aiSuggestionsError');
+            const suggestBtn = document.getElementById('aiSuggestBtn');
+            
+            // Re-enable suggest button (after any response - success or error)
+            if (suggestBtn) {
+                suggestBtn.disabled = false;
+            }
+            
+            loadingDiv.style.display = 'none';
+            
+            if (error) {
+                errorDiv.style.display = 'block';
+                document.getElementById('aiSuggestionsErrorMessage').textContent = error;
+                return;
+            }
+            
+            if (!suggestions || suggestions.length === 0) {
+                errorDiv.style.display = 'block';
+                document.getElementById('aiSuggestionsErrorMessage').textContent = 'No suggestions generated. Please try again.';
+                return;
+            }
+            
+            listDiv.style.display = 'block';
+            listDiv.innerHTML = '';
+            
+            suggestions.forEach((suggestion) => {
+                const suggestionItem = document.createElement('div');
+                suggestionItem.style.cssText = 'padding: 8px; border: 1px solid var(--vscode-input-border); border-radius: 6px; cursor: pointer; background: var(--vscode-input-background); transition: background 0.2s; margin-bottom: 6px;';
+                suggestionItem.onmouseover = () => {
+                    suggestionItem.style.background = 'var(--vscode-list-hoverBackground)';
+                };
+                suggestionItem.onmouseout = () => {
+                    suggestionItem.style.background = 'var(--vscode-input-background)';
+                };
+                suggestionItem.onclick = () => {
+                    const nameInput = document.getElementById('aiColumnName');
+                    const promptInput = document.getElementById('aiPrompt');
+                    
+                    if (nameInput) nameInput.value = suggestion.columnName;
+                    if (promptInput) promptInput.value = suggestion.prompt;
+                    
+                    // Hide suggestions after selection
+                    document.getElementById('aiSuggestionsContainer').style.display = 'none';
+                };
+                
+                const columnName = document.createElement('div');
+                columnName.style.cssText = 'font-weight: 600; margin-bottom: 6px; color: var(--vscode-foreground);';
+                columnName.textContent = suggestion.columnName;
+                
+                const prompt = document.createElement('div');
+                prompt.style.cssText = 'font-size: 12px; color: var(--vscode-descriptionForeground); line-height: 1.4;';
+                prompt.textContent = suggestion.prompt;
+                
+                suggestionItem.appendChild(columnName);
+                suggestionItem.appendChild(prompt);
+                listDiv.appendChild(suggestionItem);
+            });
+        }
+
         // AI Column Modal event listeners
-        document.getElementById('aiColumnCloseBtn').addEventListener('click', closeAIColumnModal);
-        document.getElementById('aiColumnCancelBtn').addEventListener('click', closeAIColumnModal);
         document.getElementById('aiColumnConfirmBtn').addEventListener('click', confirmAIColumn);
+        document.getElementById('aiSuggestBtn').addEventListener('click', handleSuggestClick);
         document.getElementById('aiColumnInfoBtn').addEventListener('click', () => {
             const infoPanel = document.getElementById('aiInfoPanel');
             infoPanel.style.display = infoPanel.style.display === 'none' ? 'block' : 'none';
-        });
-        document.getElementById('aiColumnModal').addEventListener('click', (e) => {
-            if (e.target.id === 'aiColumnModal') {
-                closeAIColumnModal();
-            }
-        });
-        document.getElementById('aiColumnName').addEventListener('keydown', (e) => {
-            if (e.key === 'Escape') {
-                closeAIColumnModal();
-            }
-        });
-        document.getElementById('aiPrompt').addEventListener('keydown', (e) => {
-            if (e.key === 'Escape') {
-                closeAIColumnModal();
-            }
         });
         
         // Enum checkbox toggle
@@ -1007,11 +1197,14 @@ export const scripts = `
                 if (promptLabel && !promptLabel.textContent.includes('(optional')) {
                     promptLabel.textContent = promptLabel.textContent.replace(':', ' (optional):');
                 }
+                // Request recent enum values from backend
+                vscode.postMessage({ type: 'getRecentEnumValues' });
                 setTimeout(() => enumValuesInput.focus(), 100);
             } else {
                 enumValuesInput.style.display = 'none';
                 enumValuesInput.disabled = true;
                 enumValuesInput.value = '';
+                hideEnumDropdown();
                 // Add required attribute back to prompt when enum is not selected
                 promptInput.setAttribute('required', 'required');
                 // Restore original label
@@ -1019,6 +1212,92 @@ export const scripts = `
                     promptLabel.textContent = promptLabel.textContent.replace(' (optional):', ':');
                 }
             }
+        });
+        
+        // Enum dropdown management
+        let recentEnumValues = [];
+        let enumInputDebounceTimer = null;
+        let enumDropdownMousedownHandler = null;
+        let enumDropdownMouseupHandler = null;
+        
+        function hideEnumDropdown() {
+            const dropdown = document.getElementById('enumHistoryDropdown');
+            dropdown.style.display = 'none';
+        }
+        
+        function showEnumDropdown(filterText = '') {
+            if (recentEnumValues.length === 0) {
+                hideEnumDropdown();
+                return;
+            }
+            
+            const dropdown = document.getElementById('enumHistoryDropdown');
+            
+            // Filter values based on input text
+            let valuesToShow = recentEnumValues;
+            if (filterText.length > 0) {
+                const filterLower = filterText.toLowerCase();
+                valuesToShow = recentEnumValues.filter(value => 
+                    value.toLowerCase().startsWith(filterLower)
+                );
+            }
+            
+            if (valuesToShow.length === 0) {
+                hideEnumDropdown();
+                return;
+            }
+            
+            dropdown.innerHTML = valuesToShow.map(value => 
+                \`<div class="enum-history-item">\${value}</div>\`
+            ).join('');
+            
+            dropdown.style.display = 'block';
+            
+            // Use event delegation on dropdown container instead of individual items
+            // This avoids needing to remove handlers when items are recreated
+            if (!enumDropdownMousedownHandler) {
+                enumDropdownMousedownHandler = (e) => {
+                    const item = e.target.closest('.enum-history-item');
+                    if (item) {
+                        e.preventDefault(); // Prevent input blur
+                        e.stopPropagation(); // Prevent event from bubbling to modal
+                    }
+                };
+                dropdown.addEventListener('mousedown', enumDropdownMousedownHandler);
+            }
+            if (!enumDropdownMouseupHandler) {
+                enumDropdownMouseupHandler = (e) => {
+                    const item = e.target.closest('.enum-history-item');
+                    if (item) {
+                        e.preventDefault(); // Prevent input blur
+                        e.stopPropagation(); // Prevent event from bubbling to modal
+                        const enumValuesInput = document.getElementById('aiEnumValues');
+                        enumValuesInput.value = item.textContent;
+                        hideEnumDropdown();
+                        // Keep focus on input
+                        setTimeout(() => enumValuesInput.focus(), 10);
+                    }
+                };
+                dropdown.addEventListener('mouseup', enumDropdownMouseupHandler);
+            }
+        }
+        
+        // Handle focus/blur on enum input
+        document.getElementById('aiEnumValues').addEventListener('focus', () => {
+            const enumValuesInput = document.getElementById('aiEnumValues');
+            showEnumDropdown(enumValuesInput.value);
+        });
+        
+        document.getElementById('aiEnumValues').addEventListener('blur', (e) => {
+            // Use setTimeout to allow click on dropdown item before hiding
+            setTimeout(() => {
+                const dropdown = document.getElementById('enumHistoryDropdown');
+                const activeElement = document.activeElement;
+                // Only hide if focus didn't move to dropdown
+                if (activeElement !== dropdown && !dropdown.contains(activeElement)) {
+                    hideEnumDropdown();
+                }
+            }, 200);
         });
 
         // Settings Modal
@@ -1155,12 +1434,22 @@ export const scripts = `
             const contextRowCountInput = document.getElementById('contextRowCount');
             const rowCountInput = document.getElementById('rowCount');
             const promptInput = document.getElementById('aiRowsPrompt');
+            const advancedSection = document.getElementById('aiRowsAdvancedSection');
+            const advancedToggle = document.getElementById('aiRowsAdvancedToggle');
 
             // Set defaults
             contextRowCountInput.value = '10';
             rowCountInput.value = '5';
             if (!promptInput.value || promptInput.value === promptInput.placeholder) {
                 promptInput.value = 'Based on these example rows:\\n{{context_rows}}\\n\\nGenerate {{row_count}} new unique rows with the EXACT same structure and all the same fields. Make the data realistic and different from the examples above.';
+            }
+
+            // Hide advanced section by default when opening
+            if (advancedSection) {
+                advancedSection.style.display = 'none';
+            }
+            if (advancedToggle) {
+                advancedToggle.textContent = 'Advanced';
             }
 
             modal.classList.add('show');
@@ -1204,6 +1493,16 @@ export const scripts = `
                 closeAIRowsModal();
             }
         });
+        const aiRowsAdvancedToggleBtn = document.getElementById('aiRowsAdvancedToggle');
+        if (aiRowsAdvancedToggleBtn) {
+            aiRowsAdvancedToggleBtn.addEventListener('click', () => {
+                const section = document.getElementById('aiRowsAdvancedSection');
+                if (!section) return;
+                const isHidden = section.style.display === 'none';
+                section.style.display = isHidden ? 'block' : 'none';
+                aiRowsAdvancedToggleBtn.textContent = isHidden ? 'Hide Advanced' : 'Advanced';
+            });
+        }
 
         // Modal drag and drop
         let draggedModalItem = null;
@@ -2476,32 +2775,17 @@ export const scripts = `
                     }
                     break;
                 case 'settingsLoaded':
-                    const aiProvider = document.getElementById('aiProvider');
                     const openaiKey = document.getElementById('openaiKey');
                     const openaiModel = document.getElementById('openaiModel');
 
-                    // Set provider value with fallback to copilot
-                    const providerValue = message.settings.aiProvider || 'copilot';
-
-                    // Set by value
-                    aiProvider.value = providerValue;
-
-                    // Also set selectedIndex explicitly for webview compatibility
-                    const selectedOption = Array.from(aiProvider.options).findIndex(opt => opt.value === providerValue);
-                    if (selectedOption !== -1) {
-                        aiProvider.selectedIndex = selectedOption;
-                    }
-
-                    // Fallback: set selected attribute on options
-                    Array.from(aiProvider.options).forEach(opt => {
-                        opt.selected = opt.value === providerValue;
-                    });
-
                     openaiKey.value = message.settings.openaiKey || '';
                     openaiModel.value = message.settings.openaiModel || 'gpt-4.1-mini';
-
-                    // Update visibility based on provider
-                    updateProviderSettings();
+                    break;
+                case 'recentEnumValuesLoaded':
+                    recentEnumValues = message.recentValues || [];
+                    break;
+                case 'columnSuggestions':
+                    handleAISuggestions(message.suggestions, message.error);
                     break;
             }
         });
