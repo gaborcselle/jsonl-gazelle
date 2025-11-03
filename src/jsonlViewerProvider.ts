@@ -31,6 +31,7 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
     private isUpdating: boolean = false; // Flag to prevent recursive updates
     private pendingSaveTimeout: NodeJS.Timeout | null = null; // For debouncing saves
     private manualColumnsPerFile: Map<string, ColumnInfo[]> = new Map(); // Store manual columns per file
+    private ratingPromptCallback: (() => Promise<void>) | null = null; // Callback for rating prompt
 
     constructor(private readonly context: vscode.ExtensionContext) {}
 
@@ -40,12 +41,23 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
         return viewProvider;
     }
 
+    public setRatingPromptCallback(callback: () => Promise<void>): void {
+        this.ratingPromptCallback = callback;
+    }
+
     public async resolveCustomTextEditor(
         document: vscode.TextDocument,
         webviewPanel: vscode.WebviewPanel,
         _token: vscode.CancellationToken
     ): Promise<void> {
         try {
+            // Check and show rating prompt if needed
+            if (this.ratingPromptCallback) {
+                this.ratingPromptCallback().catch(err => {
+                    console.error('Error showing rating prompt:', err);
+                });
+            }
+
             this.currentWebviewPanel = webviewPanel;
             webviewPanel.webview.options = {
                 enableScripts: true,
