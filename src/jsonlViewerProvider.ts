@@ -1287,20 +1287,20 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
         const requestBody: any = {
             model: model,
             messages: [],
-            // Lower temperature for enum selections
-            temperature: enumValues && enumValues.length > 0 ? 0.1 : 0.7,
-            // Add top_p for better control
-            top_p: enumValues && enumValues.length > 0 ? 0.1 : 1
+            // Very high temperature for enum selections to maximize variety and use extreme values
+            temperature: enumValues && enumValues.length > 0 ? 1.8 : 0.7,
+            // High top_p for maximum diversity
+            top_p: enumValues && enumValues.length > 0 ? 1.0 : 1
         };
 
         if (enumValues && enumValues.length > 0) {
             const buckets = this.getTypedEnumBuckets(enumValues);
             const valueSchema = this.buildEnumValueSchema(buckets);
 
-            // Simple system prompt - enum constraints are handled by structured outputs JSON Schema
+            // Enhanced system prompt to maximize variety - use ALL enum values including extremes
             requestBody.messages.push({
                 role: 'system',
-                content: `Analyze the input context and select the most appropriate value from the allowed options. Choose based on semantic matching with the context provided.`
+                content: `Analyze the input context and select a value from the allowed options. CRITICAL: You MUST use ALL available enum values with high variety - including extreme/minimum and extreme/maximum values. Do NOT always select middle values. Ensure a wide distribution across all possible enum values. Different rows should receive different enum values, even if they are similar.`
             });
 
             requestBody.response_format = {
@@ -1312,7 +1312,7 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
                         type: 'object',
                         properties: {
                             value: Object.assign({}, valueSchema, {
-                                description: `Select exactly ONE value from the allowed options based on the context.`
+                                description: `Select exactly ONE value from the allowed options. IMPORTANT: Use maximum variety - include extreme values (minimum and maximum) frequently. Do not cluster around middle values.`
                             })
                         },
                         required: ['value'],
@@ -1321,10 +1321,8 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
                 }
             };
 
-            // Add seed for reproducibility (if supported by the model)
-            if (model.includes('gpt-4') || model.includes('gpt-3.5')) {
-                requestBody.seed = this.generateSessionSeed();
-            }
+            // DO NOT use seed for enum selections - this maximizes variety
+            // Each API call will get completely different randomization, ensuring extreme values are used
         } else {
             // For non-enum requests, add system prompt to ensure concise responses
             requestBody.messages.push({

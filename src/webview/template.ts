@@ -124,6 +124,10 @@ ${styles}
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg>
             Insert Column with AI
         </div>
+        <div class="context-menu-item" data-action="suggestColumnWithAI">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"></path><line x1="12" y1="17" x2="12.01" y2="17"></line></svg>
+            Suggest column with AI
+        </div>
         <div class="context-menu-separator"></div>
         <div class="context-menu-item" data-action="unstringify" id="unstringifyMenuItem" style="display: none;">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M8 3H7a2 2 0 0 0-2 2v5a2 2 0 0 1-2 2 2 2 0 0 1 2 2v5c0 1.1.9 2 2 2h1"/><path d="M16 21h1a2 2 0 0 0 2-2v-5c0-1.1.9-2 2-2a2 2 0 0 1-2-2V5a2 2 0 0 0-2-2h-1"/></svg>
@@ -217,22 +221,6 @@ ${styles}
                 <div class="field-row" style="display: flex; align-items: center; gap: 8px;">
                     <label for="aiColumnName" style="margin-right: 8px; font-weight: 500; white-space: nowrap;">Column Name:</label>
                     <input type="text" id="aiColumnName" class="column-name-input-inline" placeholder="e.g., summary, category, score" style="flex: 1;" />
-                    <button class="modal-button modal-button-primary" id="aiSuggestBtn" style="white-space: nowrap; padding: 6px 12px; font-size: 13px;">
-                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="display: inline-block; vertical-align: middle; margin-right: 4px;"><path d="M12 2v20M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"></path></svg>
-                        Suggest
-                    </button>
-                </div>
-
-                <div id="aiSuggestionsContainer" style="display: none; margin-top: 12px; padding: 10px; background: rgba(255, 255, 255, 0.03); border-radius: 6px; border: 1px solid var(--vscode-input-border);">
-                    <div id="aiSuggestionsLoading" style="text-align: center; padding: 15px; color: #888; font-size: 13px;">
-                        Analyzing data and generating suggestions...
-                    </div>
-                    <div id="aiSuggestionsList" style="display: none; max-height: 180px; overflow-y: auto;">
-                        <!-- Suggestions will be inserted here -->
-                    </div>
-                    <div id="aiSuggestionsError" style="display: none; padding: 8px; background: rgba(255, 0, 0, 0.1); border-left: 3px solid var(--vscode-errorForeground); border-radius: 4px; color: var(--vscode-errorForeground); font-size: 12px;">
-                        <strong>Error:</strong> <span id="aiSuggestionsErrorMessage"></span>
-                    </div>
                 </div>
 
                 <div style="margin-top: 12px;">
@@ -354,6 +342,30 @@ Available variables:
                 <div class="modal-actions" style="margin-top: 16px;">
                     <button class="modal-button modal-button-primary" id="aiRowsGenerateBtn">Generate Rows</button>
                     <button class="modal-button modal-button-secondary" id="aiRowsCancelBtn">Cancel</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- AI Column Suggestions Modal -->
+    <div class="column-manager-modal" id="aiSuggestionsModal">
+        <div class="modal-content ai-column-modal">
+            <div class="modal-header">
+                <h3>Suggest Column with AI</h3>
+                <button class="modal-close" id="aiSuggestionsCloseBtn">&times;</button>
+            </div>
+            <div class="modal-body">
+                <div id="aiSuggestionsLoading" style="text-align: center; padding: 30px; color: #888; font-size: 14px;">
+                    Analyzing data and generating suggestions...
+                </div>
+                <div id="aiSuggestionsList" style="display: none; max-height: 400px; overflow-y: auto;">
+                    <!-- Suggestions will be inserted here -->
+                </div>
+                <div id="aiSuggestionsError" style="display: none; padding: 12px; background: rgba(255, 0, 0, 0.1); border-left: 3px solid var(--vscode-errorForeground); border-radius: 4px; color: var(--vscode-errorForeground); font-size: 13px;">
+                    <strong>Error:</strong> <span id="aiSuggestionsErrorMessage"></span>
+                </div>
+                <div class="modal-actions" style="margin-top: 16px;">
+                    <button class="modal-button modal-button-secondary" id="aiSuggestionsCancelBtn">Cancel</button>
                 </div>
             </div>
         </div>
