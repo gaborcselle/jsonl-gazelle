@@ -346,22 +346,23 @@ class RatingPromptManager {
         }
     }
 
-    private async showRatingPrompt(openCount: number): Promise<void> {
+        private async showRatingPrompt(openCount: number): Promise<void> {
         // Determine if we're in Cursor or VS Code
-        const isCursor = vscode.env.appName.toLowerCase().includes('cursor');
-        
-        // Determine marketplace URL
-        const marketplaceUrl = isCursor 
-            ? 'https://open-vsx.org/extension/gabor/jsonl-gazelle'
-            : `https://marketplace.visualstudio.com/items?itemName=gabor.jsonl-gazelle`;
+        const isCursor = vscode.env.appName.toLowerCase().includes('cursor');   
 
-        const message = "Are you enjoying JSONL Gazelle? Please rate us 5 stars which will help others find it.";
+        // Determine marketplace URL
+        const marketplaceUrl = isCursor
+            ? 'https://open-vsx.org/extension/gabor/jsonl-gazelle'
+            : `https://marketplace.visualstudio.com/items?itemName=gabor.jsonl-gazelle`;                                                                        
+
+        const marketplaceName = isCursor ? 'OpenVSX' : 'Visual Studio Code Marketplace';
+        const message = `Please rate us and write a review on ${marketplaceName} to help others find our way of working on JSONL data files.`;
 
         // Show modal dialog via webview
         const result = await this.showRatingModal(message, marketplaceUrl);
 
         if (result === 'rate') {
-            // User clicked "Rate 5 Stars" - open marketplace and remember
+            // User clicked "OK" - open marketplace and remember      
             await vscode.env.openExternal(vscode.Uri.parse(marketplaceUrl));
             await this.context.globalState.update(this.HAS_RATED_KEY, true);
         } else {
@@ -375,7 +376,7 @@ class RatingPromptManager {
             // Create webview panel for modal (fullscreen overlay style)
             const panel = vscode.window.createWebviewPanel(
                 'ratingPrompt',
-                'JSONL Gazelle Rating',
+                'Please rate and review JSONL Gazelle',
                 { viewColumn: vscode.ViewColumn.Active, preserveFocus: false },
                 {
                     enableScripts: true,
@@ -480,7 +481,7 @@ class RatingPromptManager {
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>JSONL Gazelle Rating</title>
+    <title>Please rate and review JSONL Gazelle</title>
     <style>
         * {
             margin: 0;
@@ -609,8 +610,8 @@ class RatingPromptManager {
         <div class="modal-container" id="modal">
             <div class="modal-message">${this.escapeHtml(message)}</div>
             <div class="modal-buttons">
-                <button class="modal-button secondary" id="laterBtn">Maybe Later</button>
-                <button class="modal-button primary" id="rateBtn">Rate 5 Stars</button>
+                <button class="modal-button secondary" id="laterBtn">Maybe later</button>                                                                       
+                <button class="modal-button primary" id="rateBtn">OK</button>                                                                         
             </div>
         </div>
     </div>
