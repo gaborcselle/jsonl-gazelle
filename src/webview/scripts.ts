@@ -876,6 +876,9 @@ export const scripts = `
         let aiColumnCloseBtnHandler = null;
         let aiColumnCancelBtnHandler = null;
         let aiColumnConfirmBtnHandler = null;
+        let aiColumnModalBodyScrollHandler = null;
+        let aiColumnWindowResizeHandler = null;
+        let aiColumnWindowScrollHandler = null;
 
         function openAIColumnModal(position, referenceColumn) {
             aiColumnPosition = position;
@@ -978,6 +981,17 @@ export const scripts = `
             };
             enumValuesInput.addEventListener('input', aiColumnEnumInputHandler);
 
+            // Add scroll and resize handlers for enum dropdown positioning
+            const aiColumnModalBody = modal.querySelector('.modal-body');
+            if (aiColumnModalBody) {
+                aiColumnModalBodyScrollHandler = updateEnumDropdownPosition;
+                aiColumnModalBody.addEventListener('scroll', aiColumnModalBodyScrollHandler);
+            }
+            aiColumnWindowResizeHandler = updateEnumDropdownPosition;
+            aiColumnWindowScrollHandler = updateEnumDropdownPosition;
+            window.addEventListener('resize', aiColumnWindowResizeHandler);
+            window.addEventListener('scroll', aiColumnWindowScrollHandler, true);
+
             // Focus name input
             setTimeout(() => nameInput.focus(), 100);
         }
@@ -1011,6 +1025,21 @@ export const scripts = `
                     dropdown.removeEventListener('mouseup', enumDropdownMouseupHandler);
                     enumDropdownMouseupHandler = null;
                 }
+            }
+            
+            // Remove scroll and resize handlers
+            const aiColumnModalBody = modal.querySelector('.modal-body');
+            if (aiColumnModalBody && aiColumnModalBodyScrollHandler) {
+                aiColumnModalBody.removeEventListener('scroll', aiColumnModalBodyScrollHandler);
+                aiColumnModalBodyScrollHandler = null;
+            }
+            if (aiColumnWindowResizeHandler) {
+                window.removeEventListener('resize', aiColumnWindowResizeHandler);
+                aiColumnWindowResizeHandler = null;
+            }
+            if (aiColumnWindowScrollHandler) {
+                window.removeEventListener('scroll', aiColumnWindowScrollHandler, true);
+                aiColumnWindowScrollHandler = null;
             }
             
             // Clear debounce timer
@@ -1338,6 +1367,17 @@ export const scripts = `
             dropdown.style.display = 'none';
         }
         
+        function updateEnumDropdownPosition() {
+            const dropdown = document.getElementById('enumHistoryDropdown');
+            const enumValuesInput = document.getElementById('aiEnumValues');
+            if (dropdown && dropdown.style.display !== 'none' && enumValuesInput && enumValuesInput.offsetParent !== null) {
+                const inputRect = enumValuesInput.getBoundingClientRect();
+                dropdown.style.top = (inputRect.bottom + 2) + 'px';
+                dropdown.style.left = inputRect.left + 'px';
+                dropdown.style.width = inputRect.width + 'px';
+            }
+        }
+        
         function showEnumDropdown(filterText = '') {
             if (recentEnumValues.length === 0) {
                 hideEnumDropdown();
@@ -1365,6 +1405,7 @@ export const scripts = `
             ).join('');
             
             dropdown.style.display = 'block';
+            updateEnumDropdownPosition();
             
             // Use event delegation on dropdown container instead of individual items
             // This avoids needing to remove handlers when items are recreated
