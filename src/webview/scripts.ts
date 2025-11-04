@@ -1626,17 +1626,8 @@ export const scripts = `
                         columnPath: contextMenuColumn
                     });
                     break;
-                case 'insertBefore':
-                    openAddColumnModal('before', contextMenuColumn);
-                    break;
-                case 'insertAfter':
-                    openAddColumnModal('after', contextMenuColumn);
-                    break;
-                case 'insertAIColumnBefore':
+                case 'insertAIColumn':
                     checkAPIKeyAndOpenModal(openAIColumnModal, 'before', contextMenuColumn);
-                    break;
-                case 'insertAIColumnAfter':
-                    checkAPIKeyAndOpenModal(openAIColumnModal, 'after', contextMenuColumn);
                     break;
                 case 'remove':
                     vscode.postMessage({

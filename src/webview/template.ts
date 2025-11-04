@@ -120,22 +120,9 @@ ${styles}
             Hide Column
         </div>
         <div class="context-menu-separator"></div>
-        <div class="context-menu-item" data-action="insertBefore">
+        <div class="context-menu-item" data-action="insertAIColumn">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg>
-            Insert Column Before
-        </div>
-        <div class="context-menu-item" data-action="insertAfter">
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg>
-            Insert Column After
-        </div>
-        <div class="context-menu-separator"></div>
-        <div class="context-menu-item" data-action="insertAIColumnBefore">
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg>
-            Insert Column with AI Before
-        </div>
-        <div class="context-menu-item" data-action="insertAIColumnAfter">
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg>
-            Insert Column with AI After
+            Insert Column with AI
         </div>
         <div class="context-menu-separator"></div>
         <div class="context-menu-item" data-action="unstringify" id="unstringifyMenuItem" style="display: none;">
