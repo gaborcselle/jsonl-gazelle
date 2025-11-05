@@ -1576,6 +1576,10 @@ export const scripts = `
                 closeSettingsModal();
             }
         });
+        // Hidden reset button - sends reset message to backend
+        document.getElementById('settingsResetBtn').addEventListener('click', () => {
+            vscode.postMessage({ type: 'resetSettings' });
+        });
 
 
         // AI Rows Modal

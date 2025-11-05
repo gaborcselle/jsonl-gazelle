@@ -154,6 +154,9 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
                             case 'saveSettings':
                                 await this.handleSaveSettings(message.settings, webviewPanel, message.openOriginalModal || false);
                                 break;
+                            case 'resetSettings':
+                                await this.handleResetSettings(webviewPanel);
+                                break;
                             case 'generateAIRows':
                                 await this.handleGenerateAIRows(message.rowIndex, message.contextRowCount, message.rowCount, message.promptTemplate, webviewPanel, document);
                                 break;
@@ -1789,6 +1792,18 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
         } catch (error) {
             vscode.window.showErrorMessage(`Failed to save settings: ${error instanceof Error ? error.message : 'Unknown error'}`);
             console.error('Error saving settings:', error);
+        }
+    }
+
+    private async handleResetSettings(webviewPanel: vscode.WebviewPanel) {
+        try {
+            await this.context.globalState.update('jsonl-gazelle.openCount', 0);
+            await this.context.globalState.update('jsonl-gazelle.lastPromptedCount', 0);
+            await this.context.globalState.update('jsonl-gazelle.hasRated', false);
+            vscode.window.showInformationMessage('Settings reset successfully');
+        } catch (error) {
+            vscode.window.showErrorMessage(`Failed to reset settings: ${error instanceof Error ? error.message : 'Unknown error'}`);
+            console.error('Error resetting settings:', error);
         }
     }
 

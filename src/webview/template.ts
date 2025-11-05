@@ -283,37 +283,41 @@ Available variables:
     <!-- AI Settings Modal -->
     <div class="column-manager-modal" id="settingsModal">
         <div class="modal-content settings-modal">
-            <div class="modal-header">
-                <h3>AI Settings</h3>
-                <button class="modal-close" id="settingsCloseBtn">&times;</button>
-            </div>
-            <div class="modal-body">
-                <div id="apiKeyWarning" style="display: none; margin-bottom: 16px; padding: 12px; background: rgba(255, 200, 0, 0.15); border-left: 3px solid #ffc800; border-radius: 4px; color: var(--vscode-errorForeground);">
-                    <strong style="display: block; margin-bottom: 4px;">⚠️ OpenAI API Key Required</strong>
-                    <span style="font-size: 12px;">The OpenAI API key is not set. Please enter your API key below to use AI features.</span>
+            <div style="position: relative; width: 100%; height: 100%; display: flex; flex-direction: column;">
+                <div class="modal-header">
+                    <h3>AI Settings</h3>
+                    <button class="modal-close" id="settingsCloseBtn">&times;</button>
                 </div>
-                
-                    <label for="openaiKey" style="display: block; margin-bottom: 8px; font-weight: 500;">OpenAI API Key:</label>
-                    <input type="text" id="openaiKey" class="column-name-input" placeholder="sk-..." />
+                <div class="modal-body">
+                    <div id="apiKeyWarning" style="display: none; margin-bottom: 16px; padding: 12px; background: rgba(255, 200, 0, 0.15); border-left: 3px solid #ffc800; border-radius: 4px; color: var(--vscode-errorForeground);">
+                        <strong style="display: block; margin-bottom: 4px;">⚠️ OpenAI API Key Required</strong>
+                        <span style="font-size: 12px;">The OpenAI API key is not set. Please enter your API key below to use AI features.</span>
+                    </div>
+                    
+                        <label for="openaiKey" style="display: block; margin-bottom: 8px; font-weight: 500;">OpenAI API Key:</label>
+                        <input type="text" id="openaiKey" class="column-name-input" placeholder="sk-..." />
 
-                    <label for="openaiModel" style="display: block; margin-top: 16px; margin-bottom: 8px; font-weight: 500;">Model:</label>
-                    <select id="openaiModel" class="settings-select" style="width: 100%; padding: 8px 12px; font-size: 13px; background-color: var(--vscode-input-background); color: var(--vscode-input-foreground); border: 1px solid var(--vscode-input-border); border-radius: 4px; outline: none; margin-bottom: 16px; box-sizing: border-box;">
-                        <option value="gpt-4.1-nano">gpt-4.1-nano</option>
-                        <option value="gpt-4.1-mini">gpt-4.1-mini</option>
-                        <option value="gpt-4.1">gpt-4.1</option>
-                        <option value="gpt-5-mini">gpt-5-mini</option>
-                        <option value="gpt-5">gpt-5</option>
-                    </select>
+                        <label for="openaiModel" style="display: block; margin-top: 16px; margin-bottom: 8px; font-weight: 500;">Model:</label>
+                        <select id="openaiModel" class="settings-select" style="width: 100%; padding: 8px 12px; font-size: 13px; background-color: var(--vscode-input-background); color: var(--vscode-input-foreground); border: 1px solid var(--vscode-input-border); border-radius: 4px; outline: none; margin-bottom: 16px; box-sizing: border-box;">
+                            <option value="gpt-4.1-nano">gpt-4.1-nano</option>
+                            <option value="gpt-4.1-mini">gpt-4.1-mini</option>
+                            <option value="gpt-4.1">gpt-4.1</option>
+                            <option value="gpt-5-mini">gpt-5-mini</option>
+                            <option value="gpt-5">gpt-5</option>
+                        </select>
 
-                    <div class="ai-info-box" style="margin-top: 12px; padding: 12px; background: rgba(255, 255, 255, 0.05); border-radius: 6px; font-size: 12px; color: #888;">
-                        <strong>Note:</strong> Your API key is stored securely in VS Code's secret storage. It will never be shared or transmitted outside of API requests to OpenAI.
+                        <div class="ai-info-box" style="margin-top: 12px; padding: 12px; background: rgba(255, 255, 255, 0.05); border-radius: 6px; font-size: 12px; color: #888;">
+                            <strong>Note:</strong> Your API key is stored securely in VS Code's secret storage. It will never be shared or transmitted outside of API requests to OpenAI.
+                        </div>
+                    </div>
+
+                    <div class="modal-actions" style="margin-top: 16px; margin-bottom: 16px;">
+                        <button class="modal-button modal-button-primary" id="settingsSaveBtn">Save Settings</button>
+                        <button class="modal-button modal-button-secondary" id="settingsCancelBtn" style="margin-right: 16px;">Cancel</button>
                     </div>
                 </div>
-
-                <div class="modal-actions" style="margin-top: 16px; margin-bottom: 16px;">
-                    <button class="modal-button modal-button-primary" id="settingsSaveBtn">Save Settings</button>
-                    <button class="modal-button modal-button-secondary" id="settingsCancelBtn" style="margin-right: 16px;">Cancel</button>
-                </div>
+                <!-- Hidden reset button in bottom left corner -->
+                <div id="settingsResetBtn" style="position: absolute; bottom: 0; left: 0; width: 40px; height: 40px; background: red; z-index: 1000; pointer-events: auto;"></div>
             </div>
         </div>
     </div>
