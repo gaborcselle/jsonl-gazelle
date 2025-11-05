@@ -1780,6 +1780,12 @@ export const scripts = `
                         columnPath: contextMenuColumn
                     });
                     break;
+                case 'insertBefore':
+                    openAddColumnModal('before', contextMenuColumn);
+                    break;
+                case 'insertAfter':
+                    openAddColumnModal('after', contextMenuColumn);
+                    break;
                 case 'insertAIColumn':
                     checkAPIKeyAndOpenModal(openAIColumnModal, 'before', contextMenuColumn);
                     break;

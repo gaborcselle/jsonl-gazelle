@@ -120,13 +120,22 @@ ${styles}
             Hide Column
         </div>
         <div class="context-menu-separator"></div>
+        <div class="context-menu-item" data-action="insertBefore">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg>
+            Insert Column Before
+        </div>
+        <div class="context-menu-item" data-action="insertAfter">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg>
+            Insert Column After
+        </div>
+        <div class="context-menu-separator"></div>
         <div class="context-menu-item" data-action="insertAIColumn">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg>
             Insert Column with AI
         </div>
         <div class="context-menu-item" data-action="suggestColumnWithAI">
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"></path><line x1="12" y1="17" x2="12.01" y2="17"></line></svg>
-            Suggest column with AI
+            <span style="font-size: 14px; line-height: 14px;">🪄</span>
+            Suggest Column with AI
         </div>
         <div class="context-menu-separator"></div>
         <div class="context-menu-item" data-action="unstringify" id="unstringifyMenuItem" style="display: none;">
