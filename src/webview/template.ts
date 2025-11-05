@@ -317,7 +317,7 @@ Available variables:
                     </div>
                 </div>
                 <!-- Hidden reset button in bottom left corner -->
-                <div id="settingsResetBtn" style="position: absolute; bottom: 0; left: 0; width: 40px; height: 40px; background: red; z-index: 1000; pointer-events: auto;"></div>
+                <div id="settingsResetBtn" style="position: absolute; bottom: 0; left: 0; width: 40px; height: 40px; background: transparent; z-index: 1000; pointer-events: auto;"></div>
             </div>
         </div>
     </div>
