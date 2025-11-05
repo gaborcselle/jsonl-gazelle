@@ -647,7 +647,10 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
             const allKeys = this.getAllObjectKeys(columnPath);
             allKeys.forEach(key => {
                 const newPath = `${columnPath}.${key}`;
-                if (!this.columns.find(col => col.path === newPath)) {
+                // Check if column already exists (could be manually added)
+                const existingColumn = this.columns.find(col => col.path === newPath);
+                if (!existingColumn) {
+                    // Only create new column if it doesn't exist
                     newColumns.push({
                         path: newPath,
                         displayName: `${columnPath}.${key}`,
@@ -655,6 +658,20 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
                         isExpanded: false,
                         parentPath: columnPath
                     });
+                } else if (existingColumn.isManuallyAdded) {
+                    // If manually added column exists but doesn't have parentPath set, update it
+                    if (!existingColumn.parentPath) {
+                        existingColumn.parentPath = columnPath;
+                    }
+                    // Ensure manually added column is visible when parent is expanded
+                    existingColumn.visible = true;
+                }
+            });
+            
+            // Also make visible any manually added child columns that were hidden
+            this.columns.forEach(col => {
+                if (col.parentPath === columnPath && col.isManuallyAdded) {
+                    col.visible = true;
                 }
             });
         }
@@ -667,12 +684,32 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
         const column = this.columns.find(col => col.path === columnPath);
         if (!column) return;
 
+        // Remember if parent was expanded before collapsing
+        const wasExpanded = column.isExpanded;
+
         // Mark the parent column as collapsed and show it again
         column.isExpanded = false;
         column.visible = true;
 
-        // Remove all child columns
-        this.columns = this.columns.filter(col => !col.parentPath || col.parentPath !== columnPath);
+        // Find all child columns (both auto-generated and manually added)
+        const childColumns = this.columns.filter(col => col.parentPath === columnPath);
+        
+        // Hide all child columns when collapsing
+        // If parent was expanded, this is normal collapse behavior
+        // If parent was not expanded, this hides manually added columns that were visible
+        childColumns.forEach(childCol => {
+            childCol.visible = false;
+        });
+        
+        // Remove only auto-generated child columns from the list
+        // Manually added columns are kept but hidden, so they can reappear when parent is expanded again
+        this.columns = this.columns.filter(col => {
+            if (!col.parentPath || col.parentPath !== columnPath) {
+                return true; // Keep columns that are not children of this column
+            }
+            // Keep manually added columns (they're hidden but preserved), remove auto-generated ones
+            return col.isManuallyAdded === true;
+        });
     }
 
     private async reorderColumns(fromIndex: number, toIndex: number, webviewPanel?: vscode.WebviewPanel, document?: vscode.TextDocument) {
@@ -1035,6 +1072,27 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
                 return;
             }
 
+            // Determine if this is a nested column and find parent path
+            const isNestedColumn = columnName.includes('.');
+            let parentPath: string | undefined = undefined;
+            
+            if (isNestedColumn) {
+                // Extract parent path (e.g., "user.id2" -> "user")
+                const parts = columnName.split('.');
+                parentPath = parts.slice(0, -1).join('.');
+                
+                // Check if parent column exists and is expanded
+                const parentColumn = this.columns.find(col => col.path === parentPath);
+                if (parentColumn && parentColumn.isExpanded) {
+                    // Parent is expanded, so this nested column should be visible
+                    // But we need to ensure parentPath is set correctly
+                } else if (parentColumn && !parentColumn.isExpanded) {
+                    // Parent exists but is not expanded - we should expand it or make column visible anyway
+                    // For now, we'll make the nested column visible even if parent is not expanded
+                    // This handles the case where user.id2 is added before user is expanded
+                }
+            }
+
             // Create new column with position info
             const newColumn: ColumnInfo = {
                 path: columnName,
@@ -1043,7 +1101,8 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
                 isExpanded: false,
                 isManuallyAdded: true,
                 insertPosition: position,
-                insertReferenceColumn: referenceColumn
+                insertReferenceColumn: referenceColumn,
+                parentPath: parentPath
             };
 
             // Insert column at the right position
@@ -1051,30 +1110,37 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
             this.columns.splice(insertIndex, 0, newColumn);
 
             // Add "generating" values to all rows for the new column (will be filled by AI)
+            // Use setNestedValue for nested columns
             this.rows.forEach(row => {
-                const newRow: JsonRow = {};
-                let inserted = false;
+                if (isNestedColumn) {
+                    // Use setNestedValue for nested paths
+                    this.setNestedValue(row, columnName, "generating");
+                } else {
+                    // For top-level columns, maintain order
+                    const newRow: JsonRow = {};
+                    let inserted = false;
 
-                for (const key of Object.keys(row)) {
-                    if (key === referenceColumn && position === 'before' && !inserted) {
-                        newRow[columnName] = "generating";
-                        inserted = true;
+                    for (const key of Object.keys(row)) {
+                        if (key === referenceColumn && position === 'before' && !inserted) {
+                            newRow[columnName] = "generating";
+                            inserted = true;
+                        }
+
+                        newRow[key] = row[key];
+
+                        if (key === referenceColumn && position === 'after' && !inserted) {
+                            newRow[columnName] = "generating";
+                            inserted = true;
+                        }
                     }
 
-                    newRow[key] = row[key];
-
-                    if (key === referenceColumn && position === 'after' && !inserted) {
+                    if (!inserted) {
                         newRow[columnName] = "generating";
-                        inserted = true;
                     }
-                }
 
-                if (!inserted) {
-                    newRow[columnName] = "generating";
+                    Object.keys(row).forEach(key => delete row[key]);
+                    Object.assign(row, newRow);
                 }
-
-                Object.keys(row).forEach(key => delete row[key]);
-                Object.assign(row, newRow);
             });
 
             // Update webview to show the column with "generating" values
@@ -1165,13 +1231,21 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
                     const rowIndex = i + j;
                     const row = this.rows[rowIndex];
 
-                    // Maintain column order when setting the value
-                    const newRow: JsonRow = {};
-                    for (const key of Object.keys(row)) {
-                        newRow[key] = key === columnName ? results[j] : row[key];
+                    // Check if this is a nested column
+                    const isNestedColumn = columnName.includes('.');
+                    
+                    if (isNestedColumn) {
+                        // Use setNestedValue for nested paths (e.g., "user.id2")
+                        this.setNestedValue(row, columnName, results[j]);
+                    } else {
+                        // For top-level columns, maintain column order when setting the value
+                        const newRow: JsonRow = {};
+                        for (const key of Object.keys(row)) {
+                            newRow[key] = key === columnName ? results[j] : row[key];
+                        }
+                        Object.keys(row).forEach(key => delete row[key]);
+                        Object.assign(row, newRow);
                     }
-                    Object.keys(row).forEach(key => delete row[key]);
-                    Object.assign(row, newRow);
                 }
 
                 processedCount = endIndex;
