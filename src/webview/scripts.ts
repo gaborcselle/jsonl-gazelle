@@ -1828,9 +1828,50 @@ export const scripts = `
                 type: 'validateClipboard'
             });
 
+            // Temporarily position menu off-screen to measure its dimensions
             menu.style.display = 'block';
-            menu.style.left = event.pageX + 'px';
-            menu.style.top = event.pageY + 'px';
+            menu.style.visibility = 'hidden';
+            menu.style.left = '-9999px';
+            menu.style.top = '-9999px';
+            
+            // Get menu dimensions (now that it's displayed, even if hidden)
+            const menuRect = menu.getBoundingClientRect();
+            const menuWidth = menuRect.width || menu.offsetWidth;
+            const menuHeight = menuRect.height || menu.offsetHeight;
+            
+            // Make menu visible again
+            menu.style.visibility = 'visible';
+            
+            // Get viewport dimensions
+            const viewportWidth = window.innerWidth;
+            const viewportHeight = window.innerHeight;
+            
+            // Calculate initial position (use clientX/clientY for viewport-relative coordinates)
+            let left = event.clientX;
+            let top = event.clientY;
+            
+            // Adjust horizontal position if menu goes beyond right edge
+            if (left + menuWidth > viewportWidth) {
+                left = viewportWidth - menuWidth - 10; // 10px margin from edge
+            }
+            
+            // Adjust horizontal position if menu goes beyond left edge
+            if (left < 0) {
+                left = 10; // 10px margin from edge
+            }
+            
+            // Adjust vertical position if menu goes beyond bottom edge
+            if (top + menuHeight > viewportHeight) {
+                top = viewportHeight - menuHeight - 10; // 10px margin from edge
+            }
+            
+            // Adjust vertical position if menu goes beyond top edge
+            if (top < 0) {
+                top = 10; // 10px margin from edge
+            }
+            
+            menu.style.left = left + 'px';
+            menu.style.top = top + 'px';
         }
 
         function handleRowContextMenu(event) {
