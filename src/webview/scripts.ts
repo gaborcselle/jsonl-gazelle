@@ -875,6 +875,10 @@ export const scripts = `
         let aiColumnModalClickHandler = null;
         let aiColumnCloseBtnHandler = null;
         let aiColumnCancelBtnHandler = null;
+        let aiColumnConfirmBtnHandler = null;
+        let aiColumnModalBodyScrollHandler = null;
+        let aiColumnWindowResizeHandler = null;
+        let aiColumnWindowScrollHandler = null;
 
         function openAIColumnModal(position, referenceColumn) {
             aiColumnPosition = position;
@@ -893,10 +897,6 @@ export const scripts = `
             enumValuesInput.style.display = 'none';
             enumValuesInput.disabled = true;
             
-            // Hide suggestions container
-            const suggestionsContainer = document.getElementById('aiSuggestionsContainer');
-            suggestionsContainer.style.display = 'none';
-            
             // Reset prompt required attribute and label
             const promptLabel = document.querySelector('label[for="aiPrompt"]');
             promptInput.setAttribute('required', 'required');
@@ -906,29 +906,54 @@ export const scripts = `
             
             modal.classList.add('show');
 
-            // Add mousedown handler for closing modal on backdrop click
-            if (!aiColumnModalClickHandler) {
-                aiColumnModalClickHandler = (e) => {
-                    // Close only if click is on the backdrop, not on modal content
-                    if (!e.target.closest('.modal-content')) {
-                        closeAIColumnModal();
-                    }
-                };
-                modal.addEventListener('mousedown', aiColumnModalClickHandler);
+            // Remove previous backdrop click handler if it exists
+            if (aiColumnModalClickHandler) {
+                modal.removeEventListener('mousedown', aiColumnModalClickHandler);
             }
+            
+            // Add mousedown handler for closing modal on backdrop click
+            aiColumnModalClickHandler = (e) => {
+                // Close only if click is on the backdrop, not on modal content
+                if (!e.target.closest('.modal-content')) {
+                    closeAIColumnModal();
+                }
+            };
+            modal.addEventListener('mousedown', aiColumnModalClickHandler);
 
-            // Add close and cancel button handlers
+            // Add close, cancel and confirm button handlers
             const closeBtn = document.getElementById('aiColumnCloseBtn');
             const cancelBtn = document.getElementById('aiColumnCancelBtn');
-            if (!aiColumnCloseBtnHandler) {
-                aiColumnCloseBtnHandler = () => closeAIColumnModal();
-                closeBtn.addEventListener('click', aiColumnCloseBtnHandler);
+            const confirmBtn = document.getElementById('aiColumnConfirmBtn');
+            
+            // Remove existing handlers if they exist
+            if (aiColumnCloseBtnHandler && closeBtn) {
+                closeBtn.removeEventListener('click', aiColumnCloseBtnHandler);
             }
-            if (!aiColumnCancelBtnHandler) {
-                aiColumnCancelBtnHandler = () => closeAIColumnModal();
-                cancelBtn.addEventListener('click', aiColumnCancelBtnHandler);
+            if (aiColumnCancelBtnHandler && cancelBtn) {
+                cancelBtn.removeEventListener('click', aiColumnCancelBtnHandler);
             }
+            if (aiColumnConfirmBtnHandler && confirmBtn) {
+                confirmBtn.removeEventListener('click', aiColumnConfirmBtnHandler);
+            }
+            
+            // Add new handlers
+            aiColumnCloseBtnHandler = () => closeAIColumnModal();
+            aiColumnCancelBtnHandler = () => closeAIColumnModal();
+            aiColumnConfirmBtnHandler = (e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                confirmAIColumn();
+            };
+            
+            closeBtn.addEventListener('click', aiColumnCloseBtnHandler);
+            cancelBtn.addEventListener('click', aiColumnCancelBtnHandler);
+            confirmBtn.addEventListener('click', aiColumnConfirmBtnHandler);
 
+            // Remove previous ESC handler if it exists
+            if (aiColumnEscHandler) {
+                document.removeEventListener('keydown', aiColumnEscHandler);
+            }
+            
             // Add ESC handler for modal
             aiColumnEscHandler = (e) => {
                 if (e.key === 'Escape') {
@@ -936,6 +961,11 @@ export const scripts = `
                 }
             };
             document.addEventListener('keydown', aiColumnEscHandler);
+            
+            // Remove previous enum input handler if it exists
+            if (aiColumnEnumInputHandler) {
+                enumValuesInput.removeEventListener('input', aiColumnEnumInputHandler);
+            }
             
             // Add input handler for enum values input
             aiColumnEnumInputHandler = (e) => {
@@ -951,6 +981,17 @@ export const scripts = `
             };
             enumValuesInput.addEventListener('input', aiColumnEnumInputHandler);
 
+            // Add scroll and resize handlers for enum dropdown positioning
+            const aiColumnModalBody = modal.querySelector('.modal-body');
+            if (aiColumnModalBody) {
+                aiColumnModalBodyScrollHandler = updateEnumDropdownPosition;
+                aiColumnModalBody.addEventListener('scroll', aiColumnModalBodyScrollHandler);
+            }
+            aiColumnWindowResizeHandler = updateEnumDropdownPosition;
+            aiColumnWindowScrollHandler = updateEnumDropdownPosition;
+            window.addEventListener('resize', aiColumnWindowResizeHandler);
+            window.addEventListener('scroll', aiColumnWindowScrollHandler, true);
+
             // Focus name input
             setTimeout(() => nameInput.focus(), 100);
         }
@@ -961,12 +1002,6 @@ export const scripts = `
             const enumValuesInput = document.getElementById('aiEnumValues');
             const promptInput = document.getElementById('aiPrompt');
             const promptLabel = document.querySelector('label[for="aiPrompt"]');
-            const suggestBtn = document.getElementById('aiSuggestBtn');
-            
-            // Re-enable suggest button if it was disabled
-            if (suggestBtn) {
-                suggestBtn.disabled = false;
-            }
             
             modal.classList.remove('show');
             aiColumnPosition = null;
@@ -979,12 +1014,6 @@ export const scripts = `
             // Hide dropdown
             hideEnumDropdown();
             
-            // Hide suggestions container
-            const suggestionsContainer = document.getElementById('aiSuggestionsContainer');
-            if (suggestionsContainer) {
-                suggestionsContainer.style.display = 'none';
-            }
-            
             // Remove enum dropdown handlers
             const dropdown = document.getElementById('enumHistoryDropdown');
             if (dropdown) {
@@ -996,6 +1025,21 @@ export const scripts = `
                     dropdown.removeEventListener('mouseup', enumDropdownMouseupHandler);
                     enumDropdownMouseupHandler = null;
                 }
+            }
+            
+            // Remove scroll and resize handlers
+            const aiColumnModalBody = modal.querySelector('.modal-body');
+            if (aiColumnModalBody && aiColumnModalBodyScrollHandler) {
+                aiColumnModalBody.removeEventListener('scroll', aiColumnModalBodyScrollHandler);
+                aiColumnModalBodyScrollHandler = null;
+            }
+            if (aiColumnWindowResizeHandler) {
+                window.removeEventListener('resize', aiColumnWindowResizeHandler);
+                aiColumnWindowResizeHandler = null;
+            }
+            if (aiColumnWindowScrollHandler) {
+                window.removeEventListener('scroll', aiColumnWindowScrollHandler, true);
+                aiColumnWindowScrollHandler = null;
             }
             
             // Clear debounce timer
@@ -1022,9 +1066,11 @@ export const scripts = `
                 aiColumnModalClickHandler = null;
             }
             
-            // Remove close and cancel button handlers
+            // Remove close, cancel and confirm button handlers
             const closeBtn = document.getElementById('aiColumnCloseBtn');
             const cancelBtn = document.getElementById('aiColumnCancelBtn');
+            const confirmBtn = document.getElementById('aiColumnConfirmBtn');
+            
             if (aiColumnCloseBtnHandler && closeBtn) {
                 closeBtn.removeEventListener('click', aiColumnCloseBtnHandler);
                 aiColumnCloseBtnHandler = null;
@@ -1032,6 +1078,10 @@ export const scripts = `
             if (aiColumnCancelBtnHandler && cancelBtn) {
                 cancelBtn.removeEventListener('click', aiColumnCancelBtnHandler);
                 aiColumnCancelBtnHandler = null;
+            }
+            if (aiColumnConfirmBtnHandler && confirmBtn) {
+                confirmBtn.removeEventListener('click', aiColumnConfirmBtnHandler);
+                aiColumnConfirmBtnHandler = null;
             }
             
             // Reset prompt required attribute and label
@@ -1085,42 +1135,121 @@ export const scripts = `
             closeAIColumnModal();
         }
 
-        function handleSuggestClick() {
-            const suggestionsContainer = document.getElementById('aiSuggestionsContainer');
+        // AI Suggestions Modal
+        let suggestionsModalReferenceColumn = null;
+        let suggestionsModalEscHandler = null;
+        let suggestionsModalClickHandler = null;
+        let suggestionsModalCloseBtnHandler = null;
+        let suggestionsModalCancelBtnHandler = null;
+
+        function checkAPIKeyAndOpenSuggestionsModal(referenceColumn) {
+            checkAPIKeyAndOpenModal(openAISuggestionsModal, referenceColumn);
+        }
+
+        function openAISuggestionsModal(referenceColumn) {
+            suggestionsModalReferenceColumn = referenceColumn;
+
+            const modal = document.getElementById('aiSuggestionsModal');
             const loadingDiv = document.getElementById('aiSuggestionsLoading');
             const listDiv = document.getElementById('aiSuggestionsList');
             const errorDiv = document.getElementById('aiSuggestionsError');
-            const suggestBtn = document.getElementById('aiSuggestBtn');
             
-            // Disable suggest button
-            if (suggestBtn) {
-                suggestBtn.disabled = true;
-            }
-            
-            // Show container and loading
-            suggestionsContainer.style.display = 'block';
+            // Show loading, hide list and error
             loadingDiv.style.display = 'block';
             listDiv.style.display = 'none';
             errorDiv.style.display = 'none';
             listDiv.innerHTML = '';
             
+            modal.classList.add('show');
+
+            // Remove previous backdrop click handler if it exists
+            if (suggestionsModalClickHandler) {
+                modal.removeEventListener('mousedown', suggestionsModalClickHandler);
+            }
+
+            // Add mousedown handler for closing modal on backdrop click
+            suggestionsModalClickHandler = (e) => {
+                if (!e.target.closest('.modal-content')) {
+                    closeAISuggestionsModal();
+                }
+            };
+            modal.addEventListener('mousedown', suggestionsModalClickHandler);
+
+            // Get buttons
+            const closeBtn = document.getElementById('aiSuggestionsCloseBtn');
+            const cancelBtn = document.getElementById('aiSuggestionsCancelBtn');
+            
+            // Remove existing button handlers if they exist
+            if (suggestionsModalCloseBtnHandler && closeBtn) {
+                closeBtn.removeEventListener('click', suggestionsModalCloseBtnHandler);
+            }
+            if (suggestionsModalCancelBtnHandler && cancelBtn) {
+                cancelBtn.removeEventListener('click', suggestionsModalCancelBtnHandler);
+            }
+
+            // Add close and cancel button handlers
+            suggestionsModalCloseBtnHandler = () => closeAISuggestionsModal();
+            suggestionsModalCancelBtnHandler = () => closeAISuggestionsModal();
+            
+            closeBtn.addEventListener('click', suggestionsModalCloseBtnHandler);
+            cancelBtn.addEventListener('click', suggestionsModalCancelBtnHandler);
+
+            // Remove previous ESC handler if it exists
+            if (suggestionsModalEscHandler) {
+                document.removeEventListener('keydown', suggestionsModalEscHandler);
+            }
+
+            // Add ESC handler for modal
+            suggestionsModalEscHandler = (e) => {
+                if (e.key === 'Escape') {
+                    closeAISuggestionsModal();
+                }
+            };
+            document.addEventListener('keydown', suggestionsModalEscHandler);
+            
             // Request suggestions from backend
             vscode.postMessage({
                 type: 'requestColumnSuggestions',
-                referenceColumn: aiColumnReferenceColumn
+                referenceColumn: referenceColumn
             });
+        }
+
+        function closeAISuggestionsModal() {
+            const modal = document.getElementById('aiSuggestionsModal');
+            modal.classList.remove('show');
+            
+            // Remove ESC handler
+            if (suggestionsModalEscHandler) {
+                document.removeEventListener('keydown', suggestionsModalEscHandler);
+                suggestionsModalEscHandler = null;
+            }
+            
+            // Remove backdrop click handler
+            if (suggestionsModalClickHandler) {
+                modal.removeEventListener('mousedown', suggestionsModalClickHandler);
+                suggestionsModalClickHandler = null;
+            }
+            
+            // Remove close and cancel button handlers
+            const closeBtn = document.getElementById('aiSuggestionsCloseBtn');
+            const cancelBtn = document.getElementById('aiSuggestionsCancelBtn');
+            
+            if (suggestionsModalCloseBtnHandler && closeBtn) {
+                closeBtn.removeEventListener('click', suggestionsModalCloseBtnHandler);
+                suggestionsModalCloseBtnHandler = null;
+            }
+            if (suggestionsModalCancelBtnHandler && cancelBtn) {
+                cancelBtn.removeEventListener('click', suggestionsModalCancelBtnHandler);
+                suggestionsModalCancelBtnHandler = null;
+            }
+            
+            suggestionsModalReferenceColumn = null;
         }
 
         function handleAISuggestions(suggestions, error) {
             const loadingDiv = document.getElementById('aiSuggestionsLoading');
             const listDiv = document.getElementById('aiSuggestionsList');
             const errorDiv = document.getElementById('aiSuggestionsError');
-            const suggestBtn = document.getElementById('aiSuggestBtn');
-            
-            // Re-enable suggest button (after any response - success or error)
-            if (suggestBtn) {
-                suggestBtn.disabled = false;
-            }
             
             loadingDiv.style.display = 'none';
             
@@ -1141,30 +1270,45 @@ export const scripts = `
             
             suggestions.forEach((suggestion) => {
                 const suggestionItem = document.createElement('div');
-                suggestionItem.style.cssText = 'padding: 8px; border: 1px solid var(--vscode-input-border); border-radius: 6px; cursor: pointer; background: var(--vscode-input-background); transition: background 0.2s; margin-bottom: 6px;';
+                suggestionItem.style.cssText = 'padding: 12px; border: 1px solid var(--vscode-input-border); border-radius: 6px; cursor: pointer; background: var(--vscode-input-background); transition: background 0.2s; margin-bottom: 10px;';
                 suggestionItem.onmouseover = () => {
                     suggestionItem.style.background = 'var(--vscode-list-hoverBackground)';
                 };
                 suggestionItem.onmouseout = () => {
                     suggestionItem.style.background = 'var(--vscode-input-background)';
                 };
-                suggestionItem.onclick = () => {
-                    const nameInput = document.getElementById('aiColumnName');
-                    const promptInput = document.getElementById('aiPrompt');
+                suggestionItem.onclick = (e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
                     
-                    if (nameInput) nameInput.value = suggestion.columnName;
-                    if (promptInput) promptInput.value = suggestion.prompt;
+                    // Store reference column before closing
+                    const refColumn = suggestionsModalReferenceColumn;
                     
-                    // Hide suggestions after selection
-                    document.getElementById('aiSuggestionsContainer').style.display = 'none';
+                    // Close suggestions modal
+                    closeAISuggestionsModal();
+                    
+                    // Small delay to ensure modal is fully closed before opening new one
+                    setTimeout(() => {
+                        // Open AI column modal with pre-filled data
+                        openAIColumnModal('before', refColumn);
+                        
+                        // Pre-fill the inputs
+                        setTimeout(() => {
+                            const nameInput = document.getElementById('aiColumnName');
+                            const promptInput = document.getElementById('aiPrompt');
+                            
+                            if (nameInput) nameInput.value = suggestion.columnName;
+                            if (promptInput) promptInput.value = suggestion.prompt;
+                        }, 50);
+                    }, 50);
                 };
                 
                 const columnName = document.createElement('div');
-                columnName.style.cssText = 'font-weight: 600; margin-bottom: 6px; color: var(--vscode-foreground);';
+                columnName.style.cssText = 'font-weight: 600; margin-bottom: 8px; color: var(--vscode-foreground); font-size: 14px;';
                 columnName.textContent = suggestion.columnName;
                 
                 const prompt = document.createElement('div');
-                prompt.style.cssText = 'font-size: 12px; color: var(--vscode-descriptionForeground); line-height: 1.4;';
+                prompt.style.cssText = 'font-size: 12px; color: var(--vscode-descriptionForeground); line-height: 1.5;';
                 prompt.textContent = suggestion.prompt;
                 
                 suggestionItem.appendChild(columnName);
@@ -1173,9 +1317,7 @@ export const scripts = `
             });
         }
 
-        // AI Column Modal event listeners
-        document.getElementById('aiColumnConfirmBtn').addEventListener('click', confirmAIColumn);
-        document.getElementById('aiSuggestBtn').addEventListener('click', handleSuggestClick);
+        // AI Column Modal event listeners (info button is static, confirm is added dynamically)
         document.getElementById('aiColumnInfoBtn').addEventListener('click', () => {
             const infoPanel = document.getElementById('aiInfoPanel');
             infoPanel.style.display = infoPanel.style.display === 'none' ? 'block' : 'none';
@@ -1225,6 +1367,17 @@ export const scripts = `
             dropdown.style.display = 'none';
         }
         
+        function updateEnumDropdownPosition() {
+            const dropdown = document.getElementById('enumHistoryDropdown');
+            const enumValuesInput = document.getElementById('aiEnumValues');
+            if (dropdown && dropdown.style.display !== 'none' && enumValuesInput && enumValuesInput.offsetParent !== null) {
+                const inputRect = enumValuesInput.getBoundingClientRect();
+                dropdown.style.top = (inputRect.bottom + 2) + 'px';
+                dropdown.style.left = inputRect.left + 'px';
+                dropdown.style.width = inputRect.width + 'px';
+            }
+        }
+        
         function showEnumDropdown(filterText = '') {
             if (recentEnumValues.length === 0) {
                 hideEnumDropdown();
@@ -1252,6 +1405,7 @@ export const scripts = `
             ).join('');
             
             dropdown.style.display = 'block';
+            updateEnumDropdownPosition();
             
             // Use event delegation on dropdown container instead of individual items
             // This avoids needing to remove handlers when items are recreated
@@ -1421,6 +1575,10 @@ export const scripts = `
             if (e.target.id === 'settingsModal') {
                 closeSettingsModal();
             }
+        });
+        // Hidden reset button - sends reset message to backend
+        document.getElementById('settingsResetBtn').addEventListener('click', () => {
+            vscode.postMessage({ type: 'resetSettings' });
         });
 
 
@@ -1632,11 +1790,11 @@ export const scripts = `
                 case 'insertAfter':
                     openAddColumnModal('after', contextMenuColumn);
                     break;
-                case 'insertAIColumnBefore':
+                case 'insertAIColumn':
                     checkAPIKeyAndOpenModal(openAIColumnModal, 'before', contextMenuColumn);
                     break;
-                case 'insertAIColumnAfter':
-                    checkAPIKeyAndOpenModal(openAIColumnModal, 'after', contextMenuColumn);
+                case 'suggestColumnWithAI':
+                    checkAPIKeyAndOpenSuggestionsModal(contextMenuColumn);
                     break;
                 case 'remove':
                     vscode.postMessage({
@@ -1674,9 +1832,50 @@ export const scripts = `
                 type: 'validateClipboard'
             });
 
+            // Temporarily position menu off-screen to measure its dimensions
             menu.style.display = 'block';
-            menu.style.left = event.pageX + 'px';
-            menu.style.top = event.pageY + 'px';
+            menu.style.visibility = 'hidden';
+            menu.style.left = '-9999px';
+            menu.style.top = '-9999px';
+            
+            // Get menu dimensions (now that it's displayed, even if hidden)
+            const menuRect = menu.getBoundingClientRect();
+            const menuWidth = menuRect.width || menu.offsetWidth;
+            const menuHeight = menuRect.height || menu.offsetHeight;
+            
+            // Make menu visible again
+            menu.style.visibility = 'visible';
+            
+            // Get viewport dimensions
+            const viewportWidth = window.innerWidth;
+            const viewportHeight = window.innerHeight;
+            
+            // Calculate initial position (use clientX/clientY for viewport-relative coordinates)
+            let left = event.clientX;
+            let top = event.clientY;
+            
+            // Adjust horizontal position if menu goes beyond right edge
+            if (left + menuWidth > viewportWidth) {
+                left = viewportWidth - menuWidth - 10; // 10px margin from edge
+            }
+            
+            // Adjust horizontal position if menu goes beyond left edge
+            if (left < 0) {
+                left = 10; // 10px margin from edge
+            }
+            
+            // Adjust vertical position if menu goes beyond bottom edge
+            if (top + menuHeight > viewportHeight) {
+                top = viewportHeight - menuHeight - 10; // 10px margin from edge
+            }
+            
+            // Adjust vertical position if menu goes beyond top edge
+            if (top < 0) {
+                top = 10; // 10px margin from edge
+            }
+            
+            menu.style.left = left + 'px';
+            menu.style.top = top + 'px';
         }
 
         function handleRowContextMenu(event) {

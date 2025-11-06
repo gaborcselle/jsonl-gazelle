@@ -643,6 +643,7 @@ export const styles = `
             display: flex;
             flex-direction: column;
             box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+            position: relative;
         }
         
         .add-column-modal {
@@ -927,10 +928,7 @@ export const styles = `
         }
         
         .enum-history-dropdown {
-            position: absolute;
-            top: 100%;
-            left: 0;
-            right: 0;
+            position: fixed;
             background-color: var(--vscode-dropdown-background);
             border: 1px solid var(--vscode-dropdown-border);
             border-radius: 4px;
@@ -939,6 +937,7 @@ export const styles = `
             max-height: 200px;
             overflow-y: auto;
             margin-top: 2px;
+            min-width: 200px;
         }
         
         .enum-history-item {
