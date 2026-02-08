@@ -2323,7 +2323,7 @@ export const scripts = `
             rowNumCell.classList.add('row-header');
             // Tooltip shows the actual row number in the file
             rowNumCell.title = 'Row ' + (actualRowIndex + 1) + ' in file';
-            rowNumCell.addEventListener('contextmenu', (e) => showRowContextMenu(e, actualRowIndex));
+            rowNumCell.addEventListener('contextmenu', (e) => showRowContextMenu(e, rowIndex));
             tr.appendChild(rowNumCell);
 
             // Data cells
