@@ -892,6 +892,23 @@ export const styles = `
         th:active {
             cursor: grabbing;
         }
+
+        /* Drag and Drop for Table Rows */
+        tr.dragging-row {
+            opacity: 0.5;
+        }
+        
+        tr.drag-over-row {
+            border-top: 2px solid var(--vscode-focusBorder);
+        }
+        
+        #tableBody tr {
+            cursor: grab;
+        }
+        
+        #tableBody tr:active {
+            cursor: grabbing;
+        }
         
         /* Text Wrapping */
         #dataTable.text-wrap td {

@@ -2304,6 +2304,50 @@ export const scripts = `
             targetTh.classList.remove('drag-over-header');
         }
 
+        // Table row drag and drop for reordering
+        let draggedRow = null;
+
+        function handleRowDragStart(e) {
+            const tr = e.target.closest('tr');
+            if (!tr) return;
+            draggedRow = tr;
+            tr.classList.add('dragging-row');
+            e.dataTransfer.effectAllowed = 'move';
+            e.dataTransfer.setData('text/plain', tr.dataset.actualIndex || '');
+        }
+
+        function handleRowDragEnd(e) {
+            const tr = e.target.closest('tr');
+            if (tr) tr.classList.remove('dragging-row');
+            document.querySelectorAll('#tableBody tr.drag-over-row').forEach(row => row.classList.remove('drag-over-row'));
+            draggedRow = null;
+        }
+
+        function handleRowDragOver(e) {
+            e.preventDefault();
+            e.dataTransfer.dropEffect = 'move';
+            const tr = e.target.closest('tr');
+            if (tr && tr !== draggedRow) {
+                document.querySelectorAll('#tableBody tr.drag-over-row').forEach(row => row.classList.remove('drag-over-row'));
+                tr.classList.add('drag-over-row');
+            }
+        }
+
+        function handleRowDrop(e) {
+            e.preventDefault();
+            const targetTr = e.target.closest('tr');
+            if (!targetTr || targetTr === draggedRow) return;
+            const fromIndex = parseInt(draggedRow.dataset.actualIndex, 10);
+            const toIndex = parseInt(targetTr.dataset.actualIndex, 10);
+            if (fromIndex === toIndex) return;
+            targetTr.classList.remove('drag-over-row');
+            vscode.postMessage({
+                type: 'reorderRows',
+                fromIndex: fromIndex,
+                toIndex: toIndex
+            });
+        }
+
         function createTableRow(row, rowIndex) {
             const tr = document.createElement('tr');
 
@@ -2315,16 +2359,24 @@ export const scripts = `
 
             // Store the filtered row index on the row element for Find/Replace
             tr.dataset.index = rowIndex.toString();
+            tr.dataset.actualIndex = actualRowIndex.toString();
 
             // Add row number cell
             const rowNumCell = document.createElement('td');
             // Display sequential number (1, 2, 3...) for visual ordering
             rowNumCell.textContent = (rowIndex + 1).toString();
             rowNumCell.classList.add('row-header');
-            // Tooltip shows the actual row number in the file
-            rowNumCell.title = 'Row ' + (actualRowIndex + 1) + ' in file';
+            // Tooltip shows the actual row number in the file and drag hint
+            rowNumCell.title = 'Row ' + (actualRowIndex + 1) + ' in file • Drag to reorder';
             rowNumCell.addEventListener('contextmenu', (e) => showRowContextMenu(e, rowIndex));
             tr.appendChild(rowNumCell);
+
+            // Row drag and drop for reordering
+            tr.draggable = true;
+            tr.addEventListener('dragstart', handleRowDragStart);
+            tr.addEventListener('dragend', handleRowDragEnd);
+            tr.addEventListener('dragover', handleRowDragOver);
+            tr.addEventListener('drop', handleRowDrop);
 
             // Data cells
             currentData.columns.forEach(column => {

@@ -131,6 +131,9 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
                             case 'reorderColumns':
                                 await this.reorderColumns(message.fromIndex, message.toIndex, webviewPanel, document);
                                 break;
+                            case 'reorderRows':
+                                await this.handleReorderRows(message.fromIndex, message.toIndex, webviewPanel, document);
+                                break;
                             case 'toggleColumnVisibility':
                                 this.toggleColumnVisibility(message.columnPath);
                                 this.updateWebview(webviewPanel);
@@ -2260,6 +2263,49 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
             console.error('Error inserting row:', error);
             const errorMessage = error instanceof Error ? error.message : String(error);
             vscode.window.showErrorMessage('Failed to insert row: ' + errorMessage);
+        } finally {
+            setTimeout(() => {
+                this.isUpdating = false;
+            }, 100);
+        }
+    }
+
+    private async handleReorderRows(fromIndex: number, toIndex: number, webviewPanel: vscode.WebviewPanel, document: vscode.TextDocument) {
+        try {
+            if (fromIndex < 0 || fromIndex >= this.rows.length || toIndex < 0 || toIndex >= this.rows.length) {
+                vscode.window.showErrorMessage('Invalid row indices for reorder');
+                return;
+            }
+            if (fromIndex === toIndex) return;
+
+            this.isUpdating = true;
+
+            const [movedRow] = this.rows.splice(fromIndex, 1);
+            const insertIndex = fromIndex < toIndex ? toIndex - 1 : toIndex;
+            this.rows.splice(insertIndex, 0, movedRow);
+
+            this.parsedLines = this.rows.map((row, index) => ({
+                data: row,
+                lineNumber: index + 1,
+                rawLine: JSON.stringify(row)
+            }));
+
+            this.filterRows();
+            this.rawContent = this.rows.map(row => JSON.stringify(row)).join('\n');
+
+            const edit = new vscode.WorkspaceEdit();
+            edit.replace(
+                document.uri,
+                new vscode.Range(0, 0, document.lineCount, 0),
+                this.rawContent
+            );
+            await vscode.workspace.applyEdit(edit);
+
+            this.updateWebview(webviewPanel);
+        } catch (error) {
+            console.error('Error reordering rows:', error);
+            const errorMessage = error instanceof Error ? error.message : String(error);
+            vscode.window.showErrorMessage('Failed to reorder rows: ' + errorMessage);
         } finally {
             setTimeout(() => {
                 this.isUpdating = false;
