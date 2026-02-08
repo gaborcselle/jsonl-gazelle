@@ -2,6 +2,7 @@ import * as vscode from 'vscode';
 import * as path from 'path';
 import { JsonRow, ParsedLine, ColumnInfo } from './jsonl/types';
 import * as utils from './jsonl/utils';
+import { filterRowsWithIndices } from './jsonl/rowMapping';
 import { getHtmlTemplate } from './webview/template';
 import { styles } from './webview/styles';
 import { scripts } from './webview/scripts';
@@ -10,6 +11,7 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
     private static readonly viewType = 'jsonl-gazelle.jsonlViewer';
     private rows: JsonRow[] = [];
     private filteredRows: JsonRow[] = [];
+    private filteredRowIndices: number[] = [];
     private columns: ColumnInfo[] = [];
     private searchTerm: string = '';
     private isIndexing: boolean = false;
@@ -260,6 +262,7 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
             if (this.totalLines === 0 || (this.totalLines === 1 && lines[0].trim() === '')) {
                 this.isIndexing = false;
                 this.filteredRows = [];
+                this.filteredRowIndices = [];
                 if (this.currentWebviewPanel) {
                     this.updateWebview(this.currentWebviewPanel);
                 }
@@ -279,6 +282,7 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
             }
             
             this.filteredRows = this.rows; // Point to same array for small files
+            this.filteredRowIndices = this.rows.map((_, index) => index);
             this.isIndexing = false;
             
             if (this.currentWebviewPanel) {
@@ -310,6 +314,7 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
         }
         
         this.filteredRows = this.rows; // Point to same array initially
+        this.filteredRowIndices = this.rows.map((_, index) => index);
         this.isIndexing = false;
         
         if (this.currentWebviewPanel) {
@@ -353,6 +358,7 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
             // Update UI only every 10 chunks (much less frequent)
             if ((startIndex / this.CHUNK_SIZE) % 10 === 0 && this.currentWebviewPanel) {
                 this.filteredRows = this.searchTerm ? [...this.rows] : this.rows;
+                this.filteredRowIndices = this.rows.map((_, index) => index);
                 this.updateWebview(this.currentWebviewPanel);
             }
             
@@ -554,17 +560,9 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
     }
 
     private filterRows() {
-        if (!this.searchTerm) {
-            // If no search term, point to the same array (much faster than copying)
-            this.filteredRows = this.rows;
-            return;
-        }
-
-        this.filteredRows = this.rows.filter(row => {
-            const searchText = JSON.stringify(row).toLowerCase();
-            const term = this.searchTerm.toLowerCase();
-            return searchText.includes(term);
-        });
+        const { filteredRows, filteredRowIndices } = filterRowsWithIndices(this.rows, this.searchTerm);
+        this.filteredRows = filteredRows;
+        this.filteredRowIndices = filteredRowIndices;
     }
 
 
@@ -2085,6 +2083,7 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
                 
                 this.loadedLines = this.rows.length;
                 this.filteredRows = this.rows;
+                this.filteredRowIndices = this.rows.map((_, index) => index);
                 
                 // Update columns based on new data
                 this.updateColumns();
@@ -2447,10 +2446,9 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
             }
 
             // Create a mapping of filtered rows to their actual indices
-            const rowIndices = this.filteredRows.map(row => {
-                const index = this.rows.indexOf(row);
-                return index >= 0 ? index : this.filteredRows.indexOf(row);
-            });
+            const rowIndices = this.filteredRowIndices.length === this.filteredRows.length
+                ? this.filteredRowIndices
+                : this.filteredRows.map((_, index) => index);
 
             // Generate pretty-printed content with line mapping
             const prettyResult = this.convertJsonlToPrettyWithLineNumbers(this.rows);
