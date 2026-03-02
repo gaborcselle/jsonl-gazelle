@@ -32,6 +32,7 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
     private memoryOptimized: boolean = false;
     private isUpdating: boolean = false; // Flag to prevent recursive updates
     private pendingSaveTimeout: NodeJS.Timeout | null = null; // For debouncing saves
+    private activeDocumentUri: string | null = null;
     private manualColumnsPerFile: Map<string, ColumnInfo[]> = new Map(); // Store manual columns per file
     private ratingPromptCallback: (() => Promise<void>) | null = null; // Callback for rating prompt
 
@@ -53,6 +54,14 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
         _token: vscode.CancellationToken
     ): Promise<void> {
         try {
+            // Reset pending saves when switching documents to avoid stale writes.
+            if (this.pendingSaveTimeout) {
+                clearTimeout(this.pendingSaveTimeout);
+                this.pendingSaveTimeout = null;
+            }
+
+            this.activeDocumentUri = document.uri.toString();
+
             // Check and show rating prompt if needed
             if (this.ratingPromptCallback) {
                 this.ratingPromptCallback().catch(err => {
@@ -192,6 +201,15 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
             // Store subscription for cleanup
             webviewPanel.onDidDispose(() => {
                 changeDocumentSubscription.dispose();
+
+                if (this.pendingSaveTimeout) {
+                    clearTimeout(this.pendingSaveTimeout);
+                    this.pendingSaveTimeout = null;
+                }
+
+                if (this.activeDocumentUri === document.uri.toString()) {
+                    this.activeDocumentUri = null;
+                }
             });
 
             // Load and parse the JSONL file
@@ -2583,6 +2601,13 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
 
             this.pendingSaveTimeout = setTimeout(async () => {
                 try {
+                    const pendingContent = this.rawContent;
+                    const targetUri = document.uri.toString();
+
+                    if (this.activeDocumentUri !== targetUri) {
+                        return;
+                    }
+
                     this.isUpdating = true;
 
                     const fullRange = new vscode.Range(
@@ -2591,7 +2616,7 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
                     );
 
                     const edit = new vscode.WorkspaceEdit();
-                    edit.replace(document.uri, fullRange, this.rawContent);
+                    edit.replace(document.uri, fullRange, pendingContent);
 
                     const success = await vscode.workspace.applyEdit(edit);
 
@@ -2602,6 +2627,7 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
                 } catch (saveError) {
                     console.error('Error saving cell update:', saveError);
                 } finally {
+                    this.pendingSaveTimeout = null;
                     setTimeout(() => {
                         this.isUpdating = false;
                     }, 200);

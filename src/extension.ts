@@ -301,6 +301,8 @@ class RatingPromptManager {
     private readonly OPEN_COUNT_KEY = 'jsonl-gazelle.openCount';
     private readonly HAS_RATED_KEY = 'jsonl-gazelle.hasRated';
     private readonly LAST_PROMPTED_COUNT_KEY = 'jsonl-gazelle.lastPromptedCount';
+    private readonly LAST_PROMPT_AT_KEY = 'jsonl-gazelle.lastPromptAt';
+    private readonly PROMPT_COOLDOWN_MS = 1000 * 60 * 60 * 24 * 14; // 14 days
     private isShowingPrompt: boolean = false; // Prevent multiple prompts at once
 
     constructor(private readonly context: vscode.ExtensionContext) {}
@@ -321,6 +323,12 @@ class RatingPromptManager {
 
         // Get last prompted count
         const lastPromptedCount = this.context.globalState.get<number>(this.LAST_PROMPTED_COUNT_KEY, 0);
+        const lastPromptAt = this.context.globalState.get<number>(this.LAST_PROMPT_AT_KEY, 0);
+
+        // Prevent frequent prompts even if open-count logic is hit repeatedly.
+        if (Date.now() - lastPromptAt < this.PROMPT_COOLDOWN_MS) {
+            return;
+        }
 
         // Determine if we should prompt
         let shouldPrompt = false;
@@ -365,9 +373,11 @@ class RatingPromptManager {
             // User clicked "OK" - open marketplace and remember      
             await vscode.env.openExternal(vscode.Uri.parse(marketplaceUrl));
             await this.context.globalState.update(this.HAS_RATED_KEY, true);
+            await this.context.globalState.update(this.LAST_PROMPT_AT_KEY, Date.now());
         } else {
             // User clicked "Maybe Later" or dismissed - remember this prompt count
             await this.context.globalState.update(this.LAST_PROMPTED_COUNT_KEY, openCount);
+            await this.context.globalState.update(this.LAST_PROMPT_AT_KEY, Date.now());
         }
     }
 
