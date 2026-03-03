@@ -3224,6 +3224,16 @@ export const scripts = `
         
         let prettyEditor = null;
 
+        function getMonacoTheme() {
+            const body = document.body;
+
+            if (body.classList.contains('vscode-dark') || body.classList.contains('vscode-high-contrast')) {
+                return 'vs-dark';
+            }
+
+            return 'vs';
+        }
+
         function updatePrettyView() {
             const editorContainer = document.getElementById('prettyEditor');
             if (!editorContainer) return;
@@ -3242,7 +3252,7 @@ export const scripts = `
                 prettyEditor = monaco.editor.create(editorContainer, {
                     value: prettyContent,
                     language: 'json',
-                    theme: 'vs-dark',
+                    theme: getMonacoTheme(),
                     automaticLayout: true,
                     scrollBeyondLastLine: false,
                     minimap: { enabled: false },
@@ -3311,7 +3321,7 @@ export const scripts = `
                 rawEditor = monaco.editor.create(editorContainer, {
                     value: currentData.rawContent || '',
                     language: 'json',
-                    theme: 'vs-dark',
+                    theme: getMonacoTheme(),
                     automaticLayout: true,
                     scrollBeyondLastLine: false,
                     minimap: { enabled: false },
