@@ -1458,6 +1458,7 @@ export const scripts = `
         // Store which modal should be opened after settings are saved
         let pendingModalCallback = null;
         let pendingModalArgs = null;
+        let loadedSettingsOpenAIKey = '';
 
         function openSettingsModal(showWarning = false, modalCallback = null, ...modalArgs) {
             const modal = document.getElementById('settingsModal');
@@ -1526,6 +1527,7 @@ export const scripts = `
         function saveSettings() {
             const openaiKey = document.getElementById('openaiKey').value;
             const openaiModel = document.getElementById('openaiModel').value;
+            const shouldUpdateOpenAIKey = openaiKey !== loadedSettingsOpenAIKey;
 
             // Store callback and args before they're cleared
             const callback = pendingModalCallback;
@@ -1534,7 +1536,7 @@ export const scripts = `
             vscode.postMessage({
                 type: 'saveSettings',
                 settings: {
-                    openaiKey: openaiKey,
+                    openaiKey: shouldUpdateOpenAIKey ? openaiKey : undefined,
                     openaiModel: openaiModel
                 },
                 // Include callback info if available
@@ -3031,6 +3033,7 @@ export const scripts = `
                     const warningElement = document.getElementById('apiKeyWarning');
 
                     openaiKey.value = message.settings.openaiKey || '';
+                    loadedSettingsOpenAIKey = openaiKey.value;
                     openaiModel.value = message.settings.openaiModel || 'gpt-4.1-mini';
                     
                     // Update warning visibility based on whether API key exists
