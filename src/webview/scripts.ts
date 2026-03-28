@@ -3302,6 +3302,59 @@ export const scripts = `
                         newContent: prettyEditor.getValue()
                     });
                 });
+
+                const navigatePrettyEntry = (direction) => {
+                    if (!prettyEditor || !Array.isArray(lineMapping) || lineMapping.length === 0) {
+                        return;
+                    }
+
+                    const currentPosition = prettyEditor.getPosition();
+                    if (!currentPosition) {
+                        return;
+                    }
+
+                    let targetLine = currentPosition.lineNumber;
+
+                    if (direction > 0) {
+                        for (let line = currentPosition.lineNumber + 1; line <= lineMapping.length; line++) {
+                            if (lineMapping[line - 1] > 0) {
+                                targetLine = line;
+                                break;
+                            }
+                        }
+                    } else {
+                        for (let line = currentPosition.lineNumber - 1; line >= 1; line--) {
+                            if (lineMapping[line - 1] > 0) {
+                                targetLine = line;
+                                break;
+                            }
+                        }
+                    }
+
+                    if (targetLine === currentPosition.lineNumber) {
+                        return;
+                    }
+
+                    const model = prettyEditor.getModel();
+                    const targetColumn = model ? model.getLineFirstNonWhitespaceColumn(targetLine) : 1;
+
+                    prettyEditor.setPosition({
+                        lineNumber: targetLine,
+                        column: targetColumn > 0 ? targetColumn : 1
+                    });
+                    prettyEditor.revealLineInCenterIfOutsideViewport(targetLine);
+                    prettyEditor.focus();
+                };
+
+                // Navigate between JSONL entries in Pretty Print view
+                // Ctrl/Cmd+Alt+Up/Down is chosen to avoid conflicts with common line-editing shortcuts.
+                prettyEditor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyMod.Alt | monaco.KeyCode.UpArrow, () => {
+                    navigatePrettyEntry(-1);
+                });
+
+                prettyEditor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyMod.Alt | monaco.KeyCode.DownArrow, () => {
+                    navigatePrettyEntry(1);
+                });
             });
         }
 
