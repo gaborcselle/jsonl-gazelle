@@ -3419,6 +3419,49 @@ export const scripts = `
                         newContent: rawEditor.getValue()
                     });
                 });
+
+                const navigateRawLine = (direction) => {
+                    if (!rawEditor) {
+                        return;
+                    }
+
+                    const currentPosition = rawEditor.getPosition();
+                    const model = rawEditor.getModel();
+                    if (!currentPosition || !model) {
+                        return;
+                    }
+
+                    const lineCount = model.getLineCount();
+                    if (lineCount <= 1) {
+                        return;
+                    }
+
+                    const targetLine = Math.min(
+                        lineCount,
+                        Math.max(1, currentPosition.lineNumber + direction)
+                    );
+
+                    if (targetLine === currentPosition.lineNumber) {
+                        return;
+                    }
+
+                    const targetMaxColumn = model.getLineMaxColumn(targetLine);
+                    rawEditor.setPosition({
+                        lineNumber: targetLine,
+                        column: Math.min(currentPosition.column, targetMaxColumn)
+                    });
+                    rawEditor.revealLineInCenterIfOutsideViewport(targetLine);
+                    rawEditor.focus();
+                };
+
+                // Navigate line-to-line in Raw view without triggering Monaco's line move command.
+                rawEditor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyMod.Alt | monaco.KeyCode.UpArrow, () => {
+                    navigateRawLine(-1);
+                });
+
+                rawEditor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyMod.Alt | monaco.KeyCode.DownArrow, () => {
+                    navigateRawLine(1);
+                });
             });
         }
         

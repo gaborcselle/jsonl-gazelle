@@ -34,7 +34,8 @@ Fast JSONL viewer / editor for VS Code with advanced features including Table Vi
 4. Table View: Click ▼ buttons in column headers or double-click expandable cells to expand objects/arrays into separate columns
 5. Pretty Print view: You can edit inline
 6. Pretty Print navigation: Use `Ctrl+Alt+↑` / `Ctrl+Alt+↓` (`Cmd+Option+↑` / `Cmd+Option+↓` on macOS) to jump between JSONL entries
-7. Move current line: Use `Alt+↑` / `Alt+↓` (`Option+↑` / `Option+↓` on macOS) to move the current line up or down in the editor
+7. Raw view navigation: Use `Ctrl+Alt+↑` / `Ctrl+Alt+↓` (`Cmd+Option+↑` / `Cmd+Option+↓` on macOS) to jump to the previous/next JSONL line
+8. Move current line: Use `Alt+↑` / `Alt+↓` (`Option+↑` / `Option+↓` on macOS) to move the current line up or down in the editor
 
 ## Extension Development
 
