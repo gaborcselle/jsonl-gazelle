@@ -3034,7 +3034,7 @@ export const scripts = `
 
                     openaiKey.value = message.settings.openaiKey || '';
                     loadedSettingsOpenAIKey = openaiKey.value;
-                    openaiModel.value = message.settings.openaiModel || 'gpt-4.1-mini';
+                    openaiModel.value = message.settings.openaiModel || 'gpt-5.4-mini';
                     
                     // Update warning visibility based on whether API key exists
                     if (warningElement) {

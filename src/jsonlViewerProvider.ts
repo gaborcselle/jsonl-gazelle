@@ -1378,7 +1378,7 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
         }
 
         const trimmedApiKey = apiKey.trim();
-        const model = this.context.globalState.get<string>('openaiModel', 'gpt-4.1-mini');
+        const model = this.context.globalState.get<string>('openaiModel', 'gpt-5.4-mini');
 
         const requestBody: any = {
             model: model,
@@ -1701,7 +1701,7 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
     private async handleGetSettings(webviewPanel: vscode.WebviewPanel) {
         try {
             const openaiKey = await this.context.secrets.get('openaiApiKey') || '';
-            const openaiModel = this.context.globalState.get<string>('openaiModel', 'gpt-4.1-mini');
+            const openaiModel = this.context.globalState.get<string>('openaiModel', 'gpt-5.4-mini');
 
             webviewPanel.webview.postMessage({
                 type: 'settingsLoaded',
@@ -2873,7 +2873,7 @@ Do not suggest columns that already exist. Return ONLY valid JSON array, no mark
             }
 
             const trimmedApiKey = apiKey.trim();
-            const model = this.context.globalState.get<string>('openaiModel', 'gpt-4.1-mini');
+            const model = this.context.globalState.get<string>('openaiModel', 'gpt-5.4-mini');
 
             const requestBody: any = {
                 model: model,
