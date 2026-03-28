@@ -16,6 +16,7 @@ Fast JSONL viewer / editor for VS Code with advanced features including Table Vi
 
 ## What's new
 
+- *v0.4.3*: Line-by-line navigation in Raw and Pretty print mode, fixed small bugs, updated models.
 - *v0.4.2*: Fixed AI settings persistence so model/system prompt changes are saved even when the API key remains unchanged.
 - *v0.4.1*: Improved editing reliability with row/insertion ordering fixes, safer autosave behavior, and less intrusive rating prompts.
 - *v0.4.0*: Added AI-powered column suggestions from the context menu, manual column insertion improvements, and row filtering mapping tests.
@@ -49,19 +50,6 @@ Fast JSONL viewer / editor for VS Code with advanced features including Table Vi
 3. Run `npm run compile` to build the extension
 4. Press F5 to run the extension in a new Extension Development Host window
 
-## Development
-
-```bash
-# Install dependencies
-npm install
-
-# Compile TypeScript
-npm run compile
-
-# Watch for changes
-npm run watch
-```
-
 ## Test Data Generation
 
 For testing with large datasets, you can generate a comprehensive test file with 45,000 lines (~64MB) containing varied fields and nested structures:
@@ -83,12 +71,8 @@ This will create `test-data/large.jsonl` with:
 The generated file is automatically excluded from git via `.gitignore` to keep the repository lightweight.
 
 ## What's next / Roadmap
-- [ ] Add automated tests for AI column generation edge cases (for example templates that reference paths missing in some rows).
-- [ ] Add automated tests for AI row generation and insertion ordering under filtered/sorted views.
 - [ ] Expand export options beyond CSV (e.g., JSON array, Parquet, or Avro) for analytics/data engineering workflows.
-- [ ] Add configurable AI provider support (Anthropic/Gemini/local endpoints) in addition to OpenAI.
-- [ ] Add performance profiling + progressive rendering for multi-million-line JSONL datasets.
-- [ ] Improve discoverability with an in-editor quick-start / command palette walkthrough for new users.
+- [ ] Add configurable AI provider support (Anthropic/Google Gemini/local endpoints) in addition to OpenAI.
 
 ## License
 
