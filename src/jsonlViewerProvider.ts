@@ -1780,7 +1780,7 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
         }
     }
 
-    private async handleSaveSettings(settings: { openaiKey: string; openaiModel: string }, webviewPanel: vscode.WebviewPanel, openOriginalModal: boolean) {
+    private async handleSaveSettings(settings: { openaiKey?: string; openaiModel: string }, webviewPanel: vscode.WebviewPanel, openOriginalModal: boolean) {
         try {
             await this.context.globalState.update('openaiModel', settings.openaiModel);
 
