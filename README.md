@@ -14,10 +14,15 @@ Fast JSONL viewer / editor for VS Code with advanced features including Table Vi
 
 ![JSONL Gazelle Screenshot - Raw View](jsonl-gazelle-screenshot4.jpg)
 
-## New
+## What's new
 
-- *v0.3.1*: For extrememly large JSONL files over 100MB, this version adds a new "Split" function available by right-clicking on the file
-- *v0.3.0*: Add a much improved Pretty Print View with syntax highlighting
+- *v0.4.2*: Fixed AI settings persistence so model/system prompt changes are saved even when the API key remains unchanged.
+- *v0.4.1*: Improved editing reliability with row/insertion ordering fixes, safer autosave behavior, and less intrusive rating prompts.
+- *v0.4.0*: Added AI-powered column suggestions from the context menu, manual column insertion improvements, and row filtering mapping tests.
+- *v0.3.4*: Improved AI settings flow when API keys are missing, plus dialog polish and stability fixes.
+- *v0.3.1*: Added a **Split into Parts (100MB+)** command in the file context menu for very large JSONL files.
+- *v0.3.0*: Added a substantially improved Pretty Print view with syntax highlighting.
+- *UX updates*: Added support for light themes and documented keyboard shortcuts for Pretty Print entry navigation (`Ctrl+Alt+↑/↓`, or `Cmd+Option+↑/↓` on macOS) plus line move shortcuts (`Alt+↑/↓`, or `Option+↑/↓` on macOS).
 
 ## Features
 
@@ -78,11 +83,12 @@ This will create `test-data/large.jsonl` with:
 The generated file is automatically excluded from git via `.gitignore` to keep the repository lightweight.
 
 ## What's next / Roadmap
-- [ ] AI column dialog: Remember recent values (along with any enum settings), and allow the user to prefill them from a dropdown. (Don't show the dropdown if the user has never used the feature.) 
-- [ ] AI column dialog: port the enum option to OpenAI's structured outputs from the current prompt-based implementation
-- [ ] Test the AI column generation feature, e.g. for when you give it `{{row.paths}}` that exist in some rows but not in others
-- [ ] Test the AI row generation feature
-- [ ] Suggest feature in AI add column dialog: Add a "Suggest new column" to the column menu. It will prompt OpenAI with some of the example data to make suggestions for new columns to add, with the provided template language. It will suggest a bunch of column names + prompts to choose from. The user can then run that and add a new column.
+- [ ] Add automated tests for AI column generation edge cases (for example templates that reference paths missing in some rows).
+- [ ] Add automated tests for AI row generation and insertion ordering under filtered/sorted views.
+- [ ] Expand export options beyond CSV (e.g., JSON array, Parquet, or Avro) for analytics/data engineering workflows.
+- [ ] Add configurable AI provider support (Anthropic/Gemini/local endpoints) in addition to OpenAI.
+- [ ] Add performance profiling + progressive rendering for multi-million-line JSONL datasets.
+- [ ] Improve discoverability with an in-editor quick-start / command palette walkthrough for new users.
 
 ## License
 
