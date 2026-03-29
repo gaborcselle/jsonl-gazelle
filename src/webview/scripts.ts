@@ -18,7 +18,11 @@ export const scripts = `
             searchTerm: '',
             parsedLines: [],
             rawContent: '',
-            errorCount: 0
+            errorCount: 0,
+            uiPreferences: {
+                lastView: 'table',
+                wrapText: false
+            }
         };
         
         let contextMenuColumn = null;
@@ -712,7 +716,9 @@ export const scripts = `
         });
         
         // Wrap Text Toggle
-        document.getElementById('wrapTextCheckbox').addEventListener('change', (e) => {
+        const wrapTextCheckbox = document.getElementById('wrapTextCheckbox');
+
+        wrapTextCheckbox.addEventListener('change', (e) => {
             const table = document.getElementById('dataTable');
             const colgroup = document.getElementById('tableColgroup');
             const thead = table.querySelector('thead tr');
@@ -750,6 +756,12 @@ export const scripts = `
                 // Note: We intentionally do NOT remove table-layout or col widths
                 // so the column sizes remain stable
             }
+
+            // Persist wrap text preference globally
+            vscode.postMessage({
+                type: 'setWrapTextPreference',
+                enabled: e.target.checked
+            });
         });
         
         function openColumnManager() {
@@ -2053,6 +2065,30 @@ export const scripts = `
                 document.getElementById('dataTable').style.display = 'table';
             }
             
+            // Apply UI preferences once data is ready
+            if (data.uiPreferences) {
+                // Switch to the last used view if different from default
+                const desiredView = data.uiPreferences.lastView || 'table';
+
+                if (desiredView !== currentView) {
+                    switchView(desiredView);
+                }
+
+                // Update wrap text checkbox and table class after table layout exists
+                const wrapCheckbox = document.getElementById('wrapTextCheckbox');
+                const table = document.getElementById('dataTable');
+
+                if (wrapCheckbox && table) {
+                    wrapCheckbox.checked = !!data.uiPreferences.wrapText;
+
+                    if (wrapCheckbox.checked) {
+                        table.classList.add('text-wrap');
+                    } else {
+                        table.classList.remove('text-wrap');
+                    }
+                }
+            }
+
             // Update search inputs
             
             // Update error count
@@ -3115,6 +3151,12 @@ export const scripts = `
             }
             
             currentView = viewType;
+
+            // Persist view preference globally
+            vscode.postMessage({
+                type: 'setViewPreference',
+                viewType: viewType
+            });
             
             // Show animated gazelle during view switch
             const logo = document.getElementById('logo');
@@ -3137,7 +3179,7 @@ export const scripts = `
             document.getElementById('jsonViewContainer').style.display = 'none';
             document.getElementById('rawViewContainer').style.display = 'none';
             
-            // Show/hide column manager and wrap text controls based on view
+            // Show/hide controls based on view
             const columnManagerBtn = document.getElementById('columnManagerBtn');
             const wrapTextControl = document.querySelector('.wrap-text-control');
             const findReplaceBtn = document.getElementById('findReplaceBtn');
@@ -3148,7 +3190,7 @@ export const scripts = `
                 case 'table':
                     document.getElementById('tableViewContainer').style.display = 'block';
                     document.getElementById('dataTable').style.display = 'table';
-                    // Show column controls for table view
+                    // In table view, show all controls
                     columnManagerBtn.style.display = 'flex';
                     wrapTextControl.style.display = 'flex';
                     findReplaceBtn.style.display = 'flex';
@@ -3164,10 +3206,11 @@ export const scripts = `
                 case 'json':
                     document.getElementById('jsonViewContainer').style.display = 'block';
                     document.getElementById('jsonViewContainer').classList.add('isolated');
-                    // Hide column controls for json view
+                    // Column manager only makes sense for table view
                     columnManagerBtn.style.display = 'none';
-                    wrapTextControl.style.display = 'none';
-                    settingsBtn.style.display = 'none';
+                    // Keep wrap text and settings visible so they feel global
+                    wrapTextControl.style.display = 'flex';
+                    settingsBtn.style.display = 'flex';
                     // Show find button (triggers Monaco's find widget)
                     findReplaceBtn.style.display = 'flex';
 
@@ -3194,10 +3237,11 @@ export const scripts = `
                     break;
                 case 'raw':
                     document.getElementById('rawViewContainer').style.display = 'block';
-                    // Hide column controls for raw view
+                    // Column manager only makes sense for table view
                     columnManagerBtn.style.display = 'none';
-                    wrapTextControl.style.display = 'none';
-                    settingsBtn.style.display = 'none';
+                    // Keep wrap text and settings visible so they feel global
+                    wrapTextControl.style.display = 'flex';
+                    settingsBtn.style.display = 'flex';
                     // Show find button (triggers Monaco's find widget)
                     findReplaceBtn.style.display = 'flex';
                     // Use setTimeout to allow the loading animation to show before rendering

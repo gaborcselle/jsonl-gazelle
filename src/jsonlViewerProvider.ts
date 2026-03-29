@@ -34,7 +34,9 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
     private pendingSaveTimeout: NodeJS.Timeout | null = null; // For debouncing saves
     private activeDocumentUri: string | null = null;
     private manualColumnsPerFile: Map<string, ColumnInfo[]> = new Map(); // Store manual columns per file
+    private columnPreferencesPerFile: Map<string, { order: string[]; visibility: { [path: string]: boolean } }> = new Map();
     private ratingPromptCallback: (() => Promise<void>) | null = null; // Callback for rating prompt
+    private readonly UI_PREFS_KEY = 'jsonl-gazelle.uiPreferences';
 
     constructor(private readonly context: vscode.ExtensionContext) {}
 
@@ -144,7 +146,7 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
                                 await this.handleReorderRows(message.fromIndex, message.toIndex, webviewPanel, document);
                                 break;
                             case 'toggleColumnVisibility':
-                                this.toggleColumnVisibility(message.columnPath);
+                                this.toggleColumnVisibility(message.columnPath, document);
                                 this.updateWebview(webviewPanel);
                                 break;
                             case 'addColumn':
@@ -176,6 +178,12 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
                                 break;
                             case 'requestColumnSuggestions':
                                 await this.handleRequestColumnSuggestions(message.referenceColumn, webviewPanel);
+                                break;
+                            case 'setViewPreference':
+                                await this.updateViewPreference(message.viewType);
+                                break;
+                            case 'setWrapTextPreference':
+                                await this.updateWrapTextPreference(message.enabled);
                                 break;
                         }
                     } catch (error) {
@@ -842,12 +850,17 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
         }
     }
 
-    private toggleColumnVisibility(columnPath: string) {
+    private toggleColumnVisibility(columnPath: string, document?: vscode.TextDocument) {
         const column = this.columns.find(col => col.path === columnPath);
         if (!column) return;
 
         // Toggle the visibility
         column.visible = !column.visible;
+
+        // Persist visibility preference for this file if document is provided
+        if (document) {
+            this.updateColumnPreferencesForDocument(document);
+        }
     }
 
     private restoreManualColumns(savedColumns: ColumnInfo[]) {
@@ -872,6 +885,81 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
             // Otherwise add at the end
             this.columns.push(col);
         }
+    }
+
+    private updateColumnPreferencesForDocument(document: vscode.TextDocument) {
+        const fileUri = document.uri.toString();
+
+        const order = this.columns.map(col => col.path);
+        const visibility: { [path: string]: boolean } = {};
+
+        this.columns.forEach(col => {
+            visibility[col.path] = col.visible;
+        });
+
+        this.columnPreferencesPerFile.set(fileUri, { order, visibility });
+
+        // Persist to global state so preferences survive reloads
+        const existing = this.context.globalState.get<{ [uri: string]: { order: string[]; visibility: { [path: string]: boolean } } }>('jsonl-gazelle.columnPreferences', {});
+
+        existing[fileUri] = { order, visibility };
+
+        // Fire and forget; log if it fails
+        const updatePromise = this.context.globalState.update('jsonl-gazelle.columnPreferences', existing);
+
+        updatePromise.then(undefined, (err: unknown) => {
+            console.error('Error saving column preferences:', err);
+        });
+    }
+
+    private restoreColumnPreferences(fileUri: string) {
+        // Try in-memory cache first
+        let prefs = this.columnPreferencesPerFile.get(fileUri);
+
+        if (!prefs) {
+            // Load from global state
+            const allPrefs = this.context.globalState.get<{ [uri: string]: { order: string[]; visibility: { [path: string]: boolean } } }>('jsonl-gazelle.columnPreferences', {});
+
+            prefs = allPrefs[fileUri];
+
+            if (prefs) {
+                this.columnPreferencesPerFile.set(fileUri, prefs);
+            }
+        }
+
+        if (!prefs) {
+            return;
+        }
+
+        const { order, visibility } = prefs;
+
+        // Reorder columns based on saved order, but keep only columns that still exist
+        const columnMap = new Map<string, ColumnInfo>();
+
+        this.columns.forEach(col => columnMap.set(col.path, col));
+
+        const reordered: ColumnInfo[] = [];
+
+        order.forEach(path => {
+            const col = columnMap.get(path);
+
+            if (col) {
+                reordered.push(col);
+                columnMap.delete(path);
+            }
+        });
+
+        // Append any new columns that were not in saved order
+        columnMap.forEach(col => reordered.push(col));
+
+        this.columns = reordered;
+
+        // Apply visibility preferences where available
+        this.columns.forEach(col => {
+            if (visibility.hasOwnProperty(col.path)) {
+                col.visible = visibility[col.path];
+            }
+        });
     }
 
     private async handleAddColumn(
@@ -2517,6 +2605,9 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
             // Generate pretty-printed content with line mapping
             const prettyResult = this.convertJsonlToPrettyWithLineNumbers(this.rows);
 
+            // Load persisted UI preferences (view, wrap text)
+            const uiPrefs = this.context.globalState.get<{ lastView?: 'table' | 'json' | 'raw'; wrapText?: boolean }>(this.UI_PREFS_KEY, {});
+
             webviewPanel.webview.postMessage({
                 type: 'update',
                 data: {
@@ -2538,6 +2629,10 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
                         progressPercent: this.totalLines > 0 ? Math.round((this.loadedLines / this.totalLines) * 100) : 100,
                         memoryOptimized: this.memoryOptimized,
                         displayedRows: this.rows.length
+                    },
+                    uiPreferences: {
+                        lastView: uiPrefs.lastView || 'table',
+                        wrapText: uiPrefs.wrapText === true
                     }
                 }
             });
@@ -2555,6 +2650,26 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
         );
 
         return getHtmlTemplate(gazelleIconUri.toString(), gazelleAnimationUri.toString(), styles, scripts);
+    }
+
+    private async updateViewPreference(viewType: 'table' | 'json' | 'raw'): Promise<void> {
+        try {
+            const existing = this.context.globalState.get<{ lastView?: 'table' | 'json' | 'raw'; wrapText?: boolean }>(this.UI_PREFS_KEY, {});
+            existing.lastView = viewType;
+            await this.context.globalState.update(this.UI_PREFS_KEY, existing);
+        } catch (error) {
+            console.error('Error saving view preference:', error);
+        }
+    }
+
+    private async updateWrapTextPreference(enabled: boolean): Promise<void> {
+        try {
+            const existing = this.context.globalState.get<{ lastView?: 'table' | 'json' | 'raw'; wrapText?: boolean }>(this.UI_PREFS_KEY, {});
+            existing.wrapText = enabled;
+            await this.context.globalState.update(this.UI_PREFS_KEY, existing);
+        } catch (error) {
+            console.error('Error saving wrap text preference:', error);
+        }
     }
 
     
