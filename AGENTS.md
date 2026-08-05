@@ -53,7 +53,7 @@ Communication is `webview.postMessage` / `vscode.postMessage` with a `type` fiel
 
 **Webview → extension** (handled in the `onDidReceiveMessage` switch in `jsonlViewerProvider.ts`):
 
-`search`, `removeColumn`, `updateCell`, `expandColumn`, `collapseColumn`, `openUrl`, `documentChanged`, `rawContentChanged`, `rawContentSave`, `prettyContentChanged`, `prettyContentSave`, `forceSave`, `unstringifyColumn`, `deleteRow`, `insertRow`, `copyRow`, `duplicateRow`, `pasteRow`, `validateClipboard`, `reorderColumns`, `reorderRows`, `toggleColumnVisibility`, `addColumn`, `addAIColumn`, `getSettings`, `getRecentEnumValues`, `checkAPIKey`, `showAPIKeyWarning`, `saveSettings`, `resetSettings`, `generateAIRows`, `requestColumnSuggestions`, `refresh`, `requestFullUpdate`, `setFollowMode`, `setViewPreference`, `setWrapTextPreference`
+`search`, `removeColumn`, `updateCell`, `expandColumn`, `collapseColumn`, `openUrl`, `documentChanged`, `rawContentChanged`, `rawContentSave`, `prettyContentChanged`, `prettyContentSave`, `forceSave`, `unstringifyColumn`, `deleteRow`, `insertRow`, `copyRow`, `duplicateRow`, `pasteRow`, `validateClipboard`, `reorderColumns`, `reorderRows`, `toggleColumnVisibility`, `addColumn`, `addAIColumn`, `getSettings`, `getRecentEnumValues`, `checkAPIKey`, `showAPIKeyWarning`, `saveSettings`, `resetSettings`, `generateAIRows`, `requestColumnSuggestions`, `refresh`, `requestFullUpdate`, `setFollowMode`, `setViewPreference`, `setWrapTextPreference`, `setRowDetailsPreference`
 
 **Extension → webview**:
 
@@ -62,6 +62,10 @@ Communication is `webview.postMessage` / `vscode.postMessage` with a `type` fiel
 ## Editing & Save Path
 
 All writes go through `vscode.workspace.applyEdit()` with a full-document replace, wrapped in an `isUpdating` guard flag so the `onDidChangeTextDocument` handler doesn't reload the file for self-inflicted edits. Cell edits are debounced (~300 ms) via `pendingSaveTimeout`. The guard is time-boxed with `setTimeout` resets — **any new write path must set `isUpdating` the same way**, or edits will trigger spurious full reloads.
+
+## Row Details Panel
+
+The Table view sits in a `.content-area` flex row next to `#rowDetailsPanel`, a resizable side panel that renders the selected row's full JSON as a lazily-expanded tree (`createJsonNode` / `renderRowDetails` in `scripts.ts`). It is a webview-only feature — every row object is already in `currentData`, so no new extension-host data flows are involved; keys matching a `visible: false` column get a `hidden` badge, and string values holding embedded JSON expand as subtrees. Only the open/closed state crosses the boundary, via `setRowDetailsPreference` into the same `UI_PREFS_KEY` global-state blob as the view and wrap-text preferences. The panel is hidden outside the Table view (`syncRowDetailsVisibility`) and re-rendered after every `update`, since the table DOM — and therefore the selection — is rebuilt.
 
 ## Refresh & Follow Mode
 

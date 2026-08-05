@@ -34,6 +34,7 @@ Fast JSONL viewer / editor for VS Code with advanced features including Table Vi
 - **Smart Column Detection**: Maps common subpaths of each JSONL row into table columns automatically
 - **Column Expansion**: Click ▼ to expand objects/arrays into separate columns (e.g., `user.name`, `orders[0]`)
 - **Column Management**: Right-click context menu on table headers to add, remove, or toggle column visibility
+- **Row Details Panel**: Click a row to inspect its complete JSON in a resizable side panel — including properties whose columns you hid, marked with a `hidden` badge — as a collapsible tree that also unpacks strings containing embedded JSON
 - **JSONL-Aware Diff**: Diff a file against Git HEAD or another JSONL file with row alignment and field-level change highlighting — edited rows show exactly which fields changed (`old → new`) instead of a wall of raw JSON
 - **Memory Efficient**: All processing happens in-memory without creating separate files
 - **AI Features**: Generate columns and rows with AI using OpenAI, Anthropic, Google Gemini, or a local OpenAI-compatible server (Ollama, LM Studio, vLLM, ...) — model lists are fetched live from each provider
@@ -43,6 +44,7 @@ Fast JSONL viewer / editor for VS Code with advanced features including Table Vi
 1. Open any `.jsonl` or `.ndjson` file in VS Code
 2. The file will automatically open in the JSONL Gazelle viewer
 4. Table View: Click ▼ buttons in column headers or double-click expandable cells to expand objects/arrays into separate columns
+5. Row Details: Toggle the **Row Details** button in the toolbar (or right-click a row number → **View Row Details**) and click any row to inspect its full JSON, including hidden columns
 5. Pretty Print view: You can edit inline
 6. Pretty Print navigation: Use `Ctrl+Alt+↑` / `Ctrl+Alt+↓` (`Cmd+Option+↑` / `Cmd+Option+↓` on macOS) to jump between JSONL entries
 7. Raw view navigation: Use `Ctrl+Alt+↑` / `Ctrl+Alt+↓` (`Cmd+Option+↑` / `Cmd+Option+↓` on macOS) to jump to the previous/next JSONL line

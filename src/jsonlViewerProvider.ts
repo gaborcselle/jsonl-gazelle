@@ -19,6 +19,8 @@ function getNonce(): string {
 
 type ColumnPreferences = { order: string[]; visibility: { [path: string]: boolean }; updatedAt?: number };
 
+type UiPreferences = { lastView?: 'table' | 'json' | 'raw'; wrapText?: boolean; showRowDetails?: boolean };
+
 export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
     private static readonly viewType = 'jsonl-gazelle.jsonlViewer';
     private rows: JsonRow[] = [];
@@ -236,6 +238,9 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
                                 break;
                             case 'setWrapTextPreference':
                                 await this.updateWrapTextPreference(message.enabled);
+                                break;
+                            case 'setRowDetailsPreference':
+                                await this.updateRowDetailsPreference(!!message.enabled);
                                 break;
                         }
                     } catch (error) {
@@ -2815,7 +2820,7 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
             const prettyResult = this.convertJsonlToPrettyWithLineNumbers(this.rows);
 
             // Load persisted UI preferences (view, wrap text)
-            const uiPrefs = this.context.globalState.get<{ lastView?: 'table' | 'json' | 'raw'; wrapText?: boolean }>(this.UI_PREFS_KEY, {});
+            const uiPrefs = this.context.globalState.get<UiPreferences>(this.UI_PREFS_KEY, {});
 
             const unfiltered = this.filteredRows === this.rows;
 
@@ -2848,7 +2853,8 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
                     },
                     uiPreferences: {
                         lastView: uiPrefs.lastView || 'table',
-                        wrapText: uiPrefs.wrapText === true
+                        wrapText: uiPrefs.wrapText === true,
+                        showRowDetails: uiPrefs.showRowDetails === true
                     }
                 }
             });
@@ -2876,7 +2882,7 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
             return;
         }
         try {
-            const existing = this.context.globalState.get<{ lastView?: 'table' | 'json' | 'raw'; wrapText?: boolean }>(this.UI_PREFS_KEY, {});
+            const existing = this.context.globalState.get<UiPreferences>(this.UI_PREFS_KEY, {});
             existing.lastView = viewType;
             await this.context.globalState.update(this.UI_PREFS_KEY, existing);
         } catch (error) {
@@ -2886,11 +2892,21 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
 
     private async updateWrapTextPreference(enabled: boolean): Promise<void> {
         try {
-            const existing = this.context.globalState.get<{ lastView?: 'table' | 'json' | 'raw'; wrapText?: boolean }>(this.UI_PREFS_KEY, {});
+            const existing = this.context.globalState.get<UiPreferences>(this.UI_PREFS_KEY, {});
             existing.wrapText = enabled;
             await this.context.globalState.update(this.UI_PREFS_KEY, existing);
         } catch (error) {
             console.error('Error saving wrap text preference:', error);
+        }
+    }
+
+    private async updateRowDetailsPreference(enabled: boolean): Promise<void> {
+        try {
+            const existing = this.context.globalState.get<UiPreferences>(this.UI_PREFS_KEY, {});
+            existing.showRowDetails = enabled;
+            await this.context.globalState.update(this.UI_PREFS_KEY, existing);
+        } catch (error) {
+            console.error('Error saving row details preference:', error);
         }
     }
 

@@ -21,7 +21,8 @@ export const scripts = `
             errorCount: 0,
             uiPreferences: {
                 lastView: 'table',
-                wrapText: false
+                wrapText: false,
+                showRowDetails: false
             }
         };
         
@@ -40,6 +41,8 @@ export const scripts = `
         };
         let savedColumnWidths = {}; // Store column widths by column path
         let selectedRowActualIndex = null; // Actual file index of the selected row (survives re-renders)
+        let rowDetailsOpen = false; // Row Details side panel visibility (persisted in UI preferences)
+        let rowDetailsWidth = 380; // Side panel width in px (session-local)
         let followMode = false; // Auto-reload and scroll to bottom when the file grows (tail -f)
         let deferredUpdatePending = false; // An update arrived while a cell edit was in progress
         let lastRenderedColumnsKey = null; // Visible-columns signature of the last built table header
@@ -715,6 +718,7 @@ export const scripts = `
             if (e.key === 'Escape' && selectedRowActualIndex !== null && !document.querySelector('td.editing')) {
                 selectedRowActualIndex = null;
                 document.querySelectorAll('#tableBody tr.selected').forEach(r => r.classList.remove('selected'));
+                renderRowDetails();
             }
         }, true);
 
@@ -2075,6 +2079,14 @@ export const scripts = `
             }
 
             switch (action) {
+                case 'viewRowDetails':
+                    {
+                        const actualRowIndex = currentData.rowIndices && currentData.rowIndices[contextMenuRow] !== undefined
+                            ? currentData.rowIndices[contextMenuRow]
+                            : contextMenuRow;
+                        showRowDetailsFor(actualRowIndex);
+                    }
+                    break;
                 case 'copyRow':
                     {
                         const actualRowIndex = currentData.rowIndices && currentData.rowIndices[contextMenuRow] !== undefined
@@ -2247,9 +2259,15 @@ export const scripts = `
                 rebuildTable();
             }
 
-            // Restore wrap text once, now that the table header exists
+            // Restore wrap text and the row details panel once, now that the
+            // table header exists
             if (data.uiPreferences && !uiPreferencesApplied) {
                 uiPreferencesApplied = true;
+
+                const desiredRowDetails = data.uiPreferences.showRowDetails === true;
+                if (desiredRowDetails !== rowDetailsOpen) {
+                    setRowDetailsOpen(desiredRowDetails, false);
+                }
 
                 const wrapCheckbox = document.getElementById('wrapTextCheckbox');
                 const desiredWrap = !!data.uiPreferences.wrapText;
@@ -2289,6 +2307,9 @@ export const scripts = `
             }
 
             attachScrollListener();
+
+            // Row contents may have changed (cell edit, reload) - refresh the panel
+            renderRowDetails();
 
             if (currentView === 'table') {
                 requestAnimationFrame(ensureTableViewportFilled);
@@ -2616,6 +2637,333 @@ export const scripts = `
             });
         }
 
+        // ---------------------------------------------------------------
+        // Row Details side panel
+        //
+        // Shows the full JSON of the selected row as a collapsible tree, so
+        // properties whose columns are hidden (or never shown at all) can
+        // still be inspected. Purely webview-side: every row object is
+        // already in currentData.
+        // ---------------------------------------------------------------
+
+        function getRowByActualIndex(actualIndex) {
+            const allRows = currentData.allRows || currentData.rows || [];
+            return allRows[actualIndex];
+        }
+
+        function getHiddenColumnPaths() {
+            const hidden = new Set();
+            (currentData.columns || []).forEach(column => {
+                if (column && column.visible === false && column.path) {
+                    hidden.add(column.path);
+                }
+            });
+            return hidden;
+        }
+
+        function jsonValueSummary(value) {
+            if (Array.isArray(value)) {
+                return value.length === 1 ? '[1 item]' : '[' + value.length + ' items]';
+            }
+            const keyCount = Object.keys(value).length;
+            return keyCount === 1 ? '{1 key}' : '{' + keyCount + ' keys}';
+        }
+
+        function createHiddenColumnBadge() {
+            const badge = document.createElement('span');
+            badge.className = 'json-hidden-badge';
+            badge.textContent = 'hidden';
+            badge.title = 'This column is hidden in the table view';
+            return badge;
+        }
+
+        // Builds one tree node. Children are created lazily on first expand so
+        // that deep or wide rows stay cheap to render.
+        function createJsonNode(key, value, path, depth, hiddenPaths) {
+            const node = document.createElement('div');
+            node.className = 'json-node';
+
+            const line = document.createElement('div');
+            line.className = 'json-node-line';
+
+            const toggle = document.createElement('span');
+            toggle.className = 'json-toggle';
+            toggle.textContent = '';
+
+            const content = document.createElement('span');
+            content.className = 'json-node-content';
+
+            if (key !== null) {
+                const keySpan = document.createElement('span');
+                keySpan.className = 'json-key';
+                keySpan.textContent = key;
+                if (hiddenPaths.has(path)) {
+                    keySpan.classList.add('hidden-column');
+                }
+                content.appendChild(keySpan);
+                content.appendChild(document.createTextNode(': '));
+            }
+
+            // Strings holding embedded JSON are common in JSONL files - offer
+            // them as an expandable subtree instead of one unreadable blob
+            let expandableValue = null;
+            let stringifiedJson = false;
+            if (value !== null && typeof value === 'object') {
+                expandableValue = value;
+            } else if (typeof value === 'string' && isStringifiedJson(value)) {
+                try {
+                    const parsed = JSON.parse(value);
+                    if (parsed !== null && typeof parsed === 'object') {
+                        expandableValue = parsed;
+                        stringifiedJson = true;
+                    }
+                } catch (e) {
+                    // Not actually JSON - fall through to the plain string
+                }
+            }
+
+            line.appendChild(toggle);
+            line.appendChild(content);
+            node.appendChild(line);
+
+            if (expandableValue === null) {
+                const valueSpan = document.createElement('span');
+                const valueType = value === null ? 'null' : typeof value;
+                valueSpan.className = 'json-' + valueType;
+                valueSpan.textContent = value === undefined ? 'undefined' : JSON.stringify(value);
+                content.appendChild(valueSpan);
+                if (hiddenPaths.has(path)) {
+                    content.appendChild(createHiddenColumnBadge());
+                }
+                return node;
+            }
+
+            const summary = document.createElement('span');
+            summary.className = 'json-summary';
+            summary.textContent = jsonValueSummary(expandableValue) + (stringifiedJson ? ' (JSON string)' : '');
+            content.appendChild(summary);
+            if (hiddenPaths.has(path)) {
+                content.appendChild(createHiddenColumnBadge());
+            }
+
+            const childCount = Array.isArray(expandableValue)
+                ? expandableValue.length
+                : Object.keys(expandableValue).length;
+
+            // Nothing to drill into - keep the summary but skip the toggle
+            if (childCount === 0) {
+                return node;
+            }
+
+            const children = document.createElement('div');
+            children.className = 'json-children';
+            children.style.display = 'none';
+            node.appendChild(children);
+
+            let childrenBuilt = false;
+            function buildChildren() {
+                if (childrenBuilt) return;
+                childrenBuilt = true;
+                const entries = Array.isArray(expandableValue)
+                    ? expandableValue.map((item, index) => [String(index), item])
+                    : Object.keys(expandableValue).map(childKey => [childKey, expandableValue[childKey]]);
+                entries.forEach(entry => {
+                    // Stringified JSON is not addressable by column path, so its
+                    // children never carry one
+                    const childPath = stringifiedJson ? '' : (path ? path + '.' + entry[0] : entry[0]);
+                    children.appendChild(createJsonNode(entry[0], entry[1], childPath, depth + 1, hiddenPaths));
+                });
+            }
+
+            function setExpanded(expanded) {
+                if (expanded) buildChildren();
+                children.style.display = expanded ? 'block' : 'none';
+                toggle.textContent = expanded ? '▾' : '▸';
+                node.dataset.expanded = expanded ? 'true' : 'false';
+            }
+
+            node.setExpandedState = setExpanded;
+            line.classList.add('clickable');
+            line.addEventListener('click', () => {
+                // Don't collapse the node the user just selected text in
+                const selection = window.getSelection();
+                if (selection && selection.toString()) return;
+                setExpanded(node.dataset.expanded !== 'true');
+            });
+
+            setExpanded(depth === 0 && !stringifiedJson && childCount <= 50);
+
+            return node;
+        }
+
+        function setAllJsonNodesExpanded(container, expanded) {
+            Array.from(container.children).forEach(child => {
+                if (!child.classList || !child.classList.contains('json-node')) return;
+                if (typeof child.setExpandedState === 'function') {
+                    child.setExpandedState(expanded);
+                }
+                const childContainer = child.querySelector('.json-children');
+                if (childContainer && expanded) {
+                    setAllJsonNodesExpanded(childContainer, expanded);
+                }
+            });
+        }
+
+        function showRowDetailsMessage(body, text) {
+            const message = document.createElement('div');
+            message.className = 'row-details-empty';
+            message.textContent = text;
+            body.appendChild(message);
+        }
+
+        function renderRowDetails() {
+            if (!rowDetailsOpen) return;
+
+            const body = document.getElementById('rowDetailsBody');
+            const title = document.getElementById('rowDetailsTitle');
+            if (!body || !title) return;
+
+            body.innerHTML = '';
+
+            if (selectedRowActualIndex === null) {
+                title.textContent = 'Row Details';
+                showRowDetailsMessage(body, 'Select a row to inspect all of its properties, including the ones whose columns are hidden.');
+                return;
+            }
+
+            title.textContent = 'Row ' + (selectedRowActualIndex + 1);
+
+            const row = getRowByActualIndex(selectedRowActualIndex);
+            if (row === undefined) {
+                showRowDetailsMessage(body, 'This row is not loaded (memory-optimized mode).');
+                return;
+            }
+
+            const hiddenPaths = getHiddenColumnPaths();
+
+            if (row === null || typeof row !== 'object' || Array.isArray(row)) {
+                body.appendChild(createJsonNode(null, row, '', 0, hiddenPaths));
+                return;
+            }
+
+            const keys = Object.keys(row);
+            if (keys.length === 0) {
+                showRowDetailsMessage(body, 'This row is an empty object.');
+                return;
+            }
+
+            keys.forEach(key => {
+                body.appendChild(createJsonNode(key, row[key], key, 0, hiddenPaths));
+            });
+        }
+
+        // The panel only makes sense next to the table; the pretty print and
+        // raw views already show whole records
+        function syncRowDetailsVisibility() {
+            const panel = document.getElementById('rowDetailsPanel');
+            const button = document.getElementById('rowDetailsBtn');
+            const visible = rowDetailsOpen && currentView === 'table';
+
+            if (panel) {
+                panel.style.display = visible ? 'flex' : 'none';
+                panel.style.width = rowDetailsWidth + 'px';
+            }
+            if (button) {
+                button.classList.toggle('toggled', rowDetailsOpen);
+            }
+            if (visible) {
+                renderRowDetails();
+            }
+        }
+
+        function setRowDetailsOpen(open, persist) {
+            rowDetailsOpen = open;
+            syncRowDetailsVisibility();
+
+            if (persist !== false) {
+                vscode.postMessage({
+                    type: 'setRowDetailsPreference',
+                    enabled: open
+                });
+            }
+        }
+
+        // Select a row from outside the table (e.g. the row context menu) and
+        // show it in the panel
+        function showRowDetailsFor(actualRowIndex) {
+            selectedRowActualIndex = actualRowIndex;
+            document.querySelectorAll('#tableBody tr.selected').forEach(r => r.classList.remove('selected'));
+            const tr = document.querySelector('#tableBody tr[data-actual-index="' + actualRowIndex + '"]');
+            if (tr) tr.classList.add('selected');
+
+            if (rowDetailsOpen) {
+                renderRowDetails();
+            } else {
+                setRowDetailsOpen(true);
+            }
+        }
+
+        document.getElementById('rowDetailsBtn').addEventListener('click', () => {
+            setRowDetailsOpen(!rowDetailsOpen);
+        });
+
+        document.getElementById('rowDetailsCloseBtn').addEventListener('click', () => {
+            setRowDetailsOpen(false);
+        });
+
+        document.getElementById('rowDetailsCopyBtn').addEventListener('click', () => {
+            if (selectedRowActualIndex === null) return;
+            vscode.postMessage({
+                type: 'copyRow',
+                rowIndex: selectedRowActualIndex
+            });
+        });
+
+        document.getElementById('rowDetailsExpandBtn').addEventListener('click', () => {
+            const body = document.getElementById('rowDetailsBody');
+            if (body) setAllJsonNodesExpanded(body, true);
+        });
+
+        document.getElementById('rowDetailsCollapseBtn').addEventListener('click', () => {
+            const body = document.getElementById('rowDetailsBody');
+            if (body) setAllJsonNodesExpanded(body, false);
+        });
+
+        (function initRowDetailsResizer() {
+            const resizer = document.getElementById('rowDetailsResizer');
+            if (!resizer) return;
+
+            let startX = 0;
+            let startWidth = 0;
+            let dragging = false;
+
+            function onMouseMove(e) {
+                if (!dragging) return;
+                const maxWidth = Math.max(240, window.innerWidth - 200);
+                rowDetailsWidth = Math.min(maxWidth, Math.max(220, startWidth + (startX - e.clientX)));
+                const panel = document.getElementById('rowDetailsPanel');
+                if (panel) panel.style.width = rowDetailsWidth + 'px';
+            }
+
+            function onMouseUp() {
+                dragging = false;
+                resizer.classList.remove('resizing');
+                document.removeEventListener('mousemove', onMouseMove);
+                document.removeEventListener('mouseup', onMouseUp);
+            }
+
+            resizer.addEventListener('mousedown', (e) => {
+                e.preventDefault();
+                const panel = document.getElementById('rowDetailsPanel');
+                dragging = true;
+                startX = e.clientX;
+                startWidth = panel ? panel.getBoundingClientRect().width : rowDetailsWidth;
+                resizer.classList.add('resizing');
+                document.addEventListener('mousemove', onMouseMove);
+                document.addEventListener('mouseup', onMouseUp);
+            });
+        })();
+
         function createTableRow(row, rowIndex) {
             const tr = document.createElement('tr');
 
@@ -2639,6 +2987,7 @@ export const scripts = `
                 selectedRowActualIndex = actualRowIndex;
                 document.querySelectorAll('#tableBody tr.selected').forEach(r => r.classList.remove('selected'));
                 tr.classList.add('selected');
+                renderRowDetails();
             });
 
             // Add row number cell
@@ -3618,8 +3967,12 @@ export const scripts = `
             const findReplaceBtn = document.getElementById('findReplaceBtn');
             const settingsBtn = document.getElementById('settingsBtn');
             const followBtn = document.getElementById('followBtn');
+            const rowDetailsBtn = document.getElementById('rowDetailsBtn');
             // Follow mode auto-scrolls the table view only; refresh works everywhere
             followBtn.style.display = viewType === 'table' ? 'flex' : 'none';
+            // Row details accompany the table view only
+            rowDetailsBtn.style.display = viewType === 'table' ? 'flex' : 'none';
+            syncRowDetailsVisibility();
 
             // Show selected view container
             switch (viewType) {

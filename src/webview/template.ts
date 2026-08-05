@@ -41,6 +41,10 @@ ${styles}
             <button class="column-manager-btn" id="findReplaceBtn" data-tooltip="Find and replace in cells (Cmd+F / Ctrl+F)">
                 <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"></circle><path d="m21 21-4.35-4.35"></path></svg>
             </button>
+            <button class="column-manager-btn" id="rowDetailsBtn" data-tooltip="Inspect the selected row as JSON, including hidden columns">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect><line x1="15" y1="3" x2="15" y2="21"></line></svg>
+                Row Details
+            </button>
             <button class="column-manager-btn" id="columnManagerBtn" data-tooltip="Show, hide, and reorder columns">
                 <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3h7a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-7m0-18H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h7m0-18v18"></path></svg>
                 Columns
@@ -93,6 +97,7 @@ ${styles}
             <div class="regex-error" id="regexError" style="display: none;"></div>
         </div>
 
+        <div class="content-area">
         <div class="table-container" id="tableContainer">
             <div class="indexing" id="indexingDiv">
                 <img src="${gazelleAnimationUri}" style="width: 32px; height: 32px;" alt="Indexing...">
@@ -119,8 +124,32 @@ ${styles}
                 </div>
             </div>
         </div>
+
+        <!-- Row Details Side Panel -->
+        <aside class="row-details-panel" id="rowDetailsPanel" style="display: none;">
+            <div class="row-details-resizer" id="rowDetailsResizer" title="Drag to resize"></div>
+            <div class="row-details-inner">
+                <div class="row-details-header">
+                    <span class="row-details-title" id="rowDetailsTitle">Row Details</span>
+                    <button class="row-details-icon-btn" id="rowDetailsCopyBtn" title="Copy row JSON to clipboard">
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
+                    </button>
+                    <button class="row-details-icon-btn" id="rowDetailsExpandBtn" title="Expand all">
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="7 13 12 18 17 13"></polyline><polyline points="7 6 12 11 17 6"></polyline></svg>
+                    </button>
+                    <button class="row-details-icon-btn" id="rowDetailsCollapseBtn" title="Collapse all">
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="17 11 12 6 7 11"></polyline><polyline points="17 18 12 13 7 18"></polyline></svg>
+                    </button>
+                    <button class="row-details-icon-btn" id="rowDetailsCloseBtn" title="Close panel">
+                        <svg width="16" height="16" viewBox="0 0 16 16"><path fill="currentColor" d="M8 8.7L2.9 13.8 2.2 13.1 7.3 8 2.2 2.9 2.9 2.2 8 7.3 13.1 2.2 13.8 2.9 8.7 8 13.8 13.1 13.1 13.8z"/></svg>
+                    </button>
+                </div>
+                <div class="row-details-body" id="rowDetailsBody"></div>
+            </div>
+        </aside>
+        </div>
     </div>
-    
+
     <div class="context-menu" id="contextMenu">
         <div class="context-menu-item" data-action="hideColumn">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"></path><line x1="1" y1="1" x2="23" y2="23"></line></svg>
@@ -156,6 +185,11 @@ ${styles}
     </div>
 
     <div class="row-context-menu" id="rowContextMenu">
+        <div class="row-context-menu-item" data-action="viewRowDetails">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect><line x1="15" y1="3" x2="15" y2="21"></line></svg>
+            View Row Details
+        </div>
+        <div class="row-context-menu-separator"></div>
         <div class="row-context-menu-item" data-action="copyRow">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
             Copy
