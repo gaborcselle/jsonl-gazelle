@@ -9,13 +9,14 @@ export default [
   {
     files: ["**/*.ts"],
     languageOptions: {
-      globals: globals.node,
+      globals: { ...globals.node, NodeJS: "readonly" },
       ecmaVersion: 2020,
       sourceType: "module",
       parser: tseslint.parser,
       parserOptions: {
         ecmaVersion: 2020,
         sourceType: "module",
+        project: true,
       },
     },
     plugins: {
@@ -28,7 +29,18 @@ export default [
       "@typescript-eslint/no-non-null-assertion": "off",
       "@typescript-eslint/no-unused-vars": [
         "warn",
-        { argsIgnorePattern: "^_" },
+        {
+          argsIgnorePattern: "^_",
+          varsIgnorePattern: "^_",
+          caughtErrorsIgnorePattern: "^_",
+        },
+      ],
+      "no-unused-vars": [
+        "warn",
+        {
+          argsIgnorePattern: "^_",
+          varsIgnorePattern: "^_",
+        },
       ],
       "no-case-declarations": "off",
       "no-prototype-builtins": "warn",
