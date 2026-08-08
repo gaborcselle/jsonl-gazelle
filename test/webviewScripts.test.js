@@ -1,5 +1,6 @@
 const assert = require('assert');
 const { scripts } = require('../out/webview/scripts');
+const { styles } = require('../out/webview/styles');
 const { getHtmlTemplate } = require('../out/webview/template');
 
 // The webview JS ships as a template-literal string that tsc never parses,
@@ -8,7 +9,7 @@ const { getHtmlTemplate } = require('../out/webview/template');
 assert.doesNotThrow(() => new Function(scripts), 'webview scripts string must be valid JavaScript');
 
 // Sanity: key functions of the table pipeline are present
-['updateTable', 'buildTableHeader', 'renderTableChunk', 'createTableRow', 'rebuildTable', 'flushDeferredUpdate', 'appendRows', 'restoreTableScroll', 'updateLoadingBanner', 'renderFileInfo', 'toggleFileInfo', 'setDisplaySort', 'watchSortJump', 'checkSortJump', 'hideSortJumpNotice', 'jumpToDisplayRow'].forEach(name => {
+['updateTable', 'buildTableHeader', 'renderTableChunk', 'createTableRow', 'rebuildTable', 'flushDeferredUpdate', 'appendRows', 'restoreTableScroll', 'updateLoadingBanner', 'renderFileInfo', 'toggleFileInfo', 'setDisplaySort', 'watchSortJump', 'checkSortJump', 'hideSortJumpNotice', 'jumpToDisplayRow', 'moveGridCursor', 'moveCellCursor', 'setCellCursor', 'clearCellCursor', 'getCursorPosition', 'getCursorCell', 'editCursorCell', 'isGridNavigationActive'].forEach(name => {
     assert.ok(scripts.includes('function ' + name), 'expected function ' + name + ' in webview scripts');
 });
 
@@ -52,5 +53,14 @@ assert.ok(sortSubmenu.includes('id="sortTypeHint"'), 'the sort type hint must li
 });
 // Editing the sorted column must arm the watch that produces that notice
 assert.ok(/watchSortJump\(rowIndex, columnPath\)/.test(scripts), 'cell edits must arm the sort-jump watch');
+
+// Spreadsheet keyboard navigation: every key the grid claims must be mapped,
+// and the cursor needs a style or it would move invisibly
+['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Home', 'End', 'PageUp', 'PageDown'].forEach(key => {
+    assert.ok(new RegExp(key + ':').test(scripts), 'expected a grid navigation mapping for ' + key);
+});
+assert.ok(scripts.includes("e.key === 'Tab'"), 'Tab must be handled by the grid');
+assert.ok(/e\.key === 'Enter' \|\| e\.key === 'F2'/.test(scripts), 'Enter (and F2) must start an edit');
+assert.ok(styles.includes('td.cell-cursor'), 'the cell cursor needs a style');
 
 console.log('webviewScripts tests passed');

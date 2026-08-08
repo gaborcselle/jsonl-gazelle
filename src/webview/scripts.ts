@@ -52,6 +52,17 @@ export const scripts = `
         };
         let savedColumnWidths = {}; // Store column widths by column path
         let selectedRowActualIndex = null; // Actual file index of the selected row (survives re-renders)
+        // Spreadsheet-style cell cursor. Held as a file row index + column path
+        // rather than screen coordinates, so it survives the full table rebuild
+        // that every update does, and follows its row through a display sort.
+        let cursorActualRowIndex = null;
+        let cursorColumnPath = null;
+        // The elements currently carrying the cursor and row highlights. Kept so
+        // the highlights can be moved without scanning a fully rendered table;
+        // re-pointed by createTableRow as rows are (re-)rendered.
+        let cursorCellElement = null;
+        let selectedRowElement = null;
+        const DEFAULT_PAGE_ROWS = 20; // Page Up/Down fallback when the table height is unknown
         let followMode = false; // Auto-reload and scroll to bottom when the file grows (tail -f)
         let deferredUpdatePending = false; // An update arrived while a cell edit was in progress
         let lastRenderedColumnsKey = null; // Visible-columns signature of the last built table header
@@ -726,11 +737,50 @@ export const scripts = `
                 vscode.postMessage({ type: 'refresh' });
                 return;
             }
-            if (e.key === 'Escape' && selectedRowActualIndex !== null && !document.querySelector('td.editing')) {
-                selectedRowActualIndex = null;
-                document.querySelectorAll('#tableBody tr.selected').forEach(r => r.classList.remove('selected'));
+            if (e.key === 'Escape' && !document.querySelector('td.editing') &&
+                (selectedRowActualIndex !== null || cursorActualRowIndex !== null)) {
+                clearCellCursor();
+                clearRowSelection();
             }
         }, true);
+
+        // Spreadsheet keyboard navigation: arrow keys move a cell cursor, Enter
+        // (or F2) edits the cell under it, Tab advances to the next cell.
+        const GRID_NAVIGATION_KEYS = {
+            ArrowUp: 'up',
+            ArrowDown: 'down',
+            ArrowLeft: 'left',
+            ArrowRight: 'right',
+            Home: 'rowStart',
+            End: 'rowEnd',
+            PageUp: 'pageUp',
+            PageDown: 'pageDown'
+        };
+
+        document.addEventListener('keydown', (e) => {
+            // Modified arrows are VS Code's (line moves, entry navigation)
+            if (e.ctrlKey || e.metaKey || e.altKey) return;
+            if (!isGridNavigationActive()) return;
+
+            const move = GRID_NAVIGATION_KEYS[e.key];
+            if (move) {
+                e.preventDefault();
+                moveCellCursor(move);
+                return;
+            }
+
+            // Tab and Enter have jobs outside the grid - only take them over
+            // once the cursor is actually on a cell
+            if (!getCursorPosition()) return;
+
+            if (e.key === 'Tab') {
+                e.preventDefault();
+                moveCellCursor(e.shiftKey ? 'previous' : 'next');
+            } else if (e.key === 'Enter' || e.key === 'F2') {
+                e.preventDefault();
+                editCursorCell();
+            }
+        });
 
         // Event listeners
         document.getElementById('logo').addEventListener('click', () => {
@@ -3012,14 +3062,11 @@ export const scripts = `
             // Re-apply selection after re-renders (the tbody is rebuilt on every update)
             if (selectedRowActualIndex !== null && actualRowIndex === selectedRowActualIndex) {
                 tr.classList.add('selected');
+                selectedRowElement = tr;
             }
 
             // Click to select the row so it stays visible while scrolling horizontally
-            tr.addEventListener('click', () => {
-                selectedRowActualIndex = actualRowIndex;
-                document.querySelectorAll('#tableBody tr.selected').forEach(r => r.classList.remove('selected'));
-                tr.classList.add('selected');
-            });
+            tr.addEventListener('click', () => selectRow(actualRowIndex));
 
             // Add row number cell
             const rowNumCell = document.createElement('td');
@@ -3058,6 +3105,19 @@ export const scripts = `
                 if (column.isExpanded) {
                     td.classList.add('expanded-column');
                 }
+
+                // Re-apply the cell cursor: the tbody is rebuilt on every update
+                if (cursorActualRowIndex !== null &&
+                    actualRowIndex === cursorActualRowIndex &&
+                    column.path === cursorColumnPath) {
+                    td.classList.add('cell-cursor');
+                    cursorCellElement = td;
+                }
+
+                // Clicking a cell puts the keyboard cursor on it. Registered
+                // first so expandable cells, whose own handler stops the event,
+                // still move the cursor.
+                td.addEventListener('click', () => setCellCursor(actualRowIndex, column.path, false));
 
                 if (typeof value === 'object' && value !== null && !column.isExpanded) {
                     td.classList.add('expandable-cell');
@@ -3266,26 +3326,304 @@ export const scripts = `
             if (!tbody || position < 0) return;
 
             // The table body renders lazily in chunks - render up to the target
-            let guard = 0;
-            while (tableRenderState.renderedRows <= position &&
-                   tableRenderState.renderedRows < tableRenderState.totalRows &&
-                   guard++ < 10000) {
-                renderTableChunk();
-            }
+            ensureRowRendered(position);
 
             const tr = tbody.children[position];
             if (!tr) return;
 
             tr.scrollIntoView({ block: 'center' });
 
-            document.querySelectorAll('#tableBody tr.selected').forEach(row => row.classList.remove('selected'));
-            tr.classList.add('selected');
-            selectedRowActualIndex = parseInt(tr.dataset.actualIndex, 10);
+            selectRow(parseInt(tr.dataset.actualIndex, 10));
 
             // Restart the flash even if the row still carries the class
             tr.classList.remove('row-flash');
             void tr.offsetWidth;
             tr.classList.add('row-flash');
+        }
+
+        // --- shared:grid-navigation (keep in sync with src/jsonl/gridNavigation.ts) ---
+        function moveGridCursor(cursor, move, rowCount, columnCount, pageSize) {
+            if (!(rowCount > 0) || !(columnCount > 0)) {
+                return null;
+            }
+
+            const lastRow = rowCount - 1;
+            const lastColumn = columnCount - 1;
+            const page = pageSize && pageSize > 0 ? Math.floor(pageSize) : 1;
+
+            if (!cursor) {
+                return { row: 0, column: 0 };
+            }
+
+            // Rows can be filtered away and columns hidden between two keystrokes, so a
+            // stored cursor is clamped back into the grid before it is moved
+            let row = clampGridIndex(cursor.row, lastRow);
+            let column = clampGridIndex(cursor.column, lastColumn);
+
+            switch (move) {
+                case 'up':
+                    row = Math.max(0, row - 1);
+                    break;
+                case 'down':
+                    row = Math.min(lastRow, row + 1);
+                    break;
+                case 'left':
+                    column = Math.max(0, column - 1);
+                    break;
+                case 'right':
+                    column = Math.min(lastColumn, column + 1);
+                    break;
+                case 'rowStart':
+                    column = 0;
+                    break;
+                case 'rowEnd':
+                    column = lastColumn;
+                    break;
+                case 'pageUp':
+                    row = Math.max(0, row - page);
+                    break;
+                case 'pageDown':
+                    row = Math.min(lastRow, row + page);
+                    break;
+                case 'next':
+                    if (column < lastColumn) {
+                        column = column + 1;
+                    } else if (row < lastRow) {
+                        row = row + 1;
+                        column = 0;
+                    }
+                    break;
+                case 'previous':
+                    if (column > 0) {
+                        column = column - 1;
+                    } else if (row > 0) {
+                        row = row - 1;
+                        column = lastColumn;
+                    }
+                    break;
+                default:
+                    break;
+            }
+
+            return { row: row, column: column };
+        }
+
+        function clampGridIndex(value, max) {
+            if (typeof value !== 'number' || !isFinite(value)) {
+                return 0;
+            }
+            return Math.min(Math.max(0, Math.floor(value)), max);
+        }
+        // --- end shared:grid-navigation ---
+
+        function getVisibleColumns() {
+            return (currentData.columns || []).filter(col => col.visible);
+        }
+
+        // The cell cursor in display coordinates, or null when it is not on
+        // screen - its row may be filtered out or its column hidden
+        function getCursorPosition() {
+            if (cursorActualRowIndex === null || cursorColumnPath === null) return null;
+            const row = (currentData.rowIndices || []).indexOf(cursorActualRowIndex);
+            if (row === -1) return null;
+            const column = getVisibleColumns().findIndex(col => col.path === cursorColumnPath);
+            if (column === -1) return null;
+            return { row: row, column: column };
+        }
+
+        // The row element for a file row index, or null when that row is
+        // filtered out or has not been rendered yet (rendering is chunked)
+        function getRenderedRow(actualRowIndex) {
+            const position = (currentData.rowIndices || []).indexOf(actualRowIndex);
+            if (position === -1) return null;
+            const tbody = document.getElementById('tableBody');
+            if (!tbody || !tbody.children) return null;
+            return tbody.children[position] || null;
+        }
+
+        // The <td> the cursor sits on, or null when it is off screen
+        function getCursorCell() {
+            const position = getCursorPosition();
+            if (!position) return null;
+            const tr = getRenderedRow(cursorActualRowIndex);
+            if (!tr || !tr.children) return null;
+            // Offset by one: the row-number cell comes before the data cells
+            return tr.children[position.column + 1] || null;
+        }
+
+        // Highlight the row the way a click does, keyboard or mouse driven.
+        // Like the cell cursor, the highlighted row is remembered rather than
+        // searched for, so this stays cheap on a fully rendered large file.
+        function selectRow(actualRowIndex) {
+            selectedRowActualIndex = actualRowIndex;
+            if (selectedRowElement && selectedRowElement.classList) {
+                selectedRowElement.classList.remove('selected');
+            }
+            selectedRowElement = getRenderedRow(actualRowIndex);
+            if (selectedRowElement && selectedRowElement.classList) {
+                selectedRowElement.classList.add('selected');
+            }
+        }
+
+        function clearRowSelection() {
+            selectedRowActualIndex = null;
+            if (selectedRowElement && selectedRowElement.classList) {
+                selectedRowElement.classList.remove('selected');
+            }
+            selectedRowElement = null;
+        }
+
+        // Repaint the cursor on the live DOM. The class is also applied during
+        // render (see createTableRow), which is what carries it across rebuilds.
+        // The previously highlighted cell is remembered rather than searched
+        // for: with a large file the rendered table runs to thousands of cells,
+        // and this runs on every keystroke.
+        function applyCursorHighlight(scrollIntoView) {
+            if (cursorCellElement && cursorCellElement.classList) {
+                cursorCellElement.classList.remove('cell-cursor');
+            }
+            cursorCellElement = getCursorCell();
+            if (!cursorCellElement) return;
+            cursorCellElement.classList.add('cell-cursor');
+            if (scrollIntoView) {
+                scrollCellIntoView(cursorCellElement);
+            }
+        }
+
+        // Scroll the cursor cell just far enough to be fully visible. Done by
+        // hand rather than with scrollIntoView because the header row and the
+        // row-number column are sticky: they float over the top and left of the
+        // scroll area, and scrollIntoView happily parks the cursor underneath
+        function scrollCellIntoView(td) {
+            const container = document.getElementById('tableContainer');
+            if (!container || !container.getBoundingClientRect || !td.getBoundingClientRect) return;
+
+            const cell = td.getBoundingClientRect();
+            const view = container.getBoundingClientRect();
+
+            const header = document.getElementById('tableHead');
+            const headerHeight = header && header.getBoundingClientRect
+                ? header.getBoundingClientRect().height
+                : 0;
+            const tr = td.closest ? td.closest('tr') : null;
+            const rowNumberCell = tr && tr.children ? tr.children[0] : null;
+            const rowNumberWidth = rowNumberCell && rowNumberCell.getBoundingClientRect
+                ? rowNumberCell.getBoundingClientRect().width
+                : 0;
+
+            const top = view.top + headerHeight;
+            const left = view.left + rowNumberWidth;
+
+            if (cell.top < top) {
+                container.scrollTop -= top - cell.top;
+            } else if (cell.bottom > view.bottom) {
+                container.scrollTop += cell.bottom - view.bottom;
+            }
+
+            if (cell.left < left) {
+                container.scrollLeft -= left - cell.left;
+            } else if (cell.right > view.right) {
+                container.scrollLeft += cell.right - view.right;
+            }
+        }
+
+        function setCellCursor(actualRowIndex, columnPath, scrollIntoView) {
+            if (actualRowIndex === undefined || actualRowIndex === null || !columnPath) return;
+            cursorActualRowIndex = actualRowIndex;
+            cursorColumnPath = columnPath;
+            // The cursor's row is the selected row: one highlight, one story
+            selectRow(actualRowIndex);
+            applyCursorHighlight(scrollIntoView);
+        }
+
+        function clearCellCursor() {
+            cursorActualRowIndex = null;
+            cursorColumnPath = null;
+            applyCursorHighlight(false);
+        }
+
+        // Display coordinates -> stored cursor
+        function setCursorPosition(position, scrollIntoView) {
+            if (!position) return;
+            const actualRowIndex = (currentData.rowIndices || [])[position.row];
+            const column = getVisibleColumns()[position.column];
+            if (actualRowIndex === undefined || !column) return;
+            setCellCursor(actualRowIndex, column.path, scrollIntoView);
+        }
+
+        // Render enough chunks for a display position to have a row element
+        function ensureRowRendered(position) {
+            let guard = 0;
+            while (tableRenderState.renderedRows <= position &&
+                   tableRenderState.renderedRows < tableRenderState.totalRows &&
+                   guard++ < 10000) {
+                renderTableChunk();
+            }
+        }
+
+        // How far Page Up/Down jumps: one screenful of rows, less one for overlap
+        function getTablePageSize() {
+            const container = document.getElementById('tableContainer');
+            const tbody = document.getElementById('tableBody');
+            const firstRow = tbody && tbody.children ? tbody.children[0] : null;
+            const height = container && container.clientHeight ? container.clientHeight : 0;
+            const rowHeight = firstRow && firstRow.getBoundingClientRect
+                ? firstRow.getBoundingClientRect().height
+                : 0;
+            if (!height || !rowHeight) return DEFAULT_PAGE_ROWS;
+            return Math.max(1, Math.floor(height / rowHeight) - 1);
+        }
+
+        // Move the cell cursor one step and keep it on screen
+        function moveCellCursor(move) {
+            if (currentView !== 'table') return null;
+            const rowCount = (currentData.rows || []).length;
+            const columnCount = getVisibleColumns().length;
+            if (rowCount === 0 || columnCount === 0) return null;
+
+            const current = getCursorPosition();
+            let next;
+            if (current) {
+                next = moveGridCursor(current, move, rowCount, columnCount, getTablePageSize());
+            } else {
+                // Entering the grid: land on the selected row if there is one,
+                // else the first cell - the first keystroke doesn't also move
+                const selectedRow = selectedRowActualIndex !== null
+                    ? (currentData.rowIndices || []).indexOf(selectedRowActualIndex)
+                    : -1;
+                next = { row: selectedRow === -1 ? 0 : selectedRow, column: 0 };
+            }
+            if (!next) return null;
+
+            ensureRowRendered(next.row);
+            setCursorPosition(next, true);
+            return next;
+        }
+
+        // Enter/F2 on the cursor cell. Objects and arrays have no inline editor,
+        // so there the equivalent action is the one double-click does: expand
+        function editCursorCell() {
+            const td = getCursorCell();
+            if (!td || !td.classList || td.classList.contains('editing')) return;
+            if (td.classList.contains('expandable-cell')) {
+                vscode.postMessage({ type: 'expandColumn', columnPath: cursorColumnPath });
+                return;
+            }
+            editCell(null, td, cursorActualRowIndex, cursorColumnPath);
+        }
+
+        // Grid keys are ignored while another surface owns the keystroke
+        function isGridNavigationActive() {
+            if (currentView !== 'table') return false;
+            if (document.querySelector('td.editing')) return false;
+            if (document.querySelector('.column-manager-modal.show')) return false;
+            const active = document.activeElement;
+            if (active && active !== document.body) {
+                const tag = (active.tagName || '').toLowerCase();
+                if (tag === 'input' || tag === 'textarea' || tag === 'select') return false;
+                if (active.isContentEditable) return false;
+            }
+            return true;
         }
 
         // Apply an update that was deferred because a cell edit was in progress
@@ -3841,11 +4179,19 @@ export const scripts = `
             return null;
         }
         
+        // The event argument is null when the edit was started from the keyboard
+        // rather than by double-clicking the cell
         function editCell(event, td, rowIndex, columnPath) {
             // Prevent any default behavior
-            event.preventDefault();
-            event.stopPropagation();
-            
+            if (event) {
+                event.preventDefault();
+                event.stopPropagation();
+            }
+
+            // However the edit started, that cell is now the cursor, so Enter
+            // and Tab afterwards move on from here
+            setCellCursor(rowIndex, columnPath, false);
+
             const originalValue = td.textContent;
             
             // Create input element
@@ -3871,8 +4217,14 @@ export const scripts = `
             input.focus();
             input.select();
             
+            // Save and cancel both detach the input; the guard keeps a trailing
+            // blur from re-running an edit that a key already finished
+            let editFinished = false;
+
             // Handle save on blur or enter
             function saveEdit() {
+                if (editFinished) return;
+                editFinished = true;
                 const newValue = input.value;
                 td.classList.remove('editing');
                 td.textContent = newValue;
@@ -3896,21 +4248,37 @@ export const scripts = `
             
             // Handle cancel on escape
             function cancelEdit() {
+                if (editFinished) return;
+                editFinished = true;
                 td.classList.remove('editing');
                 td.textContent = originalValue;
                 td.title = originalValue;
 
                 flushDeferredUpdate();
             }
-            
+
             input.addEventListener('blur', saveEdit);
             input.addEventListener('keydown', (e) => {
+                // Spreadsheet convention: Enter commits and steps down a row,
+                // Tab commits and steps to the next cell, Escape reverts.
+                // Each stops propagating: the edit ends the moment the key is
+                // handled, so the grid's own document-level handler would
+                // otherwise see the same keystroke and act on it a second time.
                 if (e.key === 'Enter') {
                     e.preventDefault();
+                    e.stopPropagation();
                     saveEdit();
+                    moveCellCursor(e.shiftKey ? 'up' : 'down');
+                } else if (e.key === 'Tab') {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    saveEdit();
+                    moveCellCursor(e.shiftKey ? 'previous' : 'next');
                 } else if (e.key === 'Escape') {
                     e.preventDefault();
+                    e.stopPropagation();
                     cancelEdit();
+                    applyCursorHighlight(true);
                 }
             });
         }

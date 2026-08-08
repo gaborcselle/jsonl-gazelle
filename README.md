@@ -20,6 +20,7 @@ Fast JSONL viewer / editor for VS Code with advanced features including Table Vi
 
 ## What's new
 
+- *v0.6.3*: Spreadsheet keyboard navigation in Table View — arrow keys move a cell cursor, `Enter` edits it, `Tab` advances to the next cell
 - *v0.6.2*: Sort by column, with timestamps and currency amounts detected automatically; hidden columns are now counted on the row-number header and unhidden with one click
 - *v0.6.1*: Updated dependencies
 - *v0.6.0*: File stats popover (record count, column count, file size); "Unhide Column" context menu to restore hidden columns; improved toolbar layout and stability
@@ -41,6 +42,7 @@ Fast JSONL viewer / editor for VS Code with advanced features including Table Vi
 - **Smart Column Detection**: Maps common subpaths of each JSONL row into table columns automatically
 - **Column Expansion**: Click ▼ to expand objects/arrays into separate columns (e.g., `user.name`, `orders[0]`)
 - **Column Management**: Right-click context menu on table headers to add, remove, or toggle column visibility. Hidden columns are counted by a badge on the row-number header — click it to bring them back
+- **Spreadsheet Keyboard Navigation**: Click any cell in Table View to place a cell cursor, then drive the table from the keyboard — arrow keys move a cell at a time, `Enter` edits the cell under the cursor, `Tab` advances to the next one
 - **Sorting**: Right-click a column header and open the **Sort** submenu — **Display Sorted** reorders just the view and leaves the file alone, **Sort Rows** reorders the file itself (undo with `Ctrl`/`Cmd+Z`). Values are typed automatically, so timestamps sort chronologically and amounts like `$1,200.00` sort by value rather than as text
 - **JSONL-Aware Diff**: Diff a file against Git HEAD or another JSONL file with row alignment and field-level change highlighting — edited rows show exactly which fields changed (`old → new`) instead of a wall of raw JSON
 - **Memory Efficient**: All processing happens in-memory without creating separate files
@@ -50,7 +52,8 @@ Fast JSONL viewer / editor for VS Code with advanced features including Table Vi
 
 1. Open any `.jsonl` or `.ndjson` file in VS Code
 2. The file will automatically open in the JSONL Gazelle viewer
-4. Table View: Click ▼ buttons in column headers or double-click expandable cells to expand objects/arrays into separate columns
+3. Table View: Click ▼ buttons in column headers or double-click expandable cells to expand objects/arrays into separate columns
+4. Table View keyboard navigation: Click a cell (or press an arrow key) to place the cell cursor, then use `↑` `↓` `←` `→` to move a cell at a time, `Home` / `End` for the first/last column, `Page Up` / `Page Down` for a screenful of rows, `Enter` (or `F2`) to edit the cell, `Tab` / `Shift+Tab` to move to the next/previous cell, and `Esc` to put the cursor away. While editing, `Enter` saves and steps down a row, `Tab` saves and steps to the next cell, and `Esc` discards the edit
 5. Pretty Print view: You can edit inline
 6. Pretty Print navigation: Use `Ctrl+Alt+↑` / `Ctrl+Alt+↓` (`Cmd+Option+↑` / `Cmd+Option+↓` on macOS) to jump between JSONL entries
 7. Raw view navigation: Use `Ctrl+Alt+↑` / `Ctrl+Alt+↓` (`Cmd+Option+↑` / `Cmd+Option+↓` on macOS) to jump to the previous/next JSONL line
@@ -88,7 +91,6 @@ The generated file is automatically excluded from git via `.gitignore` to keep t
 - [ ] **LLM / chat-format awareness**: detect `messages: [{role, content}]` rows and render them as a conversation, with format validation for fine-tuning and eval files
 - [ ] **Row detail side panel**: a resizable panel showing the selected row as pretty-printed JSON, so large fields stay readable without widening the table https://github.com/gaborcselle/jsonl-gazelle/issues/38
 - [ ] **Column profiling / stats popover**: per-column type distribution, null rate, distinct count, min/max/mean, and top values from the header context menu
-- [ ] **Spreadsheet keyboard navigation**: arrow keys to move a cell cursor, Enter to edit, Tab to advance
 
 ## License
 
