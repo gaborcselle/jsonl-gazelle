@@ -777,6 +777,7 @@ export const scripts = `
                 e.preventDefault();
                 moveCellCursor(e.shiftKey ? 'previous' : 'next');
             } else if (e.key === 'Enter' || e.key === 'F2') {
+                if (isActivationKeyOwnedByFocus()) return;
                 e.preventDefault();
                 editCursorCell();
             }
@@ -3612,11 +3613,18 @@ export const scripts = `
             editCell(null, td, cursorActualRowIndex, cursorColumnPath);
         }
 
-        // Grid keys are ignored while another surface owns the keystroke
+        // Grid keys are ignored while another surface owns the keystroke: another
+        // view, a cell editor, a modal, an open context menu, or a text field
         function isGridNavigationActive() {
             if (currentView !== 'table') return false;
             if (document.querySelector('td.editing')) return false;
             if (document.querySelector('.column-manager-modal.show')) return false;
+            const columnMenu = document.getElementById('contextMenu');
+            const rowMenu = document.getElementById('rowContextMenu');
+            if ((columnMenu && columnMenu.style.display === 'block') ||
+                (rowMenu && rowMenu.style.display === 'block')) {
+                return false;
+            }
             const active = document.activeElement;
             if (active && active !== document.body) {
                 const tag = (active.tagName || '').toLowerCase();
@@ -3624,6 +3632,15 @@ export const scripts = `
                 if (active.isContentEditable) return false;
             }
             return true;
+        }
+
+        // Enter presses whatever has focus, so a focused button or link keeps it.
+        // Arrow keys are safe to take either way - they activate nothing.
+        function isActivationKeyOwnedByFocus() {
+            const active = document.activeElement;
+            if (!active || active === document.body) return false;
+            const tag = (active.tagName || '').toLowerCase();
+            return tag === 'button' || tag === 'a';
         }
 
         // Apply an update that was deferred because a cell edit was in progress

@@ -273,6 +273,26 @@ assert.ok(!keydown('ArrowDown'), 'the grid only claims keys in the table view');
 assert.deepStrictEqual(webview.getCursor(), cursorBefore, 'the cursor must not move from another view');
 webview.setCurrentView('table');
 
+// An open context menu sits over the table and is driven by clicks
+stubDocument.getElementById('rowContextMenu').style.display = 'block';
+assert.ok(!keydown('ArrowDown'), 'keys belong to an open context menu');
+assert.deepStrictEqual(webview.getCursor(), cursorBefore, 'the cursor must not move behind a context menu');
+stubDocument.getElementById('rowContextMenu').style.display = 'none';
+
+// Enter presses whatever has focus, so a focused button keeps it - but arrows
+// activate nothing, so the grid may still have those
+webview.setCellCursor(0, 'a', false);
+stubDocument.activeElement = makeElement('button');
+assert.ok(!keydown('Enter'), 'Enter belongs to the focused button');
+assert.strictEqual(stubDocument.querySelector('td.editing'), null, 'a focused button must not open a cell editor');
+assert.ok(keydown('ArrowDown'), 'arrows still drive the grid while a button has focus');
+assert.deepStrictEqual(webview.getCursor(), { row: 1, column: 'a' }, 'the arrow key still moved the cursor');
+stubDocument.activeElement = body;
+// The same Enter, with focus back on the page, does open the editor
+assert.ok(keydown('Enter'), 'Enter opens the editor once no control has focus');
+assert.ok(stubDocument.querySelector('td.editing'), 'the cursor cell is now being edited');
+dispatchKeydown(stubDocument.querySelector('td.editing').children[0], 'Escape');
+
 // --- Clicking a cell ----------------------------------------------------
 
 fire(cellAt(2, 1), 'click');
