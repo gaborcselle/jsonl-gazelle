@@ -1,8 +1,8 @@
-import * as vscode from 'vscode';
 import * as fs from 'fs';
 import * as path from 'path';
-import { JsonlViewerProvider } from './jsonlViewerProvider';
+import * as vscode from 'vscode';
 import { registerDiffCommands } from './jsonlDiffProvider';
+import { JsonlViewerProvider } from './jsonlViewerProvider';
 
 function getNonce(): string {
     const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
@@ -21,10 +21,73 @@ function getSplitPartSizeMB(): number {
     return vscode.workspace.getConfiguration('jsonl-gazelle').get<number>('largeFile.partSizeMB', 50);
 }
 
+function configurationTargetIsWorkspace(): boolean {
+    return vscode.workspace.workspaceFolders?.length !== 0;
+}
+
+const FILE_EXTENSIONS_CONTEXT_KEY = 'jsonl-gazelle.fileExtensions';
+
+/**
+ * Publishes jsonl-gazelle.files.extensions as a real context key for use in `when` clauses.
+ * 
+ */
+async function syncFileExtensionsContext() {
+    const extensions = vscode.workspace.getConfiguration('jsonl-gazelle').get<string[]>('files.extensions') ?? [];
+    await vscode.commands.executeCommand('setContext', FILE_EXTENSIONS_CONTEXT_KEY, extensions);
+}
+
+/**
+ * Keeps the file extensions defined for Gazelle synced with the workbench extensions
+ *
+ * This ensures that when a user adds a file extension, we actually open with the custom editor.
+ * customEditors.selector in package.json is static and can't read settings
+ * This is the only way to make the extension list configurable end-to-end.
+ */
+async function syncEditorAssociations(context: vscode.ExtensionContext) {
+    const config = vscode.workspace.getConfiguration();
+    const isWorkspace = configurationTargetIsWorkspace();
+    const inspected = config.inspect<Record<string, string>>('workbench.editorAssociations');
+    const current = (isWorkspace ? inspected?.workspaceValue : inspected?.globalValue) ?? {};
+
+    const extensions = vscode.workspace.getConfiguration('jsonl-gazelle').get<string[]>('files.extensions') ?? [];
+    const desiredGlobs = new Set(extensions.map(ext => `*${ext.startsWith('.') ? ext : '.' + ext}`));
+
+    const stateKey = `jsonl-gazelle.managedEditorAssociations.${isWorkspace ? 'workspace':'global'}`
+    const previouslyManaged = new Set<string>(context.globalState.get<string[]>(stateKey, []));
+
+    const updated: Record<string, string> = { ...current };
+    let changed = false;
+
+    // Drop globs we added previously but that are no longer in the configured extension list.
+    for (const glob of previouslyManaged) {
+        if (!desiredGlobs.has(glob) && updated[glob] === 'jsonl-gazelle.jsonlViewer') {
+            delete updated[glob];
+            changed = true;
+        }
+    }
+
+    // Add newly configured globs, but never override an association the user set themselves.
+    for (const glob of desiredGlobs) {
+        if (updated[glob] !== 'jsonl-gazelle.jsonlViewer') {
+            if (updated[glob] && !previouslyManaged.has(glob)) {
+                continue;
+            }
+            updated[glob] = 'jsonl-gazelle.jsonlViewer';
+            changed = true;
+        }
+    }
+
+    if (changed) {
+        await config.update('workbench.editorAssociations', updated, isWorkspace);
+    }
+    await context.globalState.update(stateKey, Array.from(desiredGlobs));
+}
+
 export function activate(context: vscode.ExtensionContext) {
     // Register the custom editor provider
     const provider = new JsonlViewerProvider(context);
-    const providerRegistration = vscode.window.registerCustomEditorProvider('jsonl-gazelle.jsonlViewer', provider, {
+    const {window, workspace} = vscode
+    const providerRegistration = window.registerCustomEditorProvider('jsonl-gazelle.jsonlViewer', provider, {
         webviewOptions: {
             retainContextWhenHidden: true,
         },
@@ -32,6 +95,27 @@ export function activate(context: vscode.ExtensionContext) {
     });
 
     context.subscriptions.push(providerRegistration);
+
+    /*
+     * We resync the Gazelle editor associations and the fileExtensions context key whenever the
+     * relevant configuration changes or when the workspace folders change
+     */
+    void syncEditorAssociations(context);
+    void syncFileExtensionsContext();
+    context.subscriptions.push(
+        workspace.onDidChangeConfiguration(e => {
+            if (e.affectsConfiguration('jsonl-gazelle.files.extensions')) {
+                void syncEditorAssociations(context);
+                void syncFileExtensionsContext();
+            }
+        })
+    );
+
+    context.subscriptions.push(
+        workspace.onDidChangeWorkspaceFolders(() => {
+            void syncEditorAssociations(context);
+        })
+    );
 
     // Initialize rating prompt manager
     const ratingManager = new RatingPromptManager(context);
@@ -109,7 +193,7 @@ class LargeFileDecorationProvider implements vscode.FileDecorationProvider {
         try {
             // Only process JSONL/NDJSON files
             const ext = path.extname(uri.fsPath || '');
-            if (uri.scheme !== 'file' || !uri.fsPath || (ext !== '.jsonl' && ext !== '.ndjson')) {
+            if (uri.scheme !== 'file' || !uri.fsPath || (!vscode.workspace.getConfiguration('jsonl-gazelle').get<string[]>('files.extensions')?.includes(ext))) {
                 return undefined;
             }
 

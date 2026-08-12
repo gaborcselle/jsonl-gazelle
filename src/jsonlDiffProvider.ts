@@ -16,10 +16,10 @@ import { getDiffViewHtml } from './webview/diffView';
 
 const GIT_MAX_BUFFER = 100 * 1024 * 1024; // 100 MB
 
-const SUPPORTED_EXTENSIONS = ['.jsonl', '.ndjson'];
-
 function isSupportedFile(fsPath: string): boolean {
-    return SUPPORTED_EXTENSIONS.includes(path.extname(fsPath).toLowerCase());
+    return vscode.workspace.getConfiguration('jsonl-gazelle')
+        .get<string[]>('files.extensions')
+        ?.includes(path.extname(fsPath).toLowerCase()) ?? false;
 }
 
 interface DiffSource {
