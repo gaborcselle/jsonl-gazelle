@@ -108,6 +108,21 @@
     "configuration": {
       "title": "JSONL Gazelle",
       "properties": {
+        "jsonl-gazelle.files.extensions": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "pattern": "^\\.[A-Za-z0-9]+$",
+            "patternErrorMessage": "Extension must start with a dot, e.g. .jsonl"
+          },
+          "uniqueItems": true,
+          "default": [
+            ".jsonl",
+            ".ndjson"
+          ],
+          "scope": "resource",
+          "description": "The file extensions that Gazelle should use to determine if a file is a JSONL file. Files with these extensions also open with JSONL Gazelle by default (via workbench.editorAssociations)."
+        },
         "jsonl-gazelle.largeFile.splitThresholdMB": {
           "type": "number",
           "default": 100,
@@ -138,7 +153,7 @@
       "commandPalette": [
         {
           "command": "jsonl-gazelle.openSettings",
-          "when": "resourceExtname == .jsonl || resourceExtname == .ndjson"
+          "when": "resourceExtname in jsonl-gazelle.fileExtensions"
         },
         {
           "command": "jsonl-gazelle.refresh",
@@ -146,68 +161,68 @@
         },
         {
           "command": "jsonl-gazelle.exportCSV",
-          "when": "resourceExtname == .jsonl || resourceExtname == .ndjson"
+          "when": "resourceExtname in jsonl-gazelle.fileExtensions"
         },
         {
           "command": "jsonl-gazelle.openLargeFile",
-          "when": "resourceExtname == .jsonl || resourceExtname == .ndjson"
+          "when": "resourceExtname in jsonl-gazelle.fileExtensions"
         },
         {
           "command": "jsonl-gazelle.diffWithHead",
-          "when": "resourceExtname == .jsonl || resourceExtname == .ndjson"
+          "when": "resourceExtname in jsonl-gazelle.fileExtensions"
         },
         {
           "command": "jsonl-gazelle.compareFiles",
-          "when": "resourceExtname == .jsonl || resourceExtname == .ndjson"
+          "when": "resourceExtname in jsonl-gazelle.fileExtensions"
         }
       ],
       "explorer/context": [
         {
           "command": "jsonl-gazelle.exportCSV",
-          "when": "resourceExtname == .jsonl || resourceExtname == .ndjson",
+          "when": "resourceExtname in jsonl-gazelle.fileExtensions",
           "group": "navigation"
         },
         {
           "command": "jsonl-gazelle.openLargeFile",
-          "when": "resourceExtname == .jsonl || resourceExtname == .ndjson",
+          "when": "resourceExtname in jsonl-gazelle.fileExtensions",
           "group": "navigation"
         },
         {
           "command": "jsonl-gazelle.diffWithHead",
-          "when": "resourceExtname == .jsonl || resourceExtname == .ndjson",
+          "when": "resourceExtname in jsonl-gazelle.fileExtensions",
           "group": "3_compare"
         },
         {
           "command": "jsonl-gazelle.compareFiles",
-          "when": "resourceExtname == .jsonl || resourceExtname == .ndjson",
+          "when": "resourceExtname in jsonl-gazelle.fileExtensions",
           "group": "3_compare"
         }
       ],
       "editor/title/context": [
         {
           "command": "jsonl-gazelle.exportCSV",
-          "when": "resourceExtname == .jsonl || resourceExtname == .ndjson",
+          "when": "resourceExtname in jsonl-gazelle.fileExtensions",
           "group": "navigation"
         }
       ],
       "editor/context": [
         {
           "command": "jsonl-gazelle.exportCSV",
-          "when": "resourceExtname == .jsonl || resourceExtname == .ndjson",
+          "when": "resourceExtname in jsonl-gazelle.fileExtensions",
           "group": "navigation"
         }
       ],
       "editor/title": [
         {
           "command": "jsonl-gazelle.diffWithHead",
-          "when": "resourceExtname == .jsonl || resourceExtname == .ndjson",
+          "when": "resourceExtname in jsonl-gazelle.fileExtensions",
           "group": "navigation"
         }
       ],
       "scm/resourceState/context": [
         {
           "command": "jsonl-gazelle.diffWithHead",
-          "when": "scmProvider == git && (resourceExtname == .jsonl || resourceExtname == .ndjson)",
+          "when": "scmProvider == git && (resourceExtname in jsonl-gazelle.fileExtensions)",
           "group": "navigation"
         }
       ]
