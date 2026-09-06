@@ -187,7 +187,14 @@ export const styles = `
             background-color: var(--vscode-list-activeSelectionBackground);
             color: var(--vscode-list-activeSelectionForeground);
         }
-        
+
+        /* The keyboard cell cursor. An inset outline rather than a background so
+           it stays visible on top of the selected row's highlight. */
+        td.cell-cursor {
+            outline: 2px solid var(--vscode-focusBorder, var(--vscode-textLink-foreground));
+            outline-offset: -2px;
+        }
+
         .indexing {
             display: flex;
             align-items: center;

@@ -2,7 +2,7 @@
   "name": "jsonl-gazelle",
   "displayName": "JSONL Gazelle",
   "description": "Fast JSONL / NDJSON viewer / editor for VS Code with advanced features including Table View and Pretty Print view.",
-  "version": "0.6.2",
+  "version": "0.6.3",
   "publisher": "gabor",
   "icon": "jsonl-gazelle.png",
   "engines": {
@@ -218,7 +218,7 @@
     "compile": "tsc -p ./",
     "bundle": "esbuild src/extension.ts --bundle --outfile=out/extension.js --external:vscode --format=cjs --platform=node --target=node16 --minify",
     "watch": "tsc -watch -p ./",
-    "test": "npm run compile && node test/rowMapping.test.js && node test/sorting.test.js && node test/prettyToJsonl.test.js && node test/diff.test.js && node test/webviewScripts.test.js && node test/sortJumpNotice.test.js && node test/columns.test.js && node test/columnVisibility.test.js && node test/hiddenColumnsBadge.test.js",
+    "test": "npm run compile && node test/rowMapping.test.js && node test/sorting.test.js && node test/prettyToJsonl.test.js && node test/diff.test.js && node test/webviewScripts.test.js && node test/sortJumpNotice.test.js && node test/columns.test.js && node test/columnVisibility.test.js && node test/hiddenColumnsBadge.test.js && node test/gridNavigation.test.js && node test/cellCursor.test.js",
     "lint": "eslint src --ext .ts"
   },
   "devDependencies": {
