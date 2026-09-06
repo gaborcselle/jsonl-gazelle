@@ -63,4 +63,25 @@ assert.ok(scripts.includes("e.key === 'Tab'"), 'Tab must be handled by the grid'
 assert.ok(/e\.key === 'Enter' \|\| e\.key === 'F2'/.test(scripts), 'Enter (and F2) must start an edit');
 assert.ok(styles.includes('td.cell-cursor'), 'the cell cursor needs a style');
 
+// The cursor also reaches the column headers and the row-number cells, which
+// carry actions of their own and a hint that spells them out
+['cursorZone', 'cycleCursorColumnSort', 'moveCursorRowInFile', 'deleteCursorRow',
+ 'showCursorHint', 'hideCursorHint', 'getHeaderRow'].forEach(name => {
+    assert.ok(scripts.includes('function ' + name), 'expected function ' + name + ' in webview scripts');
+});
+assert.ok(styles.includes('th.cell-cursor'), 'the cursor on a column header needs a style');
+assert.ok(styles.includes('.cursor-hint'), 'the header hint needs a style');
+
+// The row-number column's sentinel path is a NUL so no real JSON key can
+// collide with it. This file is a template literal, so the escape has to
+// survive into the emitted script: a raw NUL inlined into the page's HTML
+// is rewritten to U+FFFD by the parser before any JS ever sees it.
+assert.ok(!scripts.includes(String.fromCharCode(0)),
+    'the webview script must not carry a raw NUL into the page HTML');
+assert.ok(scripts.includes("'\\u0000row-header'"),
+    'the row-header sentinel must reach the webview as an escape');
+assert.ok(getHtmlTemplate({}).includes('id="cursorHint"'), 'the header hint needs an element to render into');
+assert.ok(/e\.key === 's' \|\| e\.key === 'S'/.test(scripts), 'S must cycle the sort from a column header');
+assert.ok(/e\.key === 'Delete' \|\| e\.key === 'Backspace'/.test(scripts), 'Delete must remove the cursor row');
+
 console.log('webviewScripts tests passed');

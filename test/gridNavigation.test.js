@@ -65,12 +65,49 @@ const cases = [
     { name: 'no visible columns means no cursor', from: at(0, 0), move: 'right', rows: 4, columns: 0, expected: null }
 ];
 
-cases.forEach(testCase => {
+// With bounds open, row -1 is the column-header row and column -1 the
+// row-number column. Only the arrow keys step onto them.
+const HEADERS = { minRow: -1, minColumn: -1 };
+const headerCases = [
+    { name: 'up out of the first row lands on the column header', from: at(0, 1), move: 'up', expected: at(-1, 1) },
+    { name: 'down comes back out of the column header', from: at(-1, 1), move: 'down', expected: at(0, 1) },
+    { name: 'left out of the first column lands on the row number', from: at(2, 0), move: 'left', expected: at(2, -1) },
+    { name: 'right comes back out of the row-number column', from: at(2, -1), move: 'right', expected: at(2, 0) },
+    { name: 'arrows still move along the column header', from: at(-1, 0), move: 'right', expected: at(-1, 1) },
+    { name: 'arrows still move along the row-number column', from: at(1, -1), move: 'down', expected: at(2, -1) },
+
+    // The two bands do not meet - the cell where they would cross is the
+    // row-number header, which holds the hidden-columns badge
+    { name: 'the column header does not reach the corner', from: at(-1, 0), move: 'left', expected: at(-1, 0) },
+    { name: 'the row-number column does not reach the corner', from: at(0, -1), move: 'up', expected: at(0, -1) },
+    { name: 'paging up out of the row-number column stops at the first row', from: at(3, -1), move: 'pageUp', pageSize: 10, expected: at(0, -1) },
+
+    // Tab is a data-entry motion and Home/End/paging are grid motions: they
+    // walk along a band the cursor is on but never step onto one
+    { name: 'shift-tab out of the first column still wraps to the row above', from: at(1, 0), move: 'previous', expected: at(0, 2) },
+    { name: 'home stops at the first column, not the row number', from: at(1, 2), move: 'rowStart', expected: at(1, 0) },
+    { name: 'page up stops at the first row, not the header', from: at(1, 1), move: 'pageUp', pageSize: 5, expected: at(0, 1) },
+    { name: 'home walks along the column header', from: at(-1, 2), move: 'rowStart', expected: at(-1, 0) },
+    { name: 'shift-tab walks along the column header', from: at(-1, 2), move: 'previous', expected: at(-1, 1) },
+    { name: 'shift-tab stops at the first column header', from: at(-1, 0), move: 'previous', expected: at(-1, 0) },
+    { name: 'tab off the end of the header enters the grid', from: at(-1, 2), move: 'next', expected: at(0, 0) },
+    { name: 'tab off a row number enters that row', from: at(2, -1), move: 'next', expected: at(2, 0) },
+    { name: 'shift-tab off a row number wraps to the row above', from: at(2, -1), move: 'previous', expected: at(1, 2) },
+    { name: 'shift-tab off the first row number stays put', from: at(0, -1), move: 'previous', expected: at(0, -1) }
+];
+
+cases.concat(headerCases.map(c => Object.assign({ bounds: HEADERS }, c))).forEach(testCase => {
     const rows = testCase.rows === undefined ? 4 : testCase.rows;
     const columns = testCase.columns === undefined ? 3 : testCase.columns;
-    const args = [testCase.from, testCase.move, rows, columns, testCase.pageSize];
+    const args = [testCase.from, testCase.move, rows, columns, testCase.pageSize, testCase.bounds];
     assert.deepStrictEqual(moveGridCursor(...args), testCase.expected, testCase.name + ' (module)');
     assert.deepStrictEqual(webviewImpl(...args), testCase.expected, testCase.name + ' (webview)');
+});
+
+// Without bounds the headers stay unreachable, whatever the cursor is asked to do
+['up', 'left', 'previous', 'rowStart', 'pageUp'].forEach(move => {
+    const moved = moveGridCursor(at(0, 0), move, 4, 3, 5);
+    assert.ok(moved.row >= 0 && moved.column >= 0, move + ' must not leave the data grid by default');
 });
 
 // Walking Tab from the first cell to the last visits every cell exactly once,

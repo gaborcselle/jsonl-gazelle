@@ -189,10 +189,51 @@ export const styles = `
         }
 
         /* The keyboard cell cursor. An inset outline rather than a background so
-           it stays visible on top of the selected row's highlight. */
-        td.cell-cursor {
+           it stays visible on top of the selected row's highlight. Also lands on
+           the column headers and the row-number cells, which the cursor can
+           reach for the actions that live there. */
+        td.cell-cursor,
+        th.cell-cursor {
             outline: 2px solid var(--vscode-focusBorder, var(--vscode-textLink-foreground));
             outline-offset: -2px;
+        }
+
+        /* What the header cell under the cursor can do. Bottom left, opposite
+           the sort-jump notice so the two never sit on top of each other. */
+        .cursor-hint {
+            position: fixed;
+            left: 16px;
+            bottom: 16px;
+            z-index: 1200;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            max-width: min(520px, calc(100vw - 32px));
+            padding: 6px 10px;
+            font-size: 12px;
+            border: 1px solid var(--vscode-notifications-border, var(--vscode-panel-border));
+            border-radius: 4px;
+            background-color: var(--vscode-notifications-background, var(--vscode-editorWidget-background));
+            color: var(--vscode-notifications-foreground, var(--vscode-foreground));
+            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.35);
+            pointer-events: none;
+        }
+
+        .cursor-hint kbd {
+            flex-shrink: 0;
+            padding: 1px 5px;
+            border: 1px solid var(--vscode-panel-border);
+            border-bottom-width: 2px;
+            border-radius: 3px;
+            background-color: var(--vscode-keybindingLabel-background, var(--vscode-badge-background));
+            color: var(--vscode-keybindingLabel-foreground, var(--vscode-badge-foreground));
+            font-family: var(--vscode-editor-font-family);
+            font-size: 11px;
+            line-height: 15px;
+        }
+
+        .cursor-hint kbd + span {
+            margin-right: 6px;
         }
 
         .indexing {
