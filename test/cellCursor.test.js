@@ -125,27 +125,52 @@ const sandbox = {
         matchMedia: () => ({ matches: false, addEventListener() {} })
     },
     requestAnimationFrame: () => {},
-    setTimeout: () => 1,
+    // Timers are recorded rather than run, so a test can fire the one it means
+    // to (the hint's fade) without also firing everything else that is pending
+    setTimeout: (fn, ms) => {
+        pendingTimeouts.push({ id: ++timeoutId, fn: fn, ms: ms });
+        return timeoutId;
+    },
     setInterval: () => {},
-    clearTimeout: () => {},
+    clearTimeout: id => {
+        const at = pendingTimeouts.findIndex(t => t.id === id);
+        if (at !== -1) pendingTimeouts.splice(at, 1);
+    },
     console,
     navigator: { clipboard: {} },
     require: undefined
 };
 
 const posted = [];
+let timeoutId = 0;
+const pendingTimeouts = [];
+
+// Run every pending timeout registered for exactly `ms`, oldest first
+function fireTimeouts(ms) {
+    const due = pendingTimeouts.filter(t => t.ms === ms);
+    due.forEach(t => {
+        pendingTimeouts.splice(pendingTimeouts.indexOf(t), 1);
+        t.fn();
+    });
+    return due.length;
+}
 
 const harness = scripts + `
 ;return {
     setCurrentData: data => { currentData = data; },
     setCurrentView: view => { currentView = view; },
     renderRows: () => renderTableChunk(true),
+    renderHeader: () => buildTableHeader(currentData),
     getCursor: () => ({ row: cursorActualRowIndex, column: cursorColumnPath }),
     getCursorPosition: getCursorPosition,
     getCursorCell: getCursorCell,
     getSelectedRow: () => selectedRowActualIndex,
     setCellCursor: setCellCursor,
-    jumpToDisplayRow: jumpToDisplayRow
+    jumpToDisplayRow: jumpToDisplayRow,
+    cursorZone: cursorZone,
+    HEADER_ROW: HEADER_ROW_INDEX,
+    ROW_HEADER_COLUMN: ROW_HEADER_COLUMN_PATH,
+    HINT_TIMEOUT_MS: CURSOR_HINT_TIMEOUT_MS
 };`;
 const webview = new Function(...Object.keys(sandbox), harness)(...Object.values(sandbox));
 
@@ -207,6 +232,12 @@ function cursorCells() {
     return allCells().filter(td => td.classList.contains('cell-cursor'));
 }
 
+const HEADER_ROW = webview.HEADER_ROW;
+const ROW_HEADER_COLUMN = webview.ROW_HEADER_COLUMN;
+const hintElement = () => stubDocument.getElementById('cursorHint');
+const hintKeys = () => hintElement().children.filter(c => c.tagName === 'KBD').map(c => c.textContent);
+const hintText = () => hintElement().children.filter(c => c.tagName === 'SPAN').map(c => c.textContent).join(' ');
+
 webview.setCurrentData(tableData());
 webview.renderRows();
 assert.strictEqual(rows().length, 3, 'the stub table must render every row');
@@ -235,9 +266,23 @@ assert.ok(!rows()[0].classList.contains('selected'), 'the row left behind is des
 keydown('ArrowUp');
 keydown('ArrowLeft');
 assert.deepStrictEqual(webview.getCursor(), { row: 0, column: 'a' }, 'up and left move back');
+
+// Off the top and off the left are the two header bands, not a wall
 keydown('ArrowUp');
+assert.deepStrictEqual(webview.getCursor(), { row: HEADER_ROW, column: 'a' },
+    'up out of the first row lands on the column header');
 keydown('ArrowLeft');
-assert.deepStrictEqual(webview.getCursor(), { row: 0, column: 'a' }, 'the cursor stops at the grid edge');
+assert.deepStrictEqual(webview.getCursor(), { row: HEADER_ROW, column: 'a' },
+    'the column header does not reach the row-number corner');
+keydown('ArrowDown');
+keydown('ArrowLeft');
+assert.deepStrictEqual(webview.getCursor(), { row: 0, column: ROW_HEADER_COLUMN },
+    'left out of the first column lands on the row number');
+keydown('ArrowUp');
+assert.deepStrictEqual(webview.getCursor(), { row: 0, column: ROW_HEADER_COLUMN },
+    'the row-number column does not reach the corner either');
+keydown('ArrowRight');
+assert.deepStrictEqual(webview.getCursor(), { row: 0, column: 'a' }, 'right comes back into the grid');
 
 keydown('End');
 assert.deepStrictEqual(webview.getCursor(), { row: 0, column: 'c' }, 'End goes to the last column');
@@ -507,5 +552,210 @@ dispatchKeydown(editing.children[0], 'Enter');
 assert.deepStrictEqual(posted[posted.length - 1], {
     type: 'updateCell', rowIndex: 2, columnPath: '(value)', value: '999'
 }, 'the edit is written to the row the cursor was on');
+
+// --- The column header ---------------------------------------------------
+
+webview.setCurrentData(tableData());
+webview.renderRows();
+webview.renderHeader();
+const headerCells = () => stubDocument.getElementById('tableHead').children[0].children;
+const headerCellFor = visibleColumn => headerCells()[visibleColumn + 1]; // +1 for the row-number header
+
+webview.setCellCursor(0, 'b', false);
+keydown('ArrowUp');
+assert.strictEqual(webview.cursorZone(), 'columnHeader', 'up out of the top row reaches the column header');
+assert.strictEqual(webview.getCursorCell(), headerCellFor(1), 'the cursor is on that column\'s header cell');
+assert.ok(headerCellFor(1).classList.contains('cell-cursor'), 'the header cell carries the cursor highlight');
+assert.strictEqual(webview.getSelectedRow(), null, 'the header row is not a row of the file to select');
+
+// The hint tells the user what the cell under the cursor is good for
+assert.strictEqual(hintElement().style.display, 'flex', 'a header cursor shows a hint');
+assert.strictEqual(hintElement().dataset.hint, 'columnHeader', 'the hint is the column-header one');
+assert.deepStrictEqual(hintKeys(), ['S'], 'the column-header hint names the S key');
+assert.ok(/sort/.test(hintText()), 'the column-header hint says what S does');
+
+// ...and then gets out of the way
+assert.strictEqual(fireTimeouts(webview.HINT_TIMEOUT_MS), 1, 'the hint is on a timer');
+assert.strictEqual(hintElement().style.display, 'none', 'the hint hides itself after a while');
+
+// Moving within the header brings it back, moving back to a cell does not
+keydown('ArrowRight');
+assert.strictEqual(hintElement().style.display, 'flex', 'moving along the header shows the hint again');
+keydown('ArrowDown');
+assert.strictEqual(webview.cursorZone(), 'cell', 'down comes back out of the header');
+assert.strictEqual(hintElement().style.display, 'none', 'a data cell has no hint');
+assert.strictEqual(pendingTimeouts.filter(t => t.ms === webview.HINT_TIMEOUT_MS).length, 0,
+    'leaving the header cancels the pending fade');
+
+// S cycles the display sort: off -> ascending -> descending -> off
+posted.length = 0;
+fire(headerCellFor(0), 'click');
+assert.strictEqual(webview.cursorZone(), 'columnHeader', 'clicking a header puts the cursor on it');
+assert.deepStrictEqual(webview.getCursor(), { row: HEADER_ROW, column: 'a' }, 'on the column that was clicked');
+
+assert.ok(keydown('s'), 'S on a column header is consumed');
+assert.deepStrictEqual(posted[posted.length - 1],
+    { type: 'setDisplaySort', columnPath: 'a', direction: 'asc' }, 'S sorts ascending first');
+
+const sortedAsc = tableData({ displaySort: { columnPath: 'a', direction: 'asc' } });
+webview.setCurrentData(sortedAsc);
+keydown('S');
+assert.deepStrictEqual(posted[posted.length - 1],
+    { type: 'setDisplaySort', columnPath: 'a', direction: 'desc' }, 'S again sorts descending');
+
+webview.setCurrentData(tableData({ displaySort: { columnPath: 'a', direction: 'desc' } }));
+keydown('s');
+assert.deepStrictEqual(posted[posted.length - 1],
+    { type: 'setDisplaySort', columnPath: null, direction: null }, 'S a third time clears the sort');
+
+// The header is rebuilt whenever the columns change, so the cursor has to be
+// re-applied by the rebuild itself, not just painted on when it moves
+webview.setCurrentData(tableData());
+webview.renderRows();
+webview.setCellCursor(HEADER_ROW, 'b', false);
+webview.renderHeader();
+assert.strictEqual(webview.getCursorCell(), headerCellFor(1), 'the cursor survives a header rebuild');
+assert.ok(headerCellFor(1).classList.contains('cell-cursor'), 'and so does its highlight');
+assert.strictEqual(headerCells().filter(th => th.classList.contains('cell-cursor')).length, 1,
+    'the rebuilt header carries exactly one cursor');
+
+// A column header holds a name, not file data, so Enter must not edit it
+posted.length = 0;
+keydown('Enter');
+assert.strictEqual(stubDocument.querySelector('td.editing'), null, 'Enter must not open an editor on a header');
+assert.deepStrictEqual(posted, [], 'and must not send anything either');
+
+// S only belongs to the column header
+webview.setCellCursor(1, 'b', false);
+posted.length = 0;
+assert.ok(!keydown('s'), 'S in a data cell is not the grid\'s key');
+assert.deepStrictEqual(posted, [], 'and sorts nothing');
+
+// --- The row-number column ------------------------------------------------
+
+webview.setCellCursor(1, 'a', false);
+keydown('ArrowLeft');
+assert.strictEqual(webview.cursorZone(), 'rowHeader', 'left out of the first column reaches the row number');
+assert.strictEqual(webview.getCursorCell(), rows()[1].children[0], 'the cursor is on that row\'s number cell');
+assert.strictEqual(webview.getSelectedRow(), 1, 'the row is still the selected one');
+assert.strictEqual(hintElement().dataset.hint, 'rowHeader', 'the row-number hint is showing');
+assert.deepStrictEqual(hintKeys(), ['U', 'D', 'Delete'], 'it names the move and delete keys');
+assert.ok(/move this row/.test(hintText()) && /delete this row/.test(hintText()),
+    'and says what each of them does');
+
+// The tbody is rebuilt on every update, so the row-number cursor has to be
+// re-applied by the rebuild the same way a data cell's is
+webview.renderRows();
+assert.strictEqual(webview.getCursorCell(), rows()[1].children[0],
+    'the row-number cursor survives a rebuild');
+assert.ok(rows()[1].children[0].classList.contains('cell-cursor'), 'and keeps its highlight');
+assert.strictEqual(cursorCells().length, 1, 'the rebuilt table carries exactly one cursor');
+
+// U hands the row to the reorder the drag uses, and follows it
+posted.length = 0;
+assert.ok(keydown('u'), 'U on a row number is consumed');
+assert.deepStrictEqual(posted, [{ type: 'reorderRows', fromIndex: 1, toIndex: 0 }],
+    'U moves the row one place up the file');
+assert.deepStrictEqual(webview.getCursor(), { row: 0, column: ROW_HEADER_COLUMN },
+    'the cursor follows the row to where it lands');
+
+// D is sent as "pull the row below this one up over it" - dropping a row onto
+// its own next neighbour would be a no-op
+webview.setCellCursor(1, ROW_HEADER_COLUMN, false);
+posted.length = 0;
+keydown('D');
+assert.deepStrictEqual(posted, [{ type: 'reorderRows', fromIndex: 2, toIndex: 1 }],
+    'D moves the row one place down the file, upper case too');
+assert.deepStrictEqual(webview.getCursor(), { row: 2, column: ROW_HEADER_COLUMN },
+    'the cursor follows it down too');
+
+// Neither end of the file has anywhere to go
+webview.setCellCursor(0, ROW_HEADER_COLUMN, false);
+posted.length = 0;
+keydown('u');
+assert.deepStrictEqual(posted, [], 'the first row cannot move up');
+webview.setCellCursor(2, ROW_HEADER_COLUMN, false);
+keydown('d');
+assert.deepStrictEqual(posted, [], 'the last row cannot move down');
+
+// Arrow keys still move the cursor, never the row
+webview.setCellCursor(1, ROW_HEADER_COLUMN, false);
+posted.length = 0;
+keydown('ArrowDown');
+assert.deepStrictEqual(posted, [], 'an arrow key moves nothing in the file');
+assert.deepStrictEqual(webview.getCursor(), { row: 2, column: ROW_HEADER_COLUMN }, 'it moves the cursor');
+
+// U and D only bind on a row number - a data cell must not reorder the file
+webview.setCellCursor(1, 'b', false);
+posted.length = 0;
+assert.ok(!keydown('u'), 'U in a data cell is not the grid\'s key');
+assert.ok(!keydown('d'), 'nor is D');
+assert.deepStrictEqual(posted, [], 'and neither moves anything');
+
+// Delete asks the extension to remove the row (which confirms before it does)
+webview.setCellCursor(2, ROW_HEADER_COLUMN, false);
+posted.length = 0;
+assert.ok(keydown('Delete'), 'Delete on a row number is consumed');
+assert.deepStrictEqual(posted, [{ type: 'deleteRow', rowIndex: 2 }], 'Delete removes the cursor row');
+posted.length = 0;
+keydown('Backspace');
+assert.deepStrictEqual(posted, [{ type: 'deleteRow', rowIndex: 2 }], 'Backspace does the same');
+
+// Delete only belongs to the row number - a data cell must not lose its row
+webview.setCellCursor(1, 'b', false);
+posted.length = 0;
+assert.ok(!keydown('Delete'), 'Delete in a data cell is not the grid\'s key');
+assert.deepStrictEqual(posted, [], 'and deletes nothing');
+
+// A cursor whose row or column has been filtered away is not on screen, and a
+// key must not act on a cell the user cannot see
+const hiddenSort = tableData();
+hiddenSort.columns[0].visible = false;
+webview.setCurrentData(hiddenSort);
+webview.setCellCursor(HEADER_ROW, 'a', false);
+posted.length = 0;
+keydown('s');
+assert.deepStrictEqual(posted, [], 'S must not sort a column that has been hidden');
+
+const filteredOut = tableData();
+filteredOut.rows = [filteredOut.allRows[0]];
+filteredOut.rowIndices = [0];
+webview.setCurrentData(filteredOut);
+webview.renderRows();
+webview.setCellCursor(2, ROW_HEADER_COLUMN, false);
+posted.length = 0;
+keydown('Delete');
+assert.deepStrictEqual(posted, [], 'Delete must not remove a row the search has filtered away');
+keydown('u');
+assert.deepStrictEqual(posted, [], 'and it must not be moved either');
+
+// A display sort makes screen order and file order disagree, so there is no
+// honest answer to "move this row up" - the same reason drag-reorder is off
+const sortedRows = tableData({ displaySort: { columnPath: 'a', direction: 'asc' } });
+webview.setCurrentData(sortedRows);
+webview.renderRows();
+webview.setCellCursor(1, ROW_HEADER_COLUMN, false);
+assert.deepStrictEqual(hintKeys(), ['Delete'], 'a sorted view offers only the delete key');
+assert.ok(/clear the sort/.test(hintText()), 'and says why the move keys are gone');
+posted.length = 0;
+keydown('u');
+assert.deepStrictEqual(posted, [], 'a sorted view must not reorder the file');
+
+// --- Clicking the row number ----------------------------------------------
+
+webview.setCurrentData(tableData());
+webview.renderRows();
+webview.setCellCursor(0, 'b', false);
+fire(rows()[2].children[0], 'click');
+fire(rows()[2], 'click'); // the click bubbles on to the row
+assert.deepStrictEqual(webview.getCursor(), { row: 2, column: ROW_HEADER_COLUMN },
+    'clicking a row number parks the cursor there rather than on a data cell');
+assert.strictEqual(webview.getSelectedRow(), 2, 'and selects the row');
+
+// Escape puts the cursor and its hint away together
+keydown('Escape');
+assert.strictEqual(webview.cursorZone(), null, 'Escape clears a header cursor too');
+assert.strictEqual(hintElement().style.display, 'none', 'and takes the hint with it');
+assert.strictEqual(cursorCells().length, 0, 'no cell is left highlighted');
 
 console.log('cellCursor tests passed');

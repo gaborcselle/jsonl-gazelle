@@ -8,6 +8,12 @@
  * from these coordinates around each move, so hiding a column or filtering rows
  * never leaves the cursor pointing at a cell that is no longer there.
  *
+ * Row `-1` is the column-header row and column `-1` is the row-number column,
+ * reachable only when `bounds` opens them up, and only by the arrow keys.
+ * They never intersect: the cell where they would cross is the row-number
+ * header, which carries the hidden-columns badge rather than anything the
+ * cursor can act on.
+ *
  * Keep in sync with the copy in `src/webview/scripts.ts` (see the
  * `shared:grid-navigation` block, which the webview tests extract).
  */
@@ -15,6 +21,14 @@
 export interface GridPosition {
     row: number;
     column: number;
+}
+
+/** How far above and to the left of the data grid the cursor may go: 0 (the
+ *  default) keeps it in the data cells, -1 opens the header row / row-number
+ *  column. */
+export interface GridBounds {
+    minRow?: number;
+    minColumn?: number;
 }
 
 export type GridMove =
@@ -41,12 +55,15 @@ export function moveGridCursor(
     move: GridMove,
     rowCount: number,
     columnCount: number,
-    pageSize?: number
+    pageSize?: number,
+    bounds?: GridBounds | null
 ): GridPosition | null {
     if (!(rowCount > 0) || !(columnCount > 0)) {
         return null;
     }
 
+    const firstRow = bounds && bounds.minRow === -1 ? -1 : 0;
+    const firstColumn = bounds && bounds.minColumn === -1 ? -1 : 0;
     const lastRow = rowCount - 1;
     const lastColumn = columnCount - 1;
     const page = pageSize && pageSize > 0 ? Math.floor(pageSize) : 1;
@@ -57,30 +74,36 @@ export function moveGridCursor(
 
     // Rows can be filtered away and columns hidden between two keystrokes, so a
     // stored cursor is clamped back into the grid before it is moved
-    let row = clampIndex(cursor.row, lastRow);
-    let column = clampIndex(cursor.column, lastColumn);
+    let row = clampIndex(cursor.row, firstRow, lastRow);
+    let column = clampIndex(cursor.column, firstColumn, lastColumn);
+
+    // Only the arrow keys step onto a header. Tab is a data-entry motion and
+    // Home/End/paging are grid motions, so those keep the cursor in the band it
+    // is already in - they walk along a header but never wander onto one.
+    const bandRow = Math.min(0, row);
+    const bandColumn = Math.min(0, column);
 
     switch (move) {
         case 'up':
-            row = Math.max(0, row - 1);
+            row = Math.max(firstRow, row - 1);
             break;
         case 'down':
             row = Math.min(lastRow, row + 1);
             break;
         case 'left':
-            column = Math.max(0, column - 1);
+            column = Math.max(firstColumn, column - 1);
             break;
         case 'right':
             column = Math.min(lastColumn, column + 1);
             break;
         case 'rowStart':
-            column = 0;
+            column = bandColumn;
             break;
         case 'rowEnd':
             column = lastColumn;
             break;
         case 'pageUp':
-            row = Math.max(0, row - page);
+            row = Math.max(bandRow, row - page);
             break;
         case 'pageDown':
             row = Math.min(lastRow, row + page);
@@ -94,9 +117,9 @@ export function moveGridCursor(
             }
             break;
         case 'previous':
-            if (column > 0) {
+            if (column > bandColumn) {
                 column = column - 1;
-            } else if (row > 0) {
+            } else if (row > bandRow) {
                 row = row - 1;
                 column = lastColumn;
             }
@@ -105,12 +128,23 @@ export function moveGridCursor(
             break;
     }
 
+    // The header row and the row-number column do not cross. Whichever axis
+    // moved into the corner steps back, so the move reads as "stopped at the
+    // edge" rather than sliding the cursor sideways into the other header.
+    if (row < 0 && column < 0) {
+        if (move === 'up' || move === 'down' || move === 'pageUp' || move === 'pageDown') {
+            row = 0;
+        } else {
+            column = 0;
+        }
+    }
+
     return { row: row, column: column };
 }
 
-function clampIndex(value: number, max: number): number {
+function clampIndex(value: number, min: number, max: number): number {
     if (typeof value !== 'number' || !isFinite(value)) {
-        return 0;
+        return min;
     }
-    return Math.min(Math.max(0, Math.floor(value)), max);
+    return Math.min(Math.max(min, Math.floor(value)), max);
 }

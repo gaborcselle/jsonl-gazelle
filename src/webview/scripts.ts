@@ -62,6 +62,21 @@ export const scripts = `
         // re-pointed by createTableRow as rows are (re-)rendered.
         let cursorCellElement = null;
         let selectedRowElement = null;
+        // The cursor also reaches the two header zones. A file row index is never
+        // negative and no column path contains a NUL, so neither sentinel can be
+        // mistaken for a real cell.
+        const HEADER_ROW_INDEX = -1;          // stored in cursorActualRowIndex
+        const ROW_HEADER_COLUMN_INDEX = -1;   // its display column
+        // Escaped twice on purpose: this file is a template literal, so the
+        // emitted webview JS has to carry the escape rather than a raw NUL,
+        // which the HTML parser would rewrite on its way into the page
+        const ROW_HEADER_COLUMN_PATH = '\\u0000row-header'; // stored in cursorColumnPath
+        const GRID_HEADER_BOUNDS = { minRow: -1, minColumn: -1 };
+        // The header cells carry actions no other cell has, so the cursor
+        // arriving on one spells them out. It fades on its own: a hint that
+        // stays on screen forever is furniture, not a hint.
+        const CURSOR_HINT_TIMEOUT_MS = 6000;
+        let cursorHintTimeout = null;
         const DEFAULT_PAGE_ROWS = 20; // Page Up/Down fallback when the table height is unknown
         let followMode = false; // Auto-reload and scroll to bottom when the file grows (tail -f)
         let deferredUpdatePending = false; // An update arrived while a cell edit was in progress
@@ -762,10 +777,35 @@ export const scripts = `
             if (e.ctrlKey || e.metaKey || e.altKey) return;
             if (!isGridNavigationActive()) return;
 
+            const zone = cursorZone();
+
             const move = GRID_NAVIGATION_KEYS[e.key];
             if (move) {
                 e.preventDefault();
                 moveCellCursor(move);
+                return;
+            }
+
+            // What the header cells the cursor can reach are for - one letter
+            // each, the way S sorts. The hint that appears with the cursor
+            // names them, and they only bind while the cursor is on a header,
+            // so they cost nothing anywhere else.
+            const letter = typeof e.key === 'string' && e.key.length === 1
+                ? e.key.toLowerCase()
+                : null;
+            if (zone === 'columnHeader' && letter === 's') {
+                e.preventDefault();
+                cycleCursorColumnSort();
+                return;
+            }
+            if (zone === 'rowHeader' && (letter === 'u' || letter === 'd')) {
+                e.preventDefault();
+                moveCursorRowInFile(letter === 'u' ? -1 : 1);
+                return;
+            }
+            if (zone === 'rowHeader' && (e.key === 'Delete' || e.key === 'Backspace')) {
+                e.preventDefault();
+                deleteCursorRow();
                 return;
             }
 
@@ -2828,6 +2868,10 @@ export const scripts = `
                 headerContent.style.overflow = 'hidden';
                 headerContent.style.textOverflow = 'ellipsis';
                 headerContent.style.maxWidth = '100%';
+                // An inline-block that clips its overflow takes its baseline
+                // from its bottom edge, which drags anything aligned against it
+                // - the sort arrow - below the column name. Centre both instead.
+                headerContent.style.verticalAlign = 'middle';
 
                 if (column.parentPath) {
                     const collapseButton = document.createElement('button');
@@ -2903,7 +2947,17 @@ export const scripts = `
                 th.appendChild(resizeHandle);
 
                 th.addEventListener('contextmenu', (e) => showContextMenu(e, column.path));
-                
+
+                // Clicking a header puts the cursor on it, so S is available
+                // without arrowing up from the grid
+                th.addEventListener('click', () => setCellCursor(HEADER_ROW_INDEX, column.path, false));
+                // Re-apply the cursor: the header is rebuilt whenever the
+                // columns change
+                if (cursorActualRowIndex === HEADER_ROW_INDEX && cursorColumnPath === column.path) {
+                    th.classList.add('cell-cursor');
+                    cursorCellElement = th;
+                }
+
                 // Add drag and drop for column reordering
                 th.draggable = true;
                 th.dataset.columnPath = column.path;
@@ -3080,6 +3134,13 @@ export const scripts = `
             // Tooltip shows the actual row number in the file and drag hint
             rowNumCell.title = 'Row ' + (actualRowIndex + 1) + ' in file • Drag to reorder';
             rowNumCell.addEventListener('contextmenu', (e) => showRowContextMenu(e, rowIndex));
+            // The row-number cell is a cursor stop of its own: from there the
+            // keyboard can move the row through the file or delete it
+            rowNumCell.addEventListener('click', () => setCellCursor(actualRowIndex, ROW_HEADER_COLUMN_PATH, false));
+            if (cursorActualRowIndex === actualRowIndex && cursorColumnPath === ROW_HEADER_COLUMN_PATH) {
+                rowNumCell.classList.add('cell-cursor');
+                cursorCellElement = rowNumCell;
+            }
             tr.appendChild(rowNumCell);
 
             // Row drag and drop for reordering. Disabled while the view is
@@ -3347,11 +3408,13 @@ export const scripts = `
         }
 
         // --- shared:grid-navigation (keep in sync with src/jsonl/gridNavigation.ts) ---
-        function moveGridCursor(cursor, move, rowCount, columnCount, pageSize) {
+        function moveGridCursor(cursor, move, rowCount, columnCount, pageSize, bounds) {
             if (!(rowCount > 0) || !(columnCount > 0)) {
                 return null;
             }
 
+            const firstRow = bounds && bounds.minRow === -1 ? -1 : 0;
+            const firstColumn = bounds && bounds.minColumn === -1 ? -1 : 0;
             const lastRow = rowCount - 1;
             const lastColumn = columnCount - 1;
             const page = pageSize && pageSize > 0 ? Math.floor(pageSize) : 1;
@@ -3362,30 +3425,36 @@ export const scripts = `
 
             // Rows can be filtered away and columns hidden between two keystrokes, so a
             // stored cursor is clamped back into the grid before it is moved
-            let row = clampGridIndex(cursor.row, lastRow);
-            let column = clampGridIndex(cursor.column, lastColumn);
+            let row = clampGridIndex(cursor.row, firstRow, lastRow);
+            let column = clampGridIndex(cursor.column, firstColumn, lastColumn);
+
+            // Only the arrow keys step onto a header. Tab is a data-entry motion and
+            // Home/End/paging are grid motions, so those keep the cursor in the band it
+            // is already in - they walk along a header but never wander onto one.
+            const bandRow = Math.min(0, row);
+            const bandColumn = Math.min(0, column);
 
             switch (move) {
                 case 'up':
-                    row = Math.max(0, row - 1);
+                    row = Math.max(firstRow, row - 1);
                     break;
                 case 'down':
                     row = Math.min(lastRow, row + 1);
                     break;
                 case 'left':
-                    column = Math.max(0, column - 1);
+                    column = Math.max(firstColumn, column - 1);
                     break;
                 case 'right':
                     column = Math.min(lastColumn, column + 1);
                     break;
                 case 'rowStart':
-                    column = 0;
+                    column = bandColumn;
                     break;
                 case 'rowEnd':
                     column = lastColumn;
                     break;
                 case 'pageUp':
-                    row = Math.max(0, row - page);
+                    row = Math.max(bandRow, row - page);
                     break;
                 case 'pageDown':
                     row = Math.min(lastRow, row + page);
@@ -3399,9 +3468,9 @@ export const scripts = `
                     }
                     break;
                 case 'previous':
-                    if (column > 0) {
+                    if (column > bandColumn) {
                         column = column - 1;
-                    } else if (row > 0) {
+                    } else if (row > bandRow) {
                         row = row - 1;
                         column = lastColumn;
                     }
@@ -3410,14 +3479,25 @@ export const scripts = `
                     break;
             }
 
+            // The header row and the row-number column do not cross. Whichever axis
+            // moved into the corner steps back, so the move reads as "stopped at the
+            // edge" rather than sliding the cursor sideways into the other header.
+            if (row < 0 && column < 0) {
+                if (move === 'up' || move === 'down' || move === 'pageUp' || move === 'pageDown') {
+                    row = 0;
+                } else {
+                    column = 0;
+                }
+            }
+
             return { row: row, column: column };
         }
 
-        function clampGridIndex(value, max) {
+        function clampGridIndex(value, min, max) {
             if (typeof value !== 'number' || !isFinite(value)) {
-                return 0;
+                return min;
             }
-            return Math.min(Math.max(0, Math.floor(value)), max);
+            return Math.min(Math.max(min, Math.floor(value)), max);
         }
         // --- end shared:grid-navigation ---
 
@@ -3426,14 +3506,40 @@ export const scripts = `
         }
 
         // The cell cursor in display coordinates, or null when it is not on
-        // screen - its row may be filtered out or its column hidden
+        // screen - its row may be filtered out or its column hidden. Row -1 is
+        // the column-header row, column -1 the row-number column.
         function getCursorPosition() {
             if (cursorActualRowIndex === null || cursorColumnPath === null) return null;
-            const row = (currentData.rowIndices || []).indexOf(cursorActualRowIndex);
-            if (row === -1) return null;
-            const column = getVisibleColumns().findIndex(col => col.path === cursorColumnPath);
-            if (column === -1) return null;
+            let row;
+            if (cursorActualRowIndex === HEADER_ROW_INDEX) {
+                row = HEADER_ROW_INDEX;
+            } else {
+                row = (currentData.rowIndices || []).indexOf(cursorActualRowIndex);
+                if (row === -1) return null;
+            }
+            let column;
+            if (cursorColumnPath === ROW_HEADER_COLUMN_PATH) {
+                column = ROW_HEADER_COLUMN_INDEX;
+            } else {
+                column = getVisibleColumns().findIndex(col => col.path === cursorColumnPath);
+                if (column === -1) return null;
+            }
             return { row: row, column: column };
+        }
+
+        // Which of the three places the cursor can sit: a data cell, a column
+        // header, or a row-number cell. Cheap - no scan of rows or columns
+        function cursorZone() {
+            if (cursorActualRowIndex === null || cursorColumnPath === null) return null;
+            if (cursorActualRowIndex === HEADER_ROW_INDEX) return 'columnHeader';
+            if (cursorColumnPath === ROW_HEADER_COLUMN_PATH) return 'rowHeader';
+            return 'cell';
+        }
+
+        // The rendered <tr> of the column-header row
+        function getHeaderRow() {
+            const thead = document.getElementById('tableHead');
+            return thead && thead.children ? thead.children[0] || null : null;
         }
 
         // The row element for a file row index, or null when that row is
@@ -3446,13 +3552,17 @@ export const scripts = `
             return tbody.children[position] || null;
         }
 
-        // The <td> the cursor sits on, or null when it is off screen
+        // The cell the cursor sits on, or null when it is off screen. A <th> when
+        // the cursor is in the column-header row, otherwise a <td>
         function getCursorCell() {
             const position = getCursorPosition();
             if (!position) return null;
-            const tr = getRenderedRow(cursorActualRowIndex);
+            const tr = position.row === HEADER_ROW_INDEX
+                ? getHeaderRow()
+                : getRenderedRow(cursorActualRowIndex);
             if (!tr || !tr.children) return null;
-            // Offset by one: the row-number cell comes before the data cells
+            // Offset by one: the row-number cell comes before the data cells,
+            // so column -1 lands on the row-number cell itself
             return tr.children[position.column + 1] || null;
         }
 
@@ -3477,7 +3587,9 @@ export const scripts = `
         // arrow key back to the row the user just left.
         function setCursorRow(actualRowIndex) {
             const columns = getVisibleColumns();
-            const columnPath = columns.some(col => col.path === cursorColumnPath)
+            const keepsColumn = cursorColumnPath === ROW_HEADER_COLUMN_PATH ||
+                columns.some(col => col.path === cursorColumnPath);
+            const columnPath = keepsColumn
                 ? cursorColumnPath
                 : (columns[0] ? columns[0].path : null);
             if (columnPath === null) {
@@ -3520,6 +3632,13 @@ export const scripts = `
             const container = document.getElementById('tableContainer');
             if (!container || !container.getBoundingClientRect || !td.getBoundingClientRect) return;
 
+            // A cell in one of those sticky headers is never out of view along
+            // the axis it is stuck to, and it measures as if it were flush
+            // against that edge - "scrolling it into view" would drag the table
+            // back to the top or the far left on every keystroke
+            const isHeaderCell = td.tagName === 'TH';
+            const isRowNumberCell = td.classList && td.classList.contains('row-header');
+
             const cell = td.getBoundingClientRect();
             const view = container.getBoundingClientRect();
 
@@ -3536,16 +3655,20 @@ export const scripts = `
             const top = view.top + headerHeight;
             const left = view.left + rowNumberWidth;
 
-            if (cell.top < top) {
-                container.scrollTop -= top - cell.top;
-            } else if (cell.bottom > view.bottom) {
-                container.scrollTop += cell.bottom - view.bottom;
+            if (!isHeaderCell) {
+                if (cell.top < top) {
+                    container.scrollTop -= top - cell.top;
+                } else if (cell.bottom > view.bottom) {
+                    container.scrollTop += cell.bottom - view.bottom;
+                }
             }
 
-            if (cell.left < left) {
-                container.scrollLeft -= left - cell.left;
-            } else if (cell.right > view.right) {
-                container.scrollLeft += cell.right - view.right;
+            if (!isRowNumberCell) {
+                if (cell.left < left) {
+                    container.scrollLeft -= left - cell.left;
+                } else if (cell.right > view.right) {
+                    container.scrollLeft += cell.right - view.right;
+                }
             }
         }
 
@@ -3553,24 +3676,36 @@ export const scripts = `
             if (actualRowIndex === undefined || actualRowIndex === null || !columnPath) return;
             cursorActualRowIndex = actualRowIndex;
             cursorColumnPath = columnPath;
-            // The cursor's row is the selected row: one highlight, one story
-            selectRow(actualRowIndex);
+            // The cursor's row is the selected row: one highlight, one story.
+            // The column-header row is not a row of the file, so nothing is
+            // selected while the cursor sits up there.
+            if (actualRowIndex === HEADER_ROW_INDEX) {
+                clearRowSelection();
+            } else {
+                selectRow(actualRowIndex);
+            }
             applyCursorHighlight(scrollIntoView);
+            showCursorHint();
         }
 
         function clearCellCursor() {
             cursorActualRowIndex = null;
             cursorColumnPath = null;
             applyCursorHighlight(false);
+            hideCursorHint();
         }
 
         // Display coordinates -> stored cursor
         function setCursorPosition(position, scrollIntoView) {
             if (!position) return;
-            const actualRowIndex = (currentData.rowIndices || [])[position.row];
-            const column = getVisibleColumns()[position.column];
-            if (actualRowIndex === undefined || !column) return;
-            setCellCursor(actualRowIndex, column.path, scrollIntoView);
+            const actualRowIndex = position.row === HEADER_ROW_INDEX
+                ? HEADER_ROW_INDEX
+                : (currentData.rowIndices || [])[position.row];
+            const columnPath = position.column === ROW_HEADER_COLUMN_INDEX
+                ? ROW_HEADER_COLUMN_PATH
+                : (getVisibleColumns()[position.column] || {}).path;
+            if (actualRowIndex === undefined || !columnPath) return;
+            setCellCursor(actualRowIndex, columnPath, scrollIntoView);
         }
 
         // Render enough chunks for a display position to have a row element
@@ -3606,7 +3741,7 @@ export const scripts = `
             const current = getCursorPosition();
             let next;
             if (current) {
-                next = moveGridCursor(current, move, rowCount, columnCount, getTablePageSize());
+                next = moveGridCursor(current, move, rowCount, columnCount, getTablePageSize(), GRID_HEADER_BOUNDS);
             } else {
                 // Entering the grid: land on the selected row if there is one,
                 // else the first cell - the first keystroke doesn't also move
@@ -3617,7 +3752,8 @@ export const scripts = `
             }
             if (!next) return null;
 
-            ensureRowRendered(next.row);
+            // The header row is always rendered; only data rows come in chunks
+            if (next.row !== HEADER_ROW_INDEX) ensureRowRendered(next.row);
             setCursorPosition(next, true);
             return next;
         }
@@ -3625,6 +3761,8 @@ export const scripts = `
         // Enter/F2 on the cursor cell. Objects and arrays have no inline editor,
         // so there the equivalent action is the one double-click does: expand
         function editCursorCell() {
+            // Header cells hold a column name and a row number, not file data
+            if (cursorZone() !== 'cell') return;
             const td = getCursorCell();
             if (!td || !td.classList || td.classList.contains('editing')) return;
             if (td.classList.contains('expandable-cell')) {
@@ -3632,6 +3770,130 @@ export const scripts = `
                 return;
             }
             editCell(null, td, cursorActualRowIndex, cursorColumnPath);
+        }
+
+        // --- Header-cell actions ------------------------------------------
+
+        // S on a column header cycles the display sort the same way the Sort
+        // submenu does, one key instead of three clicks: off -> ascending ->
+        // descending -> off. The display sort, not the permanent one - a
+        // keystroke should not rewrite the file.
+        function cycleCursorColumnSort() {
+            if (cursorZone() !== 'columnHeader') return;
+            // The column may have been hidden out from under the cursor
+            if (!getCursorPosition()) return;
+            const sort = currentData.displaySort;
+            if (!sort || sort.columnPath !== cursorColumnPath) {
+                setDisplaySort(cursorColumnPath, 'asc');
+            } else if (sort.direction === 'asc') {
+                setDisplaySort(cursorColumnPath, 'desc');
+            } else {
+                setDisplaySort(null, null);
+            }
+        }
+
+        // U / D on a row-number cell moves that row up or down the file, the
+        // keyboard equivalent of dragging it. Like the drag, it swaps with the
+        // neighbour on screen rather than in the file, so a search filter moves
+        // the row past what the user can actually see.
+        function moveCursorRowInFile(direction) {
+            if (cursorZone() !== 'rowHeader') return;
+            const position = getCursorPosition();
+            if (!position) return; // The row was filtered out from under it
+            // A display sort makes screen order and file order disagree, so
+            // there is no honest answer to "move this row up"
+            if (currentData.displaySort) return;
+
+            const rowIndices = currentData.rowIndices || [];
+            const neighbour = rowIndices[position.row + direction];
+            if (neighbour === undefined) return; // Already at the end of the file
+
+            // handleReorderRows moves fromIndex to where toIndex sits, and
+            // dropping a row onto the one just below it is a no-op - so moving
+            // down is sent as "pull the row below this one up over it"
+            const fromIndex = direction < 0 ? cursorActualRowIndex : neighbour;
+            const toIndex = direction < 0 ? neighbour : cursorActualRowIndex;
+            vscode.postMessage({ type: 'reorderRows', fromIndex: fromIndex, toIndex: toIndex });
+
+            // Follow the row to the index it is about to land on, so the cursor
+            // is still on it when the update comes back
+            setCellCursor(direction < 0 ? toIndex : toIndex + 1, ROW_HEADER_COLUMN_PATH, true);
+        }
+
+        // Delete on a row-number cell. The extension asks for confirmation
+        // before it removes anything, so this stays a single keystroke.
+        function deleteCursorRow() {
+            if (cursorZone() !== 'rowHeader') return;
+            // Never delete a row the cursor is not actually sitting on screen
+            if (!getCursorPosition()) return;
+            vscode.postMessage({ type: 'deleteRow', rowIndex: cursorActualRowIndex });
+        }
+
+        // --- The hint that says what a header cell can do -------------------
+
+        function hideCursorHint() {
+            if (cursorHintTimeout) {
+                clearTimeout(cursorHintTimeout);
+                cursorHintTimeout = null;
+            }
+            const hint = document.getElementById('cursorHint');
+            if (!hint) return;
+            hint.style.display = 'none';
+            hint.dataset.hint = '';
+        }
+
+        function appendHintKey(hint, label) {
+            const key = document.createElement('kbd');
+            key.textContent = label;
+            hint.appendChild(key);
+        }
+
+        function appendHintText(hint, text) {
+            const span = document.createElement('span');
+            span.textContent = text;
+            hint.appendChild(span);
+        }
+
+        // Spell out what the cursor's header cell can do, then get out of the
+        // way. Re-shown (and the timer restarted) every time the cursor moves
+        // within a header, so it is there while the user is looking around and
+        // gone once they settle.
+        function showCursorHint() {
+            const zone = cursorZone();
+            if (zone !== 'columnHeader' && zone !== 'rowHeader') {
+                hideCursorHint();
+                return;
+            }
+            const hint = document.getElementById('cursorHint');
+            if (!hint) return;
+
+            hint.innerHTML = '';
+            if (zone === 'columnHeader') {
+                appendHintKey(hint, 'S');
+                appendHintText(hint, 'sort this column: ascending → descending → off');
+            } else {
+                if (currentData.displaySort) {
+                    appendHintText(hint, 'Sorted view - clear the sort to move rows');
+                } else {
+                    appendHintKey(hint, 'U');
+                    appendHintKey(hint, 'D');
+                    appendHintText(hint, 'move this row up / down the file');
+                }
+                appendHintKey(hint, 'Delete');
+                appendHintText(hint, 'delete this row');
+            }
+            hint.dataset.hint = zone;
+            hint.style.display = 'flex';
+
+            if (cursorHintTimeout) clearTimeout(cursorHintTimeout);
+            cursorHintTimeout = setTimeout(() => {
+                cursorHintTimeout = null;
+                const el = document.getElementById('cursorHint');
+                if (el) {
+                    el.style.display = 'none';
+                    el.dataset.hint = '';
+                }
+            }, CURSOR_HINT_TIMEOUT_MS);
         }
 
         // Grid keys are ignored while another surface owns the keystroke: another
@@ -4449,6 +4711,7 @@ export const scripts = `
             // Hide Find/Replace bar when switching views (only shown in table view)
             if (currentView === 'table' && viewType !== 'table') {
                 closeFindReplaceBar();
+                hideCursorHint(); // The keys it names only work in the table
             }
             
             // Flush pending edits when switching away from pretty print view (without saving).
