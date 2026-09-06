@@ -3066,8 +3066,11 @@ export const scripts = `
                 selectedRowElement = tr;
             }
 
-            // Click to select the row so it stays visible while scrolling horizontally
-            tr.addEventListener('click', () => selectRow(actualRowIndex));
+            // Click to select the row so it stays visible while scrolling
+            // horizontally. Data cells set the cursor themselves before this
+            // runs; the row-number cell has no handler of its own, so this is
+            // what keeps the cursor on the row the user just clicked
+            tr.addEventListener('click', () => setCursorRow(actualRowIndex));
 
             // Add row number cell
             const rowNumCell = document.createElement('td');
@@ -3166,11 +3169,12 @@ export const scripts = `
             const start = tableRenderState.renderedRows;
             const end = Math.min(start + TABLE_CHUNK_SIZE, currentData.rows.length);
 
+            // Every row gets an element, including the falsy ones: a bare JSONL
+            // line of 0, false, "" or null is a real row. Skipping any of them
+            // would shift every later row up, and the cell cursor, the sort-jump
+            // notice and Find/Replace all reach a row by its position in tbody
             for (let rowIndex = start; rowIndex < end; rowIndex++) {
-                const row = currentData.rows[rowIndex];
-                if (row) { // Ensure row exists before creating table row
-                    fragment.appendChild(createTableRow(row, rowIndex));
-                }
+                fragment.appendChild(createTableRow(currentData.rows[rowIndex], rowIndex));
             }
 
             tbody.appendChild(fragment);
@@ -3334,7 +3338,7 @@ export const scripts = `
 
             tr.scrollIntoView({ block: 'center' });
 
-            selectRow(parseInt(tr.dataset.actualIndex, 10));
+            setCursorRow(parseInt(tr.dataset.actualIndex, 10));
 
             // Restart the flash even if the row still carries the class
             tr.classList.remove('row-flash');
@@ -3464,6 +3468,23 @@ export const scripts = `
             if (selectedRowElement && selectedRowElement.classList) {
                 selectedRowElement.classList.add('selected');
             }
+        }
+
+        // Move the cursor onto a row without naming a column - the row-number
+        // cell and the sort-jump notice pick a whole row. The cursor keeps its
+        // column when that column is still on screen. Leaving it behind on
+        // another row would put two highlights on screen and send the next
+        // arrow key back to the row the user just left.
+        function setCursorRow(actualRowIndex) {
+            const columns = getVisibleColumns();
+            const columnPath = columns.some(col => col.path === cursorColumnPath)
+                ? cursorColumnPath
+                : (columns[0] ? columns[0].path : null);
+            if (columnPath === null) {
+                selectRow(actualRowIndex);
+                return;
+            }
+            setCellCursor(actualRowIndex, columnPath, false);
         }
 
         function clearRowSelection() {
@@ -4146,9 +4167,10 @@ export const scripts = `
         }
 
         function getNestedValue(obj, path) {
-            if (!obj || !path) return undefined;
-            
-            // Handle null/undefined object
+            if (!path) return undefined;
+
+            // Handle null/undefined object. Only these: 0, false and "" are
+            // values a "(value)" column has to be able to show
             if (obj === null || obj === undefined) {
                 return undefined;
             }

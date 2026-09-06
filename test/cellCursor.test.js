@@ -144,7 +144,8 @@ const harness = scripts + `
     getCursorPosition: getCursorPosition,
     getCursorCell: getCursorCell,
     getSelectedRow: () => selectedRowActualIndex,
-    setCellCursor: setCellCursor
+    setCellCursor: setCellCursor,
+    jumpToDisplayRow: jumpToDisplayRow
 };`;
 const webview = new Function(...Object.keys(sandbox), harness)(...Object.values(sandbox));
 
@@ -427,5 +428,84 @@ assert.deepStrictEqual(webview.getCursorPosition(), { row: 0, column: 0 },
 keydown('ArrowDown');
 assert.deepStrictEqual(webview.getCursor(), { row: 0, column: 'a' },
     'moving down in a filtered view follows the display order, not the file order');
+
+// --- The cursor follows a whole-row selection ---------------------------
+
+// The row-number cell is the one cell with no cursor handler of its own, so a
+// click on it only reaches the row. The cursor has to come along, or the row
+// highlight and the cell highlight end up on different rows and the next arrow
+// key jumps back to the row the user just left.
+webview.setCurrentData(tableData());
+webview.renderRows();
+webview.setCellCursor(0, 'b', false);
+fire(rows()[2], 'click'); // a click on the row-number cell bubbles to the row
+assert.strictEqual(webview.getSelectedRow(), 2, 'clicking the row number selects that row');
+assert.deepStrictEqual(webview.getCursor(), { row: 2, column: 'b' },
+    'the cursor moves to the clicked row and keeps its column');
+assert.strictEqual(cursorCells().length, 1, 'exactly one cell carries the cursor');
+assert.strictEqual(cursorCells()[0], cellAt(2, 1), 'the one cursor is on the clicked row');
+keydown('ArrowDown');
+assert.deepStrictEqual(webview.getCursor(), { row: 2, column: 'b' },
+    'the next arrow key moves on from the clicked row, not from the old cursor');
+
+// Clicking a data cell still names its own column: the cell handler runs first
+// and the row handler it bubbles into must not drag the cursor back
+webview.setCellCursor(0, 'a', false);
+fire(cellAt(1, 1), 'click');
+fire(rows()[1], 'click');
+assert.deepStrictEqual(webview.getCursor(), { row: 1, column: 'b' },
+    'a cell click keeps the column it named');
+
+// The sort-jump notice's "Jump to row" selects a row the same way
+webview.setCellCursor(0, 'b', false);
+webview.jumpToDisplayRow(2);
+assert.strictEqual(webview.getSelectedRow(), 2, 'jumping to a row selects it');
+assert.deepStrictEqual(webview.getCursor(), { row: 2, column: 'b' },
+    'jumping to a row brings the cursor with it');
+
+// A column that has since been hidden cannot hold the cursor - it falls back
+// to the first visible one rather than landing off screen
+const jumpHidden = tableData();
+jumpHidden.columns[1].visible = false;
+webview.setCurrentData(jumpHidden);
+webview.renderRows();
+webview.setCellCursor(0, 'b', false);
+fire(rows()[1], 'click');
+assert.deepStrictEqual(webview.getCursor(), { row: 1, column: 'a' },
+    'a hidden column falls back to the first visible one');
+
+// --- Falsy rows ---------------------------------------------------------
+
+// A bare-value file: every line is a JSON scalar, so there is one "(value)"
+// column. 0, false and "" are rows like any other - dropping one would shift
+// every later row up, and the cursor reaches a row by its position in tbody.
+const bareRows = [10, 0, 30, false, ''];
+webview.setCurrentData({
+    rows: bareRows,
+    allRows: bareRows,
+    rowIndices: [0, 1, 2, 3, 4],
+    columns: [{ path: '(value)', displayName: '(value)', visible: true }],
+    displaySort: null
+});
+webview.renderRows();
+assert.strictEqual(rows().length, 5, 'a falsy row still gets a row element');
+assert.deepStrictEqual(rows().map(tr => tr.dataset.actualIndex), ['0', '1', '2', '3', '4'],
+    'the rendered rows line up with the file rows');
+assert.deepStrictEqual(allCells().filter(td => !td.classList.contains('row-header')).map(td => td.textContent),
+    ['10', '0', '30', 'false', '""'], 'a falsy bare value renders as itself, not as an empty cell');
+
+// The cursor now resolves to the row it names, and an edit is written there
+webview.setCellCursor(2, '(value)', false);
+assert.strictEqual(webview.getCursorCell(), cellAt(2, 0), 'the cursor is on the row it names');
+posted.length = 0;
+keydown('Enter');
+editing = stubDocument.querySelector('td.editing');
+assert.strictEqual(editing, cellAt(2, 0), 'the editor opens on the cursor cell');
+assert.strictEqual(editing.children[0].value, '30', 'the editor starts from that row\'s value');
+editing.children[0].value = '999';
+dispatchKeydown(editing.children[0], 'Enter');
+assert.deepStrictEqual(posted[posted.length - 1], {
+    type: 'updateCell', rowIndex: 2, columnPath: '(value)', value: '999'
+}, 'the edit is written to the row the cursor was on');
 
 console.log('cellCursor tests passed');
