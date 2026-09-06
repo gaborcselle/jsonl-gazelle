@@ -639,7 +639,7 @@ assert.strictEqual(webview.cursorZone(), 'rowHeader', 'left out of the first col
 assert.strictEqual(webview.getCursorCell(), rows()[1].children[0], 'the cursor is on that row\'s number cell');
 assert.strictEqual(webview.getSelectedRow(), 1, 'the row is still the selected one');
 assert.strictEqual(hintElement().dataset.hint, 'rowHeader', 'the row-number hint is showing');
-assert.deepStrictEqual(hintKeys(), ['⇧↑', '⇧↓', 'Delete'], 'it names the move and delete keys');
+assert.deepStrictEqual(hintKeys(), ['U', 'D', 'Delete'], 'it names the move and delete keys');
 assert.ok(/move this row/.test(hintText()) && /delete this row/.test(hintText()),
     'and says what each of them does');
 
@@ -651,41 +651,49 @@ assert.strictEqual(webview.getCursorCell(), rows()[1].children[0],
 assert.ok(rows()[1].children[0].classList.contains('cell-cursor'), 'and keeps its highlight');
 assert.strictEqual(cursorCells().length, 1, 'the rebuilt table carries exactly one cursor');
 
-// Shift+Up hands the row to the reorder the drag uses, and follows it
+// U hands the row to the reorder the drag uses, and follows it
 posted.length = 0;
-assert.ok(keydown('ArrowUp', { shiftKey: true }), 'Shift+Up on a row number is consumed');
+assert.ok(keydown('u'), 'U on a row number is consumed');
 assert.deepStrictEqual(posted, [{ type: 'reorderRows', fromIndex: 1, toIndex: 0 }],
-    'Shift+Up moves the row one place up the file');
+    'U moves the row one place up the file');
 assert.deepStrictEqual(webview.getCursor(), { row: 0, column: ROW_HEADER_COLUMN },
     'the cursor follows the row to where it lands');
 
-// Shift+Down is sent as "pull the row below this one up over it" - dropping a
-// row onto its own next neighbour would be a no-op
+// D is sent as "pull the row below this one up over it" - dropping a row onto
+// its own next neighbour would be a no-op
 webview.setCellCursor(1, ROW_HEADER_COLUMN, false);
 posted.length = 0;
-keydown('ArrowDown', { shiftKey: true });
+keydown('D');
 assert.deepStrictEqual(posted, [{ type: 'reorderRows', fromIndex: 2, toIndex: 1 }],
-    'Shift+Down moves the row one place down the file');
+    'D moves the row one place down the file, upper case too');
 assert.deepStrictEqual(webview.getCursor(), { row: 2, column: ROW_HEADER_COLUMN },
     'the cursor follows it down too');
 
 // Neither end of the file has anywhere to go
 webview.setCellCursor(0, ROW_HEADER_COLUMN, false);
 posted.length = 0;
-keydown('ArrowUp', { shiftKey: true });
+keydown('u');
 assert.deepStrictEqual(posted, [], 'the first row cannot move up');
 webview.setCellCursor(2, ROW_HEADER_COLUMN, false);
-keydown('ArrowDown', { shiftKey: true });
+keydown('d');
 assert.deepStrictEqual(posted, [], 'the last row cannot move down');
 
-// Unshifted arrows still move the cursor, not the row
+// Arrow keys still move the cursor, never the row
 webview.setCellCursor(1, ROW_HEADER_COLUMN, false);
 posted.length = 0;
 keydown('ArrowDown');
-assert.deepStrictEqual(posted, [], 'a bare arrow key moves nothing in the file');
+assert.deepStrictEqual(posted, [], 'an arrow key moves nothing in the file');
 assert.deepStrictEqual(webview.getCursor(), { row: 2, column: ROW_HEADER_COLUMN }, 'it moves the cursor');
 
+// U and D only bind on a row number - a data cell must not reorder the file
+webview.setCellCursor(1, 'b', false);
+posted.length = 0;
+assert.ok(!keydown('u'), 'U in a data cell is not the grid\'s key');
+assert.ok(!keydown('d'), 'nor is D');
+assert.deepStrictEqual(posted, [], 'and neither moves anything');
+
 // Delete asks the extension to remove the row (which confirms before it does)
+webview.setCellCursor(2, ROW_HEADER_COLUMN, false);
 posted.length = 0;
 assert.ok(keydown('Delete'), 'Delete on a row number is consumed');
 assert.deepStrictEqual(posted, [{ type: 'deleteRow', rowIndex: 2 }], 'Delete removes the cursor row');
@@ -718,7 +726,7 @@ webview.setCellCursor(2, ROW_HEADER_COLUMN, false);
 posted.length = 0;
 keydown('Delete');
 assert.deepStrictEqual(posted, [], 'Delete must not remove a row the search has filtered away');
-keydown('ArrowUp', { shiftKey: true });
+keydown('u');
 assert.deepStrictEqual(posted, [], 'and it must not be moved either');
 
 // A display sort makes screen order and file order disagree, so there is no
@@ -730,7 +738,7 @@ webview.setCellCursor(1, ROW_HEADER_COLUMN, false);
 assert.deepStrictEqual(hintKeys(), ['Delete'], 'a sorted view offers only the delete key');
 assert.ok(/clear the sort/.test(hintText()), 'and says why the move keys are gone');
 posted.length = 0;
-keydown('ArrowUp', { shiftKey: true });
+keydown('u');
 assert.deepStrictEqual(posted, [], 'a sorted view must not reorder the file');
 
 // --- Clicking the row number ----------------------------------------------

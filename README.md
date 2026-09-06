@@ -20,7 +20,7 @@ Fast JSONL viewer / editor for VS Code with advanced features including Table Vi
 
 ## What's new
 
-- *v0.7.0*: The cell cursor now reaches the headers — arrow up into a column header and press `S` to cycle its sort, arrow left into a row number and move or delete that row from the keyboard. A hint names the keys as you arrive, then fades
+- *v0.7.0*: The cell cursor now reaches the headers — arrow up into a column header and press `S` to cycle its sort, arrow left into a row number and press `U` / `D` to move that row or `Delete` to remove it. A hint names the keys as you arrive, then fades
 - *v0.6.3*: Spreadsheet keyboard navigation in Table View — arrow keys move a cell cursor, `Enter` edits it, `Tab` advances to the next cell
 - *v0.6.2*: Sort by column, with timestamps and currency amounts detected automatically; hidden columns are now counted on the row-number header and unhidden with one click
 - *v0.6.1*: Updated dependencies
@@ -44,7 +44,7 @@ Fast JSONL viewer / editor for VS Code with advanced features including Table Vi
 - **Column Expansion**: Click ▼ to expand objects/arrays into separate columns (e.g., `user.name`, `orders[0]`)
 - **Column Management**: Right-click context menu on table headers to add, remove, or toggle column visibility. Hidden columns are counted by a badge on the row-number header — click it to bring them back
 - **Spreadsheet Keyboard Navigation**: Click any cell in Table View to place a cell cursor, then drive the table from the keyboard — arrow keys move a cell at a time, `Enter` edits the cell under the cursor, `Tab` advances to the next one
-- **Keyboard Header Actions**: Arrow off the top of the grid onto a column header and `S` cycles that column's sort; arrow off the left onto a row number and `⇧↑` / `⇧↓` move that row through the file while `Delete` removes it. A hint appears with the cursor to name the keys, and fades once you have read it
+- **Keyboard Header Actions**: Arrow off the top of the grid onto a column header and `S` cycles that column's sort; arrow off the left onto a row number and `U` / `D` move that row up and down the file while `Delete` removes it. A hint appears with the cursor to name the keys, and fades once you have read it
 - **Sorting**: Right-click a column header and open the **Sort** submenu — **Display Sorted** reorders just the view and leaves the file alone, **Sort Rows** reorders the file itself (undo with `Ctrl`/`Cmd+Z`). Values are typed automatically, so timestamps sort chronologically and amounts like `$1,200.00` sort by value rather than as text
 - **JSONL-Aware Diff**: Diff a file against Git HEAD or another JSONL file with row alignment and field-level change highlighting — edited rows show exactly which fields changed (`old → new`) instead of a wall of raw JSON
 - **Memory Efficient**: All processing happens in-memory without creating separate files
@@ -56,7 +56,7 @@ Fast JSONL viewer / editor for VS Code with advanced features including Table Vi
 2. The file will automatically open in the JSONL Gazelle viewer
 3. Table View: Click ▼ buttons in column headers or double-click expandable cells to expand objects/arrays into separate columns
 4. Table View keyboard navigation: Click a cell (or press an arrow key) to place the cell cursor, then use `↑` `↓` `←` `→` to move a cell at a time, `Home` / `End` for the first/last column, `Page Up` / `Page Down` for a screenful of rows, `Enter` (or `F2`) to edit the cell, `Tab` / `Shift+Tab` to move to the next/previous cell, and `Esc` to put the cursor away. While editing, `Enter` saves and steps down a row, `Tab` saves and steps to the next cell, and `Esc` discards the edit
-5. Table View header actions: keep pressing `↑` past the first row to put the cursor on a column header, where `S` cycles that column's display sort (ascending → descending → off). Press `←` past the first column to put it on a row number, where `⇧↑` / `⇧↓` move that row up and down the file and `Delete` removes it (moving is unavailable while the view is display-sorted, since screen order and file order no longer match). Both headers show a hint naming their keys, which fades after a few seconds
+5. Table View header actions: keep pressing `↑` past the first row to put the cursor on a column header, where `S` cycles that column's display sort (ascending → descending → off). Press `←` past the first column to put it on a row number, where `U` and `D` move that row up and down the file and `Delete` removes it (moving is unavailable while the view is display-sorted, since screen order and file order no longer match). Both headers show a hint naming their keys, which fades after a few seconds
 6. Pretty Print view: You can edit inline
 7. Pretty Print navigation: Use `Ctrl+Alt+↑` / `Ctrl+Alt+↓` (`Cmd+Option+↑` / `Cmd+Option+↓` on macOS) to jump between JSONL entries
 8. Raw view navigation: Use `Ctrl+Alt+↑` / `Ctrl+Alt+↓` (`Cmd+Option+↑` / `Cmd+Option+↓` on macOS) to jump to the previous/next JSONL line

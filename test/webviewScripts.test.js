@@ -70,6 +70,14 @@ assert.ok(styles.includes('td.cell-cursor'), 'the cell cursor needs a style');
     assert.ok(scripts.includes('function ' + name), 'expected function ' + name + ' in webview scripts');
 });
 assert.ok(styles.includes('th.cell-cursor'), 'the cursor on a column header needs a style');
+
+// The sort arrow aligns against the column-name span, and that span clips its
+// overflow - which makes its baseline its bottom edge. Both have to be centred
+// or the arrow hangs below the name it belongs to.
+assert.ok(/headerContent\.style\.verticalAlign = 'middle'/.test(scripts),
+    'the column-name span must be centred so the sort arrow lines up with it');
+assert.ok(/\.sort-indicator\s*\{[^}]*vertical-align:\s*middle/.test(styles),
+    'and the sort arrow must be centred too');
 assert.ok(styles.includes('.cursor-hint'), 'the header hint needs a style');
 
 // The row-number column's sentinel path is a NUL so no real JSON key can
@@ -81,7 +89,8 @@ assert.ok(!scripts.includes(String.fromCharCode(0)),
 assert.ok(scripts.includes("'\\u0000row-header'"),
     'the row-header sentinel must reach the webview as an escape');
 assert.ok(getHtmlTemplate({}).includes('id="cursorHint"'), 'the header hint needs an element to render into');
-assert.ok(/e\.key === 's' \|\| e\.key === 'S'/.test(scripts), 'S must cycle the sort from a column header');
+assert.ok(/letter === 's'/.test(scripts), 'S must cycle the sort from a column header');
+assert.ok(/letter === 'u' \|\| letter === 'd'/.test(scripts), 'U and D must move the cursor row in the file');
 assert.ok(/e\.key === 'Delete' \|\| e\.key === 'Backspace'/.test(scripts), 'Delete must remove the cursor row');
 
 console.log('webviewScripts tests passed');

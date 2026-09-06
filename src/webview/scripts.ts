@@ -781,24 +781,26 @@ export const scripts = `
 
             const move = GRID_NAVIGATION_KEYS[e.key];
             if (move) {
-                // On a row-number cell, Shift+Up/Down moves the row itself
-                // rather than the cursor - dragging it, from the keyboard
-                if (zone === 'rowHeader' && e.shiftKey &&
-                    (e.key === 'ArrowUp' || e.key === 'ArrowDown')) {
-                    e.preventDefault();
-                    moveCursorRowInFile(e.key === 'ArrowUp' ? -1 : 1);
-                    return;
-                }
                 e.preventDefault();
                 moveCellCursor(move);
                 return;
             }
 
-            // What the header cells the cursor can reach are for. The hint that
-            // appears with the cursor names both of these.
-            if (zone === 'columnHeader' && (e.key === 's' || e.key === 'S')) {
+            // What the header cells the cursor can reach are for - one letter
+            // each, the way S sorts. The hint that appears with the cursor
+            // names them, and they only bind while the cursor is on a header,
+            // so they cost nothing anywhere else.
+            const letter = typeof e.key === 'string' && e.key.length === 1
+                ? e.key.toLowerCase()
+                : null;
+            if (zone === 'columnHeader' && letter === 's') {
                 e.preventDefault();
                 cycleCursorColumnSort();
+                return;
+            }
+            if (zone === 'rowHeader' && (letter === 'u' || letter === 'd')) {
+                e.preventDefault();
+                moveCursorRowInFile(letter === 'u' ? -1 : 1);
                 return;
             }
             if (zone === 'rowHeader' && (e.key === 'Delete' || e.key === 'Backspace')) {
@@ -2866,6 +2868,10 @@ export const scripts = `
                 headerContent.style.overflow = 'hidden';
                 headerContent.style.textOverflow = 'ellipsis';
                 headerContent.style.maxWidth = '100%';
+                // An inline-block that clips its overflow takes its baseline
+                // from its bottom edge, which drags anything aligned against it
+                // - the sort arrow - below the column name. Centre both instead.
+                headerContent.style.verticalAlign = 'middle';
 
                 if (column.parentPath) {
                     const collapseButton = document.createElement('button');
@@ -3786,10 +3792,10 @@ export const scripts = `
             }
         }
 
-        // Shift+Up / Shift+Down on a row-number cell moves that row through the
-        // file, the keyboard equivalent of dragging it. Like the drag, it swaps
-        // with the neighbour on screen rather than in the file, so a search
-        // filter moves the row past what the user can actually see.
+        // U / D on a row-number cell moves that row up or down the file, the
+        // keyboard equivalent of dragging it. Like the drag, it swaps with the
+        // neighbour on screen rather than in the file, so a search filter moves
+        // the row past what the user can actually see.
         function moveCursorRowInFile(direction) {
             if (cursorZone() !== 'rowHeader') return;
             const position = getCursorPosition();
@@ -3869,9 +3875,9 @@ export const scripts = `
                 if (currentData.displaySort) {
                     appendHintText(hint, 'Sorted view - clear the sort to move rows');
                 } else {
-                    appendHintKey(hint, '⇧↑');
-                    appendHintKey(hint, '⇧↓');
-                    appendHintText(hint, 'move this row in the file');
+                    appendHintKey(hint, 'U');
+                    appendHintKey(hint, 'D');
+                    appendHintText(hint, 'move this row up / down the file');
                 }
                 appendHintKey(hint, 'Delete');
                 appendHintText(hint, 'delete this row');

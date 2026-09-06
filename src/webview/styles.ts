@@ -385,7 +385,11 @@ export const styles = `
             margin-left: 4px;
             font-size: 0.85em;
             opacity: 0.9;
+            /* Centred against the column name, which is centred too - see the
+               vertical-align headerContent gets in buildTableHeader. Its own
+               line box is pinned to the glyph so it cannot drift either. */
             vertical-align: middle;
+            line-height: 1;
         }
 
         .context-menu-item.has-submenu {
