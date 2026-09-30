@@ -4862,7 +4862,56 @@ export const scripts = `
             }, 0);
         }
         
+        // --- shared:pretty-line-numbers (keep in sync with src/jsonl/prettyLineNumbers.ts) ---
+        function findPrettyRecordStarts(lines) {
+            const starts = [];
+            let depth = 0;
+            let inString = false;
+
+            for (let lineIndex = 0; lineIndex < lines.length; lineIndex++) {
+                const line = lines[lineIndex];
+                if (depth <= 0 && !inString && line.trim() !== '') {
+                    starts.push(lineIndex);
+                }
+
+                let escapeNext = false;
+                for (let i = 0; i < line.length; i++) {
+                    const char = line[i];
+                    if (escapeNext) {
+                        escapeNext = false;
+                        continue;
+                    }
+                    if (char === '\\\\') {
+                        escapeNext = inString;
+                        continue;
+                    }
+                    if (char === '"') {
+                        inString = !inString;
+                        continue;
+                    }
+                    if (!inString) {
+                        if (char === '{' || char === '[') {
+                            depth++;
+                        } else if (char === '}' || char === ']') {
+                            depth--;
+                        }
+                    }
+                }
+
+                if (depth < 0) {
+                    depth = 0;
+                }
+                inString = false;
+            }
+
+            return starts;
+        }
+        // --- end shared:pretty-line-numbers ---
+
         let prettyEditor = null;
+        // Above this many lines the Pretty Print gutter rescans after typing
+        // pauses rather than on every keystroke
+        const PRETTY_SYNC_RESCAN_LINES = 50000;
 
         function getMonacoTheme() {
             const body = document.body;
@@ -4907,23 +4956,35 @@ export const scripts = `
                 if (prettyEditor) {
                     prettyEditor.dispose();
                 }
+                clearTimeout(window.prettyRecordStartsTimeout);
 
                 // Use pre-formatted pretty content from Extension Host
                 const prettyContent = currentData.prettyContent || '';
-                const lineMapping = currentData.prettyLineMapping || [];
+
+                // The gutter numbers each record on its first line and leaves
+                // the rest blank. Record starts are recomputed from the
+                // editor's own text on every edit: deleting or pasting a
+                // folded object shifts every later record by many lines, so a
+                // mapping fixed at creation would number the wrong lines.
+                let recordNumberByLine = new Map();
+                let recordStartLines = [];
+                const recomputeRecordStarts = (lines) => {
+                    recordStartLines = findPrettyRecordStarts(lines).map(index => index + 1);
+                    recordNumberByLine = new Map();
+                    recordStartLines.forEach((lineNumber, recordIndex) => {
+                        recordNumberByLine.set(lineNumber, recordIndex + 1);
+                    });
+                };
+                const renderRecordNumber = (lineNumber) => {
+                    const recordNumber = recordNumberByLine.get(lineNumber);
+                    return recordNumber === undefined ? '' : String(recordNumber);
+                };
+                recomputeRecordStarts(prettyContent.split('\\n'));
 
                 prettyEditor = monaco.editor.create(editorContainer, Object.assign(getSharedEditorOptions(), {
                     value: prettyContent,
                     language: 'json',
-                    lineNumbers: lineMapping.length > 0 ? (lineNumber) => {
-                        // Use custom line numbers based on mapping
-                        if (lineNumber <= lineMapping.length) {
-                            const mappedNumber = lineMapping[lineNumber - 1];
-                            // If mappedNumber is 0, don't show line number (empty string)
-                            return mappedNumber === 0 ? '' : mappedNumber.toString();
-                        }
-                        return lineNumber.toString();
-                    } : 'on'
+                    lineNumbers: renderRecordNumber
                 }));
 
                 // Disable JSON validation for JSONL files
@@ -4945,6 +5006,21 @@ export const scripts = `
                 // Add change listener with debounce
                 prettyEditor.onDidChangeModelContent(() => {
                     prettyEditorModified = true;
+                    // Rescanning is linear in the text, so on a large file a
+                    // burst of keystrokes is coalesced into one rescan
+                    clearTimeout(window.prettyRecordStartsTimeout);
+                    const refreshGutter = () => {
+                        if (!prettyEditor || !prettyEditor.getModel()) return;
+                        recomputeRecordStarts(prettyEditor.getModel().getLinesContent());
+                        // Monaco only re-asks for the numbers of lines it
+                        // re-renders; a fresh function forces the whole gutter
+                        prettyEditor.updateOptions({ lineNumbers: (lineNumber) => renderRecordNumber(lineNumber) });
+                    };
+                    if (prettyEditor.getModel().getLineCount() > PRETTY_SYNC_RESCAN_LINES) {
+                        window.prettyRecordStartsTimeout = setTimeout(refreshGutter, 150);
+                    } else {
+                        refreshGutter();
+                    }
                     clearTimeout(window.prettyEditTimeout);
                     window.prettyEditTimeout = setTimeout(() => {
                         vscode.postMessage({
@@ -4963,7 +5039,7 @@ export const scripts = `
                 });
 
                 const navigatePrettyEntry = (direction) => {
-                    if (!prettyEditor || !Array.isArray(lineMapping) || lineMapping.length === 0) {
+                    if (!prettyEditor || recordStartLines.length === 0) {
                         return;
                     }
 
@@ -4975,16 +5051,14 @@ export const scripts = `
                     let targetLine = currentPosition.lineNumber;
 
                     if (direction > 0) {
-                        for (let line = currentPosition.lineNumber + 1; line <= lineMapping.length; line++) {
-                            if (lineMapping[line - 1] > 0) {
-                                targetLine = line;
-                                break;
-                            }
+                        const next = recordStartLines.find(line => line > currentPosition.lineNumber);
+                        if (next !== undefined) {
+                            targetLine = next;
                         }
                     } else {
-                        for (let line = currentPosition.lineNumber - 1; line >= 1; line--) {
-                            if (lineMapping[line - 1] > 0) {
-                                targetLine = line;
+                        for (let i = recordStartLines.length - 1; i >= 0; i--) {
+                            if (recordStartLines[i] < currentPosition.lineNumber) {
+                                targetLine = recordStartLines[i];
                                 break;
                             }
                         }
