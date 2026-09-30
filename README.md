@@ -20,6 +20,7 @@ Fast JSONL viewer / editor for VS Code with advanced features including Table Vi
 
 ## What's new
 
+- *v0.7.1*: Pretty Print line numbers stay on the right records after edits — deleting or pasting a collapsed object no longer leaves the numbers (and `Ctrl`/`Cmd+Alt+↑/↓` entry jumps) pointing at the wrong lines
 - *v0.7.0*: The cell cursor now reaches the headers — arrow up into a column header and press `S` to cycle its sort, arrow left into a row number and press `U` / `D` to move that row or `Delete` to remove it. A hint names the keys as you arrive, then fades
 - *v0.6.3*: Spreadsheet keyboard navigation in Table View — arrow keys move a cell cursor, `Enter` edits it, `Tab` advances to the next cell
 - *v0.6.2*: Sort by column, with timestamps and currency amounts detected automatically; hidden columns are now counted on the row-number header and unhidden with one click
@@ -57,7 +58,7 @@ Fast JSONL viewer / editor for VS Code with advanced features including Table Vi
 3. Table View: Click ▼ buttons in column headers or double-click expandable cells to expand objects/arrays into separate columns
 4. Table View keyboard navigation: Click a cell (or press an arrow key) to place the cell cursor, then use `↑` `↓` `←` `→` to move a cell at a time, `Home` / `End` for the first/last column, `Page Up` / `Page Down` for a screenful of rows, `Enter` (or `F2`) to edit the cell, `Tab` / `Shift+Tab` to move to the next/previous cell, and `Esc` to put the cursor away. While editing, `Enter` saves and steps down a row, `Tab` saves and steps to the next cell, and `Esc` discards the edit
 5. Table View header actions: keep pressing `↑` past the first row to put the cursor on a column header, where `S` cycles that column's display sort (ascending → descending → off). Press `←` past the first column to put it on a row number, where `U` and `D` move that row up and down the file and `Delete` removes it (moving is unavailable while the view is display-sorted, since screen order and file order no longer match). Both headers show a hint naming their keys, which fades after a few seconds
-6. Pretty Print view: You can edit inline
+6. Pretty Print view: You can edit inline. The gutter numbers each record on its first line, and the numbers follow your edits, including folding, deleting or pasting collapsed objects
 7. Pretty Print navigation: Use `Ctrl+Alt+↑` / `Ctrl+Alt+↓` (`Cmd+Option+↑` / `Cmd+Option+↓` on macOS) to jump between JSONL entries
 8. Raw view navigation: Use `Ctrl+Alt+↑` / `Ctrl+Alt+↓` (`Cmd+Option+↑` / `Cmd+Option+↓` on macOS) to jump to the previous/next JSONL line
 9. Move current line: Use `Alt+↑` / `Alt+↓` (`Option+↑` / `Option+↓` on macOS) to move the current line up or down in the editor
