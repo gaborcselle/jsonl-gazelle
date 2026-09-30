@@ -21,14 +21,7 @@ function makeInitialState() {
   const columns = detectColumns(rows);
   const rawContent = rows.map(r => JSON.stringify(r)).join('\n');
 
-  let prettyContent = '';
-  const prettyLineMapping = [];
-  rows.forEach((row, index) => {
-    const prettyJson = JSON.stringify(row, null, 2);
-    const lines = prettyJson.split('\n');
-    lines.forEach((line, i) => prettyLineMapping.push(i === 0 ? index + 1 : 0));
-    prettyContent += (prettyContent ? '\n' : '') + prettyJson;
-  });
+  const prettyContent = rows.map(r => JSON.stringify(r, null, 2)).join('\n');
 
   return {
     rows,
@@ -38,7 +31,6 @@ function makeInitialState() {
     parsedLines: rows.map((r, i) => ({ data: r, lineNumber: i + 1, rawLine: JSON.stringify(r) })),
     rawContent,
     prettyContent,
-    prettyLineMapping,
     errorCount: 0,
     loadingProgress: null,
     appendCompatible: false,

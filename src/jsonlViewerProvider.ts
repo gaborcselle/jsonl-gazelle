@@ -1995,38 +1995,10 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
         return Math.floor(Math.random() * 10000);
     }
 
-    private convertJsonlToPrettyWithLineNumbers(rows: JsonRow[]): { content: string, lineMapping: number[] } {
-        if (rows.length === 0) {
-            return { content: '', lineMapping: [] };
-        }
-
-        const lineMapping: number[] = [];
-        let content = '';
-
-        rows.forEach((row, index) => {
-            const prettyJson = JSON.stringify(row, null, 2);
-            const lines = prettyJson.split('\n');
-
-            // Only show line number for the first line of each JSON object
-            const originalLineNumber = index + 1;
-            lines.forEach((line, lineIndex) => {
-                if (lineIndex === 0) {
-                    // First line of JSON object - show original line number
-                    lineMapping.push(originalLineNumber);
-                } else {
-                    // Other lines - show empty string (will be handled by Monaco Editor)
-                    lineMapping.push(0);
-                }
-            });
-
-            if (content) {
-                content += '\n' + prettyJson;
-            } else {
-                content = prettyJson;
-            }
-        });
-
-        return { content, lineMapping };
+    private convertJsonlToPretty(rows: JsonRow[]): string {
+        // The webview numbers the records itself, from the editor's current
+        // text, so edits in Pretty Print can't leave the gutter stale
+        return rows.map(row => JSON.stringify(row, null, 2)).join('\n');
     }
 
     private async handlePrettyContentChange(newContent: string, webviewPanel: vscode.WebviewPanel, document: vscode.TextDocument) {
@@ -3035,7 +3007,7 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
                 : this.filteredRows.map((_, index) => index);
 
             // Generate pretty-printed content with line mapping
-            const prettyResult = this.convertJsonlToPrettyWithLineNumbers(this.rows);
+            const prettyContent = this.convertJsonlToPretty(this.rows);
 
             // Load persisted UI preferences (view, wrap text)
             const uiPrefs = this.context.globalState.get<{ lastView?: 'table' | 'json' | 'raw'; wrapText?: boolean }>(this.UI_PREFS_KEY, {});
@@ -3062,8 +3034,7 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
                     searchTerm: this.searchTerm,
                     parsedLines: this.parsedLines || [],
                     rawContent: this.rawContent || '',
-                    prettyContent: prettyResult.content,
-                    prettyLineMapping: prettyResult.lineMapping,
+                    prettyContent: prettyContent,
                     errorCount: this.errorCount,
                     loadingProgress: {
                         loadedLines: this.loadedLines,
