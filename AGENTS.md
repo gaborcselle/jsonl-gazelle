@@ -22,6 +22,7 @@ JSONL Gazelle is a VS Code extension that registers a **custom text editor** (`j
 | `src/jsonl/columns.ts` | `getUnhideableColumns()` — which hidden columns the "Unhide Column" menu may offer (mirrored in `scripts.ts`). |
 | `src/jsonl/prettyLineNumbers.ts` | `findPrettyRecordStarts()` — which lines of the Pretty Print editor begin a record, for its gutter numbers and entry navigation (mirrored in `scripts.ts`). |
 | `src/jsonl/gridNavigation.ts` | `moveGridCursor()` — where the table's keyboard cell cursor lands for each navigation key, including the column-header row and row-number column (mirrored in `scripts.ts`). |
+| `src/jsonl/formatOnSave.ts` | `formatJsonlForSave()` — the optional format-on-save transforms (spacing, single→double quotes). |
 | `test/` | Plain Node test scripts (no framework), run by `npm test`. |
 | `test-data/` | Sample JSONL files plus `generate-large.js` for a ~64 MB stress file. |
 | `tools/screenshots/` | Regenerates the README's `jsonl-gazelle-*.jpg` screenshots from the real webview code via headless Chromium (see its own README.md). Dev-only, excluded from the `.vsix`. |
@@ -96,6 +97,10 @@ VS Code settings (`contributes.configuration` in `package.json`):
 | `jsonl-gazelle.largeFile.partSizeMB` | 50 | Max size of each split part |
 | `jsonl-gazelle.performance.chunkedLoadingThreshold` | 1000 | Line count above which files load progressively |
 | `jsonl-gazelle.performance.maxMemoryRows` | 50000 | Row count above which memory-optimized mode kicks in |
+| `jsonl-gazelle.formatOnSave.spaceOut` | false | On save, `{"id":123}` → `{ "id": 123 }` |
+| `jsonl-gazelle.formatOnSave.convertSingleQuotes` | false | On save, single-quoted strings → double-quoted, on lines that only become valid JSON that way |
+
+Format-on-save is an `onWillSaveTextDocument` hook in `extension.ts` (skipped for delayed auto-save) that runs `formatJsonlForSave()` from `src/jsonl/formatOnSave.ts`. It rewrites the text token by token rather than re-serializing parsed values, so number spellings and key order survive, and it never touches a line that isn't valid JSON afterwards. With both settings off (the default) the file is saved exactly as written.
 
 The webview cannot read VS Code configuration directly — anything the webview needs must be passed through the `update` payload (or the initial HTML).
 

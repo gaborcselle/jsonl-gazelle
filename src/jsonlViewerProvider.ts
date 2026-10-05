@@ -2468,6 +2468,9 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
                 // Save the document to update dirty state indicator (only for save events)
                 if (isSave) {
                     await document.save();
+                    // Format-on-save may have rewritten the text; parse what was actually saved
+                    newContent = document.getText();
+                    this.rawContent = newContent;
                 }
                 
                 // Update internal data structures for both save and content changes
