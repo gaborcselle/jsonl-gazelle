@@ -3,6 +3,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { JsonlViewerProvider } from './jsonlViewerProvider';
 import { registerDiffCommands } from './jsonlDiffProvider';
+import { formatJsonlForSave } from './jsonl/formatOnSave';
 
 function getNonce(): string {
     const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
@@ -92,6 +93,26 @@ export function activate(context: vscode.ExtensionContext) {
 
     // Register JSONL-aware diff commands
     registerDiffCommands(context);
+
+    // Optional format-on-save (off by default: the file is saved as written)
+    context.subscriptions.push(vscode.workspace.onWillSaveTextDocument(e => {
+        const ext = path.extname(e.document.uri.path).toLowerCase();
+        // Like VS Code's own format-on-save, skip delayed auto-save so text isn't rewritten mid-typing
+        if ((ext !== '.jsonl' && ext !== '.ndjson') || e.reason === vscode.TextDocumentSaveReason.AfterDelay) {
+            return;
+        }
+        const config = vscode.workspace.getConfiguration('jsonl-gazelle.formatOnSave', e.document.uri);
+        const options = {
+            spaceOut: config.get<boolean>('spaceOut', false),
+            convertSingleQuotes: config.get<boolean>('convertSingleQuotes', false)
+        };
+        const text = e.document.getText();
+        const formatted = formatJsonlForSave(text, options);
+        if (formatted !== text) {
+            const fullRange = new vscode.Range(e.document.positionAt(0), e.document.positionAt(text.length));
+            e.waitUntil(Promise.resolve([vscode.TextEdit.replace(fullRange, formatted)]));
+        }
+    }));
 
     // Register file decoration provider for large files
     const fileDecorationProvider = new LargeFileDecorationProvider();

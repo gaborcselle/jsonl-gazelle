@@ -2,7 +2,7 @@
   "name": "jsonl-gazelle",
   "displayName": "JSONL Gazelle",
   "description": "Fast JSONL / NDJSON viewer / editor for VS Code with advanced features including Table View and Pretty Print view.",
-  "version": "0.7.1",
+  "version": "0.7.2",
   "publisher": "gabor",
   "icon": "jsonl-gazelle.png",
   "engines": {
@@ -131,6 +131,16 @@
           "default": 50000,
           "minimum": 1000,
           "description": "Maximum number of rows kept in memory for very large files. Above this, memory-optimized mode keeps only the most recent rows in the table view."
+        },
+        "jsonl-gazelle.formatOnSave.spaceOut": {
+          "type": "boolean",
+          "default": false,
+          "markdownDescription": "When saving a `.jsonl`/`.ndjson` file, add spaces inside objects and after colons and commas for plain-text readability: `{\"id\":123}` becomes `{ \"id\": 123 }`. Lines that aren't valid JSON are left alone. Off by default, which keeps the file's original formatting."
+        },
+        "jsonl-gazelle.formatOnSave.convertSingleQuotes": {
+          "type": "boolean",
+          "default": false,
+          "markdownDescription": "When saving a `.jsonl`/`.ndjson` file, turn single-quoted strings into double-quoted ones so objects pasted from JavaScript become valid JSON: `{'id': 'a'}` becomes `{\"id\": \"a\"}`. Only applies to lines that aren't valid JSON and become valid after the conversion. Off by default."
         }
       }
     },
@@ -218,7 +228,7 @@
     "compile": "tsc -p ./",
     "bundle": "esbuild src/extension.ts --bundle --outfile=out/extension.js --external:vscode --format=cjs --platform=node --target=node16 --minify",
     "watch": "tsc -watch -p ./",
-    "test": "npm run compile && node test/rowMapping.test.js && node test/sorting.test.js && node test/prettyToJsonl.test.js && node test/diff.test.js && node test/webviewScripts.test.js && node test/sortJumpNotice.test.js && node test/columns.test.js && node test/columnVisibility.test.js && node test/hiddenColumnsBadge.test.js && node test/gridNavigation.test.js && node test/cellCursor.test.js && node test/prettyLineNumbers.test.js",
+    "test": "npm run compile && node test/rowMapping.test.js && node test/sorting.test.js && node test/prettyToJsonl.test.js && node test/diff.test.js && node test/webviewScripts.test.js && node test/sortJumpNotice.test.js && node test/columns.test.js && node test/columnVisibility.test.js && node test/hiddenColumnsBadge.test.js && node test/gridNavigation.test.js && node test/cellCursor.test.js && node test/prettyLineNumbers.test.js && node test/formatOnSave.test.js",
     "lint": "eslint src --ext .ts"
   },
   "devDependencies": {
