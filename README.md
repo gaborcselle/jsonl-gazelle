@@ -20,6 +20,7 @@ Fast JSONL viewer / editor for VS Code with advanced features including Table Vi
 
 ## What's new
 
+- *v0.7.2*: Optional format-on-save, off by default — add spaces for readability (`{"id":123}` → `{ "id": 123 }`) and turn single quotes into double quotes so objects pasted from JavaScript become valid JSON. See [Settings](#settings)
 - *v0.7.1*: Pretty Print line numbers stay on the right records after edits — deleting or pasting a collapsed object no longer leaves the numbers (and `Ctrl`/`Cmd+Alt+↑/↓` entry jumps) pointing at the wrong lines
 - *v0.7.0*: The cell cursor now reaches the headers — arrow up into a column header and press `S` to cycle its sort, arrow left into a row number and press `U` / `D` to move that row or `Delete` to remove it. A hint names the keys as you arrive, then fades
 - *v0.6.3*: Spreadsheet keyboard navigation in Table View — arrow keys move a cell cursor, `Enter` edits it, `Tab` advances to the next cell
@@ -63,6 +64,30 @@ Fast JSONL viewer / editor for VS Code with advanced features including Table Vi
 8. Raw view navigation: Use `Ctrl+Alt+↑` / `Ctrl+Alt+↓` (`Cmd+Option+↑` / `Cmd+Option+↓` on macOS) to jump to the previous/next JSONL line
 9. Move current line: Use `Alt+↑` / `Alt+↓` (`Option+↑` / `Option+↓` on macOS) to move the current line up or down in the editor
 10. Diff view: Run **JSONL Gazelle: Diff with Git HEAD** (command palette, editor title button, or right-click in the Explorer / Source Control view) to see uncommitted changes with per-field highlighting; use **JSONL Gazelle: Compare with JSONL File...** to compare two files. Click a modified row to see the full before/after JSON, and click a `⋯ unchanged lines` separator to reveal hidden context
+
+## Settings
+
+Open VS Code's Settings (`Ctrl`/`Cmd+,`) and search for **JSONL Gazelle**. Settings apply to all files and persist across sessions.
+
+### Format on save
+
+Both options are off by default, which saves the file exactly as written. When turned on, they run every time a `.jsonl` or `.ndjson` file is saved (except delayed auto-save, so text isn't rewritten while you type). Lines that aren't valid JSON are always left alone.
+
+| Setting | Default | What it does |
+|---|---|---|
+| `jsonl-gazelle.formatOnSave.spaceOut` | off | Adds spaces inside objects and after colons and commas for plain-text readability: `{"id":123,"tags":["a","b"]}` becomes `{ "id": 123, "tags": ["a", "b"] }`. Text inside strings and the exact spelling of numbers are kept as is |
+| `jsonl-gazelle.formatOnSave.convertSingleQuotes` | off | Turns single-quoted strings into double-quoted ones, so objects copied from JavaScript become valid JSON: `{'id': 'a'}` becomes `{"id": "a"}`. Only applies to lines that are invalid JSON and become valid after the conversion; apostrophes inside double-quoted strings (`"it's"`) are untouched |
+
+### Large files and performance
+
+| Setting | Default | What it does |
+|---|---|---|
+| `jsonl-gazelle.largeFile.splitThresholdMB` | 100 | File size in MB above which JSONL Gazelle offers to split the file into parts |
+| `jsonl-gazelle.largeFile.partSizeMB` | 50 | Maximum size in MB of each part when splitting |
+| `jsonl-gazelle.performance.chunkedLoadingThreshold` | 1000 | Files with more lines than this load progressively in the background |
+| `jsonl-gazelle.performance.maxMemoryRows` | 50000 | Above this many rows, memory-optimized mode keeps only the most recent rows in the table |
+
+AI provider, API keys and model are set in the in-app settings dialog (gear icon in the toolbar) rather than in VS Code's Settings.
 
 ## Extension Development
 
