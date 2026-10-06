@@ -22,6 +22,7 @@ JSONL Gazelle is a VS Code extension that registers a **custom text editor** (`j
 | `src/jsonl/columns.ts` | `getUnhideableColumns()` — which hidden columns the "Unhide Column" menu may offer (mirrored in `scripts.ts`). |
 | `src/jsonl/prettyLineNumbers.ts` | `findPrettyRecordStarts()` — which lines of the Pretty Print editor begin a record, for its gutter numbers and entry navigation (mirrored in `scripts.ts`). |
 | `src/jsonl/gridNavigation.ts` | `moveGridCursor()` — where the table's keyboard cell cursor lands for each navigation key, including the column-header row and row-number column (mirrored in `scripts.ts`). |
+| `src/jsonl/logLevels.ts` | `getLogLevelCategory()` — which Table view cells get a severity color (a `level`/`severity`-style column holding a level name or pino numeric level); mirrored in `scripts.ts`, applied as `log-level-*` classes in `createTableRow`. |
 | `src/jsonl/formatOnSave.ts` | `formatJsonlForSave()` — the optional format-on-save transforms (spacing, single→double quotes). |
 | `test/` | Plain Node test scripts (no framework), run by `npm test`. |
 | `test-data/` | Sample JSONL files plus `generate-large.js` for a ~64 MB stress file. |

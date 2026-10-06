@@ -3101,6 +3101,55 @@ export const scripts = `
             });
         }
 
+        // --- shared:log-levels (keep in sync with src/jsonl/logLevels.ts) ---
+        const LOG_LEVEL_COLUMN_NAMES = new Set([
+            'level', 'loglevel', 'log_level', 'levelname', 'level_name',
+            'lvl', 'severity', 'severitytext', 'severity_text'
+        ]);
+
+        const LOG_LEVEL_WORDS = {
+            emerg: 'error', emergency: 'error', alert: 'error', panic: 'error',
+            fatal: 'error', critical: 'error', crit: 'error', severe: 'error',
+            error: 'error', err: 'error',
+            warning: 'warn', warn: 'warn',
+            notice: 'info', info: 'info', information: 'info', informational: 'info',
+            debug: 'debug', trace: 'debug', verbose: 'debug',
+            fine: 'debug', finer: 'debug', finest: 'debug'
+        };
+
+        function isLogLevelColumn(columnPath) {
+            if (typeof columnPath !== 'string' || columnPath === '') {
+                return false;
+            }
+            const lower = columnPath.toLowerCase();
+            if (LOG_LEVEL_COLUMN_NAMES.has(lower)) {
+                return true;
+            }
+            const lastDot = lower.lastIndexOf('.');
+            return lastDot !== -1 && LOG_LEVEL_COLUMN_NAMES.has(lower.slice(lastDot + 1));
+        }
+
+        function getLogLevelCategory(columnPath, value) {
+            if (!isLogLevelColumn(columnPath)) {
+                return null;
+            }
+            if (typeof value === 'number') {
+                if (!Number.isFinite(value) || value < 10 || value > 60) {
+                    return null;
+                }
+                if (value >= 50) { return 'error'; }
+                if (value >= 40) { return 'warn'; }
+                if (value >= 30) { return 'info'; }
+                return 'debug';
+            }
+            if (typeof value !== 'string') {
+                return null;
+            }
+            const word = value.trim().toLowerCase();
+            return Object.prototype.hasOwnProperty.call(LOG_LEVEL_WORDS, word) ? LOG_LEVEL_WORDS[word] : null;
+        }
+        // --- end shared:log-levels ---
+
         function createTableRow(row, rowIndex) {
             const tr = document.createElement('tr');
 
@@ -3201,6 +3250,11 @@ export const scripts = `
                     td.textContent = valueStr;
                     td.title = valueStr;
                     td.addEventListener('dblclick', (e) => editCell(e, td, actualRowIndex, column.path));
+                    // Tint log-level cells (level, severity, ...) by severity
+                    const logLevel = getLogLevelCategory(column.path, value);
+                    if (logLevel) {
+                        td.classList.add('log-level-' + logLevel);
+                    }
                 }
 
                 tr.appendChild(td);
