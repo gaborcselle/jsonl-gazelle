@@ -188,6 +188,27 @@ export const styles = `
             color: var(--vscode-list-activeSelectionForeground);
         }
 
+        /* Log-level cells (a level / severity column in structured logs),
+           tinted by severity. tr.selected td is more specific, so a selected
+           row keeps its readable selection colors. */
+        td.log-level-error {
+            color: var(--vscode-charts-red, #f14c4c);
+            font-weight: 600;
+        }
+
+        td.log-level-warn {
+            color: var(--vscode-charts-yellow, #cca700);
+            font-weight: 600;
+        }
+
+        td.log-level-info {
+            color: var(--vscode-charts-green, #89d185);
+        }
+
+        td.log-level-debug {
+            color: var(--vscode-descriptionForeground);
+        }
+
         /* The keyboard cell cursor. An inset outline rather than a background so
            it stays visible on top of the selected row's highlight. Also lands on
            the column headers and the row-number cells, which the cursor can
