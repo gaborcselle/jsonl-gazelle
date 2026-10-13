@@ -280,8 +280,13 @@ export function convertPrettyToJsonl(prettyContent: string): string | null {
             jsonlLines.push(JSON.stringify(JSON.parse(candidate)));
             buffer = '';
         } catch {
-            // Not a complete value yet (e.g. a bare scalar still being typed
-            // or a trailing comma) - keep accumulating lines
+            // Every bracket is closed and no string is open, so no later line
+            // can make this text parse (a missing comma, a trailing comma, a
+            // half-typed bare value). Give up now: accumulating instead
+            // re-parsed an ever-growing buffer at every later record, which
+            // froze the extension host for a minute on a large file whenever
+            // an edit was mid-way.
+            return null;
         }
     }
 

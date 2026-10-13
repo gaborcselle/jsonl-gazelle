@@ -59,4 +59,18 @@ assert.strictEqual(convertPrettyToJsonl('{\n  "a": 1,\n}'), null);
 assert.strictEqual(convertPrettyToJsonl('{\n  "a": 1\n}\ngarbage'), null);
 assert.strictEqual(convertPrettyToJsonl('{\n  "a": "unterminated\n}'), null);
 
+// A broken record early in a large file fails fast: no later line can fix
+// it, and re-parsing a growing buffer at every record took about a minute on
+// 60,000 records - on every debounced keystroke in Pretty Print
+{
+    const records = [];
+    for (let i = 0; i < 20000; i++) {
+        records.push(JSON.stringify({ id: i, tag: 't' + i }, null, 2));
+    }
+    const broken = records.join('\n').replace('"id": 0,', '"id": 0'); // missing comma
+    const started = Date.now();
+    assert.strictEqual(convertPrettyToJsonl(broken), null);
+    assert.ok(Date.now() - started < 1000, 'took ' + (Date.now() - started) + ' ms');
+}
+
 console.log('prettyToJsonl tests passed');
