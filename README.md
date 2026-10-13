@@ -20,6 +20,14 @@ Fast JSONL viewer / editor for VS Code with advanced features including Table Vi
 
 ## What's new
 
+- *v0.7.3*: Bug fixes, several of which could lose data — updating is recommended:
+  - Table and Pretty Print edits now change only the rows you edit. Lines that aren't valid JSON, blank lines, large integer IDs, number spellings like `1.50`, CRLF line endings and the final newline are all kept; before, a single cell edit rewrote the whole file and dropped them
+  - With several JSONL files open, editing one could change another, or even replace it with the other file's rows. Each editor now works on its own file
+  - Large files: an edit made while the file is still loading, or in Pretty Print opened before loading finished, no longer cuts the file short, and a reload during loading no longer mixes in old rows. A half-typed edit in Pretty Print no longer freezes VS Code on a big file
+  - Keys containing dots (`"user.name"`, common in log records) show, sort, edit and export correctly
+  - Find/Replace searches every row, not just the rows scrolled into view; replaces into the right row after the view re-sorts; and keeps text as text (no stray quotes)
+  - Version numbers and IP addresses sort naturally; dragging a column header moves the right column when some columns are hidden; one invalid line no longer sends Table view back to Raw after every change
+  - Split Large File no longer duplicates lines when the disk is slow; Diff with Git HEAD works for files reached through a symlinked folder and for Git LFS files, and lines up large files exactly; CSV export includes keys that appear in only a few rows
 - *v0.7.2*: Optional format-on-save, off by default — add spaces for readability (`{"id":123}` → `{ "id": 123 }`) and turn single quotes into double quotes so objects pasted from JavaScript become valid JSON. See [Settings](#settings)
 - *v0.7.1*: Pretty Print line numbers stay on the right records after edits — deleting or pasting a collapsed object no longer leaves the numbers (and `Ctrl`/`Cmd+Alt+↑/↓` entry jumps) pointing at the wrong lines
 - *v0.7.0*: The cell cursor now reaches the headers — arrow up into a column header and press `S` to cycle its sort, arrow left into a row number and press `U` / `D` to move that row or `Delete` to remove it. A hint names the keys as you arrive, then fades
@@ -85,7 +93,7 @@ Both options are off by default, which saves the file exactly as written. When t
 | `jsonl-gazelle.largeFile.splitThresholdMB` | 100 | File size in MB above which JSONL Gazelle offers to split the file into parts |
 | `jsonl-gazelle.largeFile.partSizeMB` | 50 | Maximum size in MB of each part when splitting |
 | `jsonl-gazelle.performance.chunkedLoadingThreshold` | 1000 | Files with more lines than this load progressively in the background |
-| `jsonl-gazelle.performance.maxMemoryRows` | 50000 | Above this many rows, memory-optimized mode keeps only the most recent rows in the table |
+| `jsonl-gazelle.performance.maxMemoryRows` | 50000 | Above this many rows the file is treated as very large: the loading banner says so, and **Sort Rows** (which rewrites the file) is turned off in favor of **Display Sorted** |
 
 AI provider, API keys and model are set in the in-app settings dialog (gear icon in the toolbar) rather than in VS Code's Settings.
 
