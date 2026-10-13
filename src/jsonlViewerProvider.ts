@@ -2934,9 +2934,9 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
                 return;
             }
 
-            // Each of these means this.rows is not the whole file. Rewriting the
-            // document from it would silently drop the rest, so refuse and point
-            // at the display-only sort, which is always safe.
+            // Refuse and point at the display-only sort, which is always safe:
+            // mid-load the rows aren't all there yet, and with unparseable
+            // lines there is no sensible place for them among sorted rows.
             if (this.isIndexing || this.loadingChunks) {
                 vscode.window.showWarningMessage(
                     'JSONL Gazelle: the file is still loading. Wait for it to finish, or use "Display Sorted" to sort the view only.'
@@ -2951,7 +2951,7 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
             }
             if (this.errorCount > 0) {
                 vscode.window.showWarningMessage(
-                    `JSONL Gazelle: this file has ${this.errorCount} line(s) that could not be parsed, and sorting the file would discard them. Fix the errors first, or use "Display Sorted" to sort the view only.`
+                    `JSONL Gazelle: this file has ${this.errorCount} line(s) that could not be parsed. Fix them first, or use "Display Sorted" to sort the view only.`
                 );
                 return;
             }

@@ -1785,7 +1785,8 @@ export const scripts = `
             renderSettingsForm();
         });
         document.getElementById('refreshModelsBtn').addEventListener('click', requestModelFetch);
-        document.getElementById('settingsBtn').addEventListener('click', openSettingsModal);
+        // Not addEventListener('click', openSettingsModal): the click event would arrive as showWarning
+        document.getElementById('settingsBtn').addEventListener('click', () => openSettingsModal());
         document.getElementById('settingsCloseBtn').addEventListener('click', closeSettingsModal);
         document.getElementById('settingsCancelBtn').addEventListener('click', closeSettingsModal);
         document.getElementById('settingsSaveBtn').addEventListener('click', saveSettings);
