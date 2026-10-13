@@ -64,6 +64,11 @@ const EPOCH_SECONDS_CUTOFF = 1e11;
  * three digits is grouping ("1,234"), otherwise it is a decimal comma ("1,23");
  * repeated dots are grouping ("1.234.567"), a single dot is a decimal point.
  * "1,234"-style values that actually meant 1.234 are the known ambiguous case.
+ *
+ * Grouping has to look like grouping: three-digit groups after a first group
+ * of one to three digits (or Indian lakh grouping, "12,34,567"). Anything else
+ * with repeated separators - a version "1.10.0", an address "10.0.0.1" - is not
+ * a number, so such columns sort as text, where natural ordering handles them.
  */
 export function parseGroupedNumber(text: string): number | null {
     if (!/\d/.test(text) || !/^[\d.,]+$/.test(text)) {
@@ -77,20 +82,56 @@ export function parseGroupedNumber(text: string): number | null {
     if (lastComma >= 0 && lastDot >= 0) {
         const decimalSep = lastComma > lastDot ? ',' : '.';
         const groupSep = decimalSep === ',' ? '.' : ',';
-        normalized = text.split(groupSep).join('').replace(decimalSep, '.');
+        const decimalAt = text.lastIndexOf(decimalSep);
+        const integerPart = text.slice(0, decimalAt);
+        const fraction = text.slice(decimalAt + 1);
+        if (!isGrouped(integerPart, groupSep) || !/^\d*$/.test(fraction)) {
+            return null;
+        }
+        normalized = integerPart.split(groupSep).join('') + '.' + fraction;
     } else if (lastComma >= 0) {
         const parts = text.split(',');
-        const isGrouping = parts.length > 2 || (parts.length === 2 && parts[1].length === 3);
-        normalized = isGrouping ? parts.join('') : parts.join('.');
+        if (parts.length > 2) {
+            if (!isGrouped(text, ',')) {
+                return null;
+            }
+            normalized = parts.join('');
+        } else {
+            normalized = parts[1].length === 3 && isGrouped(text, ',') ? parts.join('') : parts.join('.');
+        }
     } else if (lastDot >= 0) {
         const parts = text.split('.');
-        normalized = parts.length > 2 ? parts.join('') : text;
+        if (parts.length > 2) {
+            if (!isGrouped(text, '.')) {
+                return null;
+            }
+            normalized = parts.join('');
+        } else {
+            normalized = text;
+        }
     } else {
         normalized = text;
     }
 
     const value = Number(normalized);
     return Number.isFinite(value) ? value : null;
+}
+
+// Whether `text` is digits grouped by `separator` the way people write numbers
+function isGrouped(text: string, separator: string): boolean {
+    const groups = text.split(separator);
+    const rest = groups.slice(1);
+    if (rest.length === 0) {
+        return /^\d+$/.test(groups[0]);
+    }
+    if (/^\d{1,3}$/.test(groups[0]) && rest.every(group => /^\d{3}$/.test(group))) {
+        return true;
+    }
+    // Indian grouping: 12,34,56,789
+    return separator === ',' &&
+        /^\d{1,2}$/.test(groups[0]) &&
+        rest.slice(0, -1).every(group => /^\d{2}$/.test(group)) &&
+        /^\d{3}$/.test(rest[rest.length - 1]);
 }
 
 /**

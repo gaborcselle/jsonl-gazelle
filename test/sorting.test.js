@@ -21,6 +21,12 @@ assert.strictEqual(parseGroupedNumber('1,234'), 1234);            // 3-digit gro
 assert.strictEqual(parseGroupedNumber('1,23'), 1.23);             // decimal comma
 assert.strictEqual(parseGroupedNumber('12.5'), 12.5);
 assert.strictEqual(parseGroupedNumber('abc'), null);
+assert.strictEqual(parseGroupedNumber('12,34,567'), 1234567);     // Indian grouping
+// Repeated separators that aren't three-digit groups are not numbers
+assert.strictEqual(parseGroupedNumber('1.2.3'), null);            // a version
+assert.strictEqual(parseGroupedNumber('10.0.0.1'), null);         // an IP address
+assert.strictEqual(parseGroupedNumber('1,2,3'), null);
+assert.strictEqual(parseGroupedNumber('1,23.4'), null);
 
 // --- currency --------------------------------------------------------------
 
@@ -144,6 +150,14 @@ assert.deepStrictEqual(sortRows(numbers, 'n', 'desc').map(r => r.n), [10, 2, -5]
 
 // Booleans: false before true
 assert.deepStrictEqual(sortRows([{ b: true }, { b: false }], 'b', 'asc').map(r => r.b), [false, true]);
+
+// Versions and addresses are text, so natural ordering applies, not a
+// "thousands-grouped" reading that made 1.10.0 the number 1100
+const versions = [{ v: '1.10.0' }, { v: '1.2.3' }, { v: '2.0.1' }, { v: '1.9.12' }];
+assert.strictEqual(detectColumnType(versions, 'v'), 'string');
+assert.deepStrictEqual(sortRows(versions, 'v', 'asc').map(r => r.v), ['1.2.3', '1.9.12', '1.10.0', '2.0.1']);
+const addresses = [{ ip: '10.0.1.1' }, { ip: '10.0.0.10' }, { ip: '9.9.9.9' }, { ip: '10.0.0.2' }];
+assert.deepStrictEqual(sortRows(addresses, 'ip', 'asc').map(r => r.ip), ['9.9.9.9', '10.0.0.2', '10.0.0.10', '10.0.1.1']);
 
 // Text uses natural ordering, so item2 precedes item10
 const names = [{ s: 'item10' }, { s: 'item2' }, { s: 'item1' }];
