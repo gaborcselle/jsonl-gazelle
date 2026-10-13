@@ -1,5 +1,5 @@
 const assert = require('assert');
-const { computeJsonlDiff, diffRowPair, canonicalStringify, splitLines } = require('../out/jsonl/diff');
+const { computeJsonlDiff, diffRowPair, canonicalStringify, splitLines, myersDiff } = require('../out/jsonl/diff');
 
 // --- splitLines ---
 assert.deepStrictEqual(splitLines(''), []);
@@ -149,6 +149,79 @@ assert.strictEqual(
     const result = computeJsonlDiff(oldRows.join('\n') + '\n', newRows.join('\n') + '\n');
     assert.strictEqual(result.summary.unchanged, 2499);
     assert.ok(result.summary.modified >= 1);
+}
+
+// --- the O(ND) diff: a shortest edit script, checked against the DP LCS ---
+{
+    let seed = 7;
+    const random = () => {
+        seed = (seed * 1103515245 + 12345) & 0x7fffffff;
+        return seed / 0x7fffffff;
+    };
+    const lcsLength = (a, b) => {
+        const table = Array.from({ length: a.length + 1 }, () => new Array(b.length + 1).fill(0));
+        for (let i = 1; i <= a.length; i++) {
+            for (let j = 1; j <= b.length; j++) {
+                table[i][j] = a[i - 1] === b[j - 1] ? table[i - 1][j - 1] + 1 : Math.max(table[i - 1][j], table[i][j - 1]);
+            }
+        }
+        return table[a.length][b.length];
+    };
+    for (let iteration = 0; iteration < 2000; iteration++) {
+        const a = Int32Array.from({ length: Math.floor(random() * 12) }, () => Math.floor(random() * 4));
+        const b = Int32Array.from({ length: Math.floor(random() * 12) }, () => Math.floor(random() * 4));
+        const ops = myersDiff(a, b, 100);
+        // Replaying the ops on a must produce b
+        const rebuilt = [];
+        let i = 0;
+        let j = 0;
+        for (const op of ops) {
+            if (op === 0) {
+                assert.strictEqual(a[i], b[j]);
+                rebuilt.push(a[i]);
+                i++;
+                j++;
+            } else if (op === -1) {
+                i++;
+            } else {
+                rebuilt.push(b[j]);
+                j++;
+            }
+        }
+        assert.strictEqual(i, a.length);
+        assert.deepStrictEqual(rebuilt, Array.from(b));
+        assert.strictEqual(ops.filter(op => op === 0).length, lcsLength(Array.from(a), Array.from(b)), 'shortest edit script');
+    }
+    // Over budget: null, so the caller can fall back
+    assert.strictEqual(myersDiff(Int32Array.from([1, 2, 3]), Int32Array.from([4, 5, 6]), 2), null);
+}
+
+// --- a big changed middle still aligns exactly (it used to pair by position) ---
+{
+    const rows = Array.from({ length: 5000 }, (_, i) => JSON.stringify({ id: i, v: 'x' + i }));
+    const edited = rows.slice();
+    edited.splice(5, 1);                                  // delete near the top
+    edited[4000] = JSON.stringify({ id: 4001, v: 'changed' }); // edit near the bottom
+    edited.push(JSON.stringify({ id: 'new' }));           // append
+    const result = computeJsonlDiff(rows.join('\n') + '\n', edited.join('\n') + '\n');
+    assert.deepStrictEqual(result.summary, { added: 1, removed: 1, modified: 1, unchanged: 4998 });
+}
+
+// --- a long unchanged tail is neither quadratic nor a stack overflow ---
+{
+    const rows = Array.from({ length: 200000 }, (_, i) => '{"i":' + i + '}');
+    const edited = rows.slice();
+    edited[0] = '{"i":"first"}';
+    const started = Date.now();
+    const result = computeJsonlDiff(rows.join('\n'), edited.join('\n'));
+    assert.strictEqual(result.summary.unchanged, 199999);
+    assert.ok(Date.now() - started < 5000, 'took ' + (Date.now() - started) + ' ms');
+}
+
+// --- inherited property names are ordinary keys ---
+{
+    const changes = diffRowPair('{"id":1,"a":1,"b":2}', '{"id":1,"a":1,"b":2,"toString":"y"}');
+    assert.deepStrictEqual(changes, [{ path: 'toString', type: 'added', newValue: 'y' }]);
 }
 
 console.log('diff tests passed');

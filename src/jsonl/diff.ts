@@ -40,8 +40,15 @@ export interface JsonlDiffResult {
     summary: JsonlDiffSummary;
 }
 
-/** Maximum number of DP cells for the exact LCS; beyond this we fall back to positional pairing. */
+/** Maximum number of DP cells for the exact LCS; beyond this the O(ND) diff takes over. */
 const MAX_LCS_CELLS = 4_000_000;
+
+/**
+ * Most edits the O(ND) diff looks for before giving up on an exact alignment
+ * (its bookkeeping grows with the square of this). A few edits in a file of
+ * any length stay well inside it.
+ */
+const MAX_MYERS_EDITS = 2000;
 
 /** Maximum field changes reported per row (safety cap for pathological rows). */
 const MAX_FIELD_CHANGES_PER_ROW = 200;
@@ -65,15 +72,17 @@ export function computeJsonlDiff(oldText: string, newText: string): JsonlDiffRes
         start++;
     }
 
-    // Trim common suffix
+    // Trim common suffix (collected back to front, reversed once: unshift
+    // made this quadratic in the number of unchanged trailing rows)
     let oldEnd = oldLines.length;
     let newEnd = newLines.length;
     const suffixRows: DiffRow[] = [];
     while (oldEnd > start && newEnd > start && oldLines[oldEnd - 1] === newLines[newEnd - 1]) {
-        suffixRows.unshift(unchangedRow(oldLines[oldEnd - 1], oldEnd, newEnd));
+        suffixRows.push(unchangedRow(oldLines[oldEnd - 1], oldEnd, newEnd));
         oldEnd--;
         newEnd--;
     }
+    suffixRows.reverse();
 
     const oldMid = oldLines.slice(start, oldEnd);
     const newMid = newLines.slice(start, newEnd);
@@ -135,7 +144,10 @@ export function computeJsonlDiff(oldText: string, newText: string): JsonlDiffRes
         }
     }
 
-    rows.push(...suffixRows);
+    // Not rows.push(...suffixRows): spreading a long array overflows the stack
+    for (const row of suffixRows) {
+        rows.push(row);
+    }
 
     const summary: JsonlDiffSummary = { added: 0, removed: 0, modified: 0, unchanged: 0 };
     for (const row of rows) {
@@ -182,24 +194,6 @@ function diffLines(oldLines: string[], newLines: string[]): number[] {
         return new Array(m).fill(-1);
     }
 
-    if (m * n > MAX_LCS_CELLS) {
-        // Too large for exact LCS: pair lines positionally. For JSONL datasets
-        // (append/edit-heavy, prefix/suffix already trimmed) this is a
-        // reasonable approximation and keeps memory bounded.
-        const ops: number[] = [];
-        const paired = Math.min(m, n);
-        for (let i = 0; i < paired; i++) {
-            if (oldLines[i] === newLines[i]) {
-                ops.push(0);
-            } else {
-                ops.push(-1, 1);
-            }
-        }
-        for (let i = paired; i < m; i++) { ops.push(-1); }
-        for (let i = paired; i < n; i++) { ops.push(1); }
-        return ops;
-    }
-
     // Intern lines as integers for fast comparison
     const ids = new Map<string, number>();
     const oldIds = new Int32Array(m);
@@ -213,6 +207,13 @@ function diffLines(oldLines: string[], newLines: string[]): number[] {
         let id = ids.get(newLines[j]);
         if (id === undefined) { id = ids.size; ids.set(newLines[j], id); }
         newIds[j] = id;
+    }
+
+    if (m * n > MAX_LCS_CELLS) {
+        // Too large for the DP table. The O(ND) diff handles large files with
+        // few changes - the usual case - exactly; only when the two sides
+        // differ almost everywhere do lines get paired by position.
+        return myersDiff(oldIds, newIds, MAX_MYERS_EDITS) || positionalDiff(oldIds, newIds);
     }
 
     // Standard LCS DP table
@@ -254,6 +255,95 @@ function diffLines(oldLines: string[], newLines: string[]): number[] {
     return reversed.reverse();
 }
 
+/** Pair lines by position: the last resort when the sides differ almost everywhere. */
+function positionalDiff(oldIds: Int32Array, newIds: Int32Array): number[] {
+    const ops: number[] = [];
+    const paired = Math.min(oldIds.length, newIds.length);
+    for (let i = 0; i < paired; i++) {
+        if (oldIds[i] === newIds[i]) {
+            ops.push(0);
+        } else {
+            ops.push(-1, 1);
+        }
+    }
+    for (let i = paired; i < oldIds.length; i++) { ops.push(-1); }
+    for (let i = paired; i < newIds.length; i++) { ops.push(1); }
+    return ops;
+}
+
+/**
+ * Myers' O(ND) shortest edit script (same ops as diffLines), or null when the
+ * sides need more than `maxEdits` insertions and deletions. Keeps the
+ * furthest-reaching x per diagonal for every edit count to backtrack through.
+ */
+export function myersDiff(a: Int32Array, b: Int32Array, maxEdits: number): number[] | null {
+    const n = a.length;
+    const m = b.length;
+    const trace: Int32Array[] = [];
+    let previous = new Int32Array(1);
+
+    for (let d = 0; d <= maxEdits; d++) {
+        // current[k + d] = furthest x on diagonal k (x - y = k) after d edits
+        const current = new Int32Array(2 * d + 1);
+        for (let k = -d; k <= d; k += 2) {
+            let x: number;
+            if (d === 0) {
+                x = 0;
+            } else if (k === -d || (k !== d && previous[k - 1 + d - 1] < previous[k + 1 + d - 1])) {
+                x = previous[k + 1 + d - 1]; // down: insert b[y]
+            } else {
+                x = previous[k - 1 + d - 1] + 1; // right: delete a[x]
+            }
+            let y = x - k;
+            while (x < n && y < m && a[x] === b[y]) {
+                x++;
+                y++;
+            }
+            current[k + d] = x;
+            if (x >= n && y >= m) {
+                trace.push(current);
+                return backtrackMyers(trace, n, m);
+            }
+        }
+        trace.push(current);
+        previous = current;
+    }
+    return null;
+}
+
+function backtrackMyers(trace: Int32Array[], n: number, m: number): number[] {
+    const reversed: number[] = [];
+    let x = n;
+    let y = m;
+    for (let d = trace.length - 1; d > 0; d--) {
+        const previous = trace[d - 1];
+        const k = x - y;
+        const down = k === -d || (k !== d && previous[k - 1 + d - 1] < previous[k + 1 + d - 1]);
+        const previousK = down ? k + 1 : k - 1;
+        const previousX = previous[previousK + d - 1];
+        const previousY = previousX - previousK;
+        // The snake after the edit, then the edit itself
+        while (x > (down ? previousX : previousX + 1) && y > (down ? previousY + 1 : previousY)) {
+            reversed.push(0);
+            x--;
+            y--;
+        }
+        if (down) {
+            reversed.push(1);
+            y--;
+        } else {
+            reversed.push(-1);
+            x--;
+        }
+    }
+    while (x > 0 && y > 0) {
+        reversed.push(0);
+        x--;
+        y--;
+    }
+    return reversed.reverse();
+}
+
 function tryParse(line: string): any {
     const trimmed = line.trim();
     if (trimmed === '') {
@@ -264,6 +354,10 @@ function tryParse(line: string): any {
     } catch {
         return undefined;
     }
+}
+
+function hasOwn(obj: any, key: string): boolean {
+    return Object.prototype.hasOwnProperty.call(obj, key);
 }
 
 function isPlainObject(value: any): boolean {
@@ -326,7 +420,7 @@ function countLeaves(oldVal: any, newVal: any, counts: { union: number; equal: n
     if (oldIsObj && newIsObj) {
         const keys = new Set([...Object.keys(oldVal), ...Object.keys(newVal)]);
         for (const key of keys) {
-            countLeaves(key in oldVal ? oldVal[key] : MISSING, key in newVal ? newVal[key] : MISSING, counts);
+            countLeaves(hasOwn(oldVal, key) ? oldVal[key] : MISSING, hasOwn(newVal, key) ? newVal[key] : MISSING, counts);
         }
         return;
     }
@@ -381,8 +475,10 @@ export function collectFieldChanges(oldObj: any, newObj: any, basePath: string, 
             return;
         }
         const path = basePath === '' ? key : `${basePath}.${key}`;
-        const inOld = key in oldObj;
-        const inNew = key in newObj;
+        // Own keys only: `"toString" in {}` is true, which reported a new
+        // "toString" field as a change from Object.prototype.toString
+        const inOld = hasOwn(oldObj, key);
+        const inNew = hasOwn(newObj, key);
         if (inOld && !inNew) {
             out.push({ path, type: 'removed', oldValue: oldObj[key] });
         } else if (!inOld && inNew) {

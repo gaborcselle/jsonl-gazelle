@@ -4,6 +4,7 @@ import * as path from 'path';
 import { JsonlViewerProvider } from './jsonlViewerProvider';
 import { registerDiffCommands } from './jsonlDiffProvider';
 import { formatJsonlForSave } from './jsonl/formatOnSave';
+import { splitJsonlFile } from './jsonl/splitFile';
 
 function getNonce(): string {
     const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
@@ -48,6 +49,13 @@ export function activate(context: vscode.ExtensionContext) {
         // If uri is not provided, try to get it from active editor
         if (!uri && vscode.window.activeTextEditor) {
             uri = vscode.window.activeTextEditor.document.uri;
+        }
+        // A file open in JSONL Gazelle is a custom editor, not a text editor
+        if (!uri) {
+            const input = vscode.window.tabGroups.activeTabGroup.activeTab?.input;
+            if (input instanceof vscode.TabInputCustom || input instanceof vscode.TabInputText) {
+                uri = input.uri;
+            }
         }
         
         if (!uri) {
@@ -216,147 +224,12 @@ async function splitLargeFileDirectly(uri: vscode.Uri) {
 }
 
 async function splitLargeFile(inputPath: string, maxSizeMB: number = 50): Promise<string[]> {
-    return new Promise<string[]>((resolve, reject) => {
-        const maxSize = maxSizeMB * 1024 * 1024;
-        const parts: string[] = [];
-        
-        const dir = path.dirname(inputPath);
-        const ext = path.extname(inputPath);
-        const base = path.basename(inputPath, ext);
-        
-        let currentWriteStream: fs.WriteStream | null = null;
-        let currentSize = 0;
-        let partNumber = 1;
-        let isClosing = false;
-        let bufferedLines: string[] = [];
-        
-        // Helper to write a line (handles buffering during stream transitions)
-        const writeLine = (line: string) => {
-            if (isClosing) {
-                bufferedLines.push(line);
-                return;
-            }
-            
-            if (!currentWriteStream) {
-                bufferedLines.push(line);
-                return;
-            }
-            
-            try {
-                const lineSize = Buffer.byteLength(line, 'utf8');
-                
-                // Check if we need a new part
-                if (currentSize + lineSize > maxSize && currentSize > 0) {
-                    // Start new part
-                    const oldStream = currentWriteStream;
-                    isClosing = true;
-                    bufferedLines.push(line);
-                    
-                    oldStream.end(() => {
-                        // Create new part
-                        const newPartPath = path.join(dir, `${base}_part${partNumber}${ext}`);
-                        parts.push(newPartPath);
-                        partNumber++;
-                        
-                        currentWriteStream = fs.createWriteStream(newPartPath);
-                        currentSize = 0;
-                        isClosing = false;
-                        
-                        // Write buffered lines
-                        const linesToProcess = [...bufferedLines];
-                        bufferedLines = [];
-                        linesToProcess.forEach(l => writeLine(l));
-                    });
-                } else {
-                    // Write to current stream
-                    currentWriteStream.write(line);
-                    currentSize += lineSize;
-                }
-            } catch (err) {
-                // If write fails, buffer and continue
-                bufferedLines.push(line);
-            }
-        };
-        
-        // Create first part
-        const firstPartPath = path.join(dir, `${base}_part${partNumber}${ext}`);
-        parts.push(firstPartPath);
-        currentWriteStream = fs.createWriteStream(firstPartPath);
-        currentSize = 0;
-        partNumber++;
-        
-        let partialLine = '';
-        
-        const stream = fs.createReadStream(inputPath, {
-            encoding: 'utf8',
-            highWaterMark: 64 * 1024,
-            autoClose: true
-        });
-        
-        stream.on('data', (chunk: string) => {
-            const data = partialLine + chunk;
-            const lines = data.split('\n');
-            partialLine = lines.pop() || '';
-            
-            lines.forEach(line => {
-                writeLine(line + '\n');
-            });
-        });
-        
-        stream.on('end', () => {
-            // Write final partial line
-            if (partialLine) {
-                writeLine(partialLine + '\n');
-            }
-            
-            // Wait for any pending writes and close the last stream
-            const closeLastStream = () => {
-                if (currentWriteStream && !currentWriteStream.destroyed) {
-                    const streamToClose = currentWriteStream;
-                    currentWriteStream = null;
-                    
-                    streamToClose.end(() => {
-                        // Ensure all buffered lines are processed
-                        if (bufferedLines.length > 0) {
-                            const newPartPath = path.join(dir, `${base}_part${partNumber}${ext}`);
-                            parts.push(newPartPath);
-                            
-                            const finalStream = fs.createWriteStream(newPartPath);
-                            bufferedLines.forEach(line => {
-                                finalStream.write(line);
-                            });
-                            finalStream.end(() => {
-                                resolve(parts);
-                            });
-                        } else {
-                            resolve(parts);
-                        }
-                    });
-                } else if (bufferedLines.length > 0) {
-                    const newPartPath = path.join(dir, `${base}_part${partNumber}${ext}`);
-                    parts.push(newPartPath);
-                    
-                    const finalStream = fs.createWriteStream(newPartPath);
-                    bufferedLines.forEach(line => {
-                        finalStream.write(line);
-                    });
-                    finalStream.end(() => {
-                        resolve(parts);
-                    });
-                } else {
-                    resolve(parts);
-                }
-            };
-            
-            // Give some time for any pending async operations
-            setTimeout(closeLastStream, 100);
-        });
-        
-        stream.on('error', (err) => reject(err));
-    }).catch((error: any) => {
+    try {
+        return await splitJsonlFile(inputPath, maxSizeMB * 1024 * 1024);
+    } catch (error: any) {
         vscode.window.showErrorMessage(`Error splitting file: ${error.message}`);
         return [];
-    });
+    }
 }
 
 // Rating prompt manager
