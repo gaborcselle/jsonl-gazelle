@@ -171,7 +171,7 @@ async function openaiChatCompletion(apiKey: string, model: string, request: Chat
         };
     }
 
-    const response = await fetch('https://api.openai.com/v1/chat/completions', {
+    const post = () => fetch('https://api.openai.com/v1/chat/completions', {
         method: 'POST',
         headers: {
             'Content-Type': 'application/json',
@@ -179,6 +179,17 @@ async function openaiChatCompletion(apiKey: string, model: string, request: Chat
         },
         body: JSON.stringify(body)
     });
+    let response = await post();
+    if (!response.ok && response.status === 400 && body.temperature !== undefined) {
+        // Reasoning models (the o-series, the GPT-5 family) accept only their
+        // default temperature and reject the request otherwise. Ask again
+        // without one rather than failing every row.
+        const errorText = await response.clone().text();
+        if (/temperature/i.test(errorText)) {
+            delete body.temperature;
+            response = await post();
+        }
+    }
     if (!response.ok) {
         await throwApiError('OpenAI', response);
     }

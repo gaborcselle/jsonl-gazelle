@@ -179,20 +179,25 @@ function showDiffPanel(title: string, left: DiffSource, right: DiffSource, note?
  * Read the committed (HEAD) version of a file via the git CLI.
  * Returns empty content with a note when the file is not tracked in HEAD.
  */
-async function getGitHeadContent(filePath: string): Promise<{ content: string; note?: string }> {
+export async function getGitHeadContent(filePath: string): Promise<{ content: string; note?: string }> {
     const fileDir = path.dirname(filePath);
 
-    let repoRoot: string;
     try {
-        repoRoot = (await execGit(['rev-parse', '--show-toplevel'], fileDir)).trim();
+        await execGit(['rev-parse', '--show-toplevel'], fileDir);
     } catch {
         throw new Error(`'${path.basename(filePath)}' is not inside a Git repository.`);
     }
 
-    const relPath = path.relative(repoRoot, filePath).split(path.sep).join('/');
     try {
-        const content = await execGit(['show', `HEAD:${relPath}`], repoRoot);
-        return { content };
+        // The path is given relative to the file's own directory ("./name"):
+        // working it out from the repository root broke for files reached
+        // through a symlinked folder, where the two disagree. --filters runs
+        // the checkout filters, so a Git LFS file is compared by its content,
+        // not by its pointer, and line endings match the working copy.
+        const content = await execGit(['cat-file', '--filters', `HEAD:./${path.basename(filePath)}`], fileDir);
+        // VS Code drops a UTF-8 byte order mark from the editor's text; git
+        // keeps it, which showed line 1 as changed
+        return { content: content.replace(/^\uFEFF/, '') };
     } catch (error: any) {
         const message = String(error?.message || '');
         if (message.includes('does not exist') || message.includes('exists on disk, but not in') ||

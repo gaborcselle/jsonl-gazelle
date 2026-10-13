@@ -3741,24 +3741,36 @@ Do not suggest columns that already exist. Return ONLY valid JSON array, no mark
                 return;
             }
 
-            // Use the viewer's column configuration when this file is open in it,
-            // otherwise auto-detect columns from the parsed rows
-            let columns: ColumnInfo[];
-            if (targetUri.toString() === this.activeDocumentUri && this.columns.length > 0) {
-                columns = this.columns.filter(col => col.visible);
-            } else {
-                columns = [];
-                const seenPaths = new Set<string>();
-                for (const row of rows) {
-                    const counts: { [key: string]: number } = {};
-                    this.countPaths(row, '', counts);
-                    for (const path of Object.keys(counts)) {
-                        if (!seenPaths.has(path)) {
-                            seenPaths.add(path);
-                            columns.push({ path, displayName: this.getDisplayName(path), visible: true });
-                        }
+            // Every key in the file, in order of first appearance
+            const detectedColumns: ColumnInfo[] = [];
+            const seenPaths = new Set<string>();
+            for (const row of rows) {
+                const counts: { [key: string]: number } = {};
+                this.countPaths(row, '', counts);
+                for (const path of Object.keys(counts)) {
+                    if (!seenPaths.has(path)) {
+                        seenPaths.add(path);
+                        detectedColumns.push({ path, displayName: this.getDisplayName(path), visible: true });
                     }
                 }
+            }
+
+            // Use the viewer's column configuration when this file is open in it
+            // (its order, its hidden columns, its expanded children). The viewer
+            // only makes columns of keys found in at least a tenth of the rows,
+            // so keys it never offered are added after its columns rather than
+            // silently left out of the export.
+            const viewerColumns = targetUri.toString() === this.activeDocumentUri
+                ? this.columns
+                : this.documentStates.get(targetUri.toString())?.columns;
+            let columns: ColumnInfo[];
+            if (viewerColumns && viewerColumns.length > 0) {
+                const viewerPaths = new Set(viewerColumns.map(col => col.path));
+                columns = viewerColumns
+                    .filter(col => col.visible)
+                    .concat(detectedColumns.filter(col => !viewerPaths.has(col.path)));
+            } else {
+                columns = detectedColumns;
             }
 
             if (columns.length === 0) {
