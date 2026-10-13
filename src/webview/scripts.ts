@@ -41,6 +41,9 @@ export const scripts = `
         let uiPreferencesApplied = false;
         let prettyEditorModified = false; // Whether the user edited in pretty print view
         let rawEditorModified = false; // Whether the user edited in raw view
+        let switchedToRawForErrors = false; // Parse errors open Raw view once, not on every update
+        let prettyEditorContent = null; // The text the Pretty Print editor was built from
+        let prettyEditorPartial = false; // Built while the file was still loading (read-only)
         let contextMenuRow = null;
         let currentView = 'table';
         let isResizing = false;
@@ -241,7 +244,8 @@ export const scripts = `
         };
 
         // Find/Replace Modal Functions
-        function openFindReplaceBar() {
+        // The toolbar button toggles the bar; Ctrl/Cmd+F and +H only ever open it
+        function openFindReplaceBar(forceOpen) {
             // For Monaco editors (json/raw views), trigger Monaco's find widget
             if (currentView === 'json' && prettyEditor) {
                 prettyEditor.getAction('actions.find').run();
@@ -250,18 +254,26 @@ export const scripts = `
                 rawEditor.getAction('actions.find').run();
                 return;
             }
-            
+
             // For table view, show custom find bar
             const bar = document.getElementById('findReplaceBar');
-            
-            // Toggle: if already visible, close it; otherwise open it
+
             if (bar.style.display === 'block') {
-                closeFindReplaceBar();
+                if (forceOpen === true) {
+                    document.getElementById('findInput').focus();
+                } else {
+                    closeFindReplaceBar();
+                }
             } else {
                 bar.style.display = 'block';
                 document.getElementById('findInput').focus();
                 performFind(); // Initial find with current input
             }
+        }
+
+        function isFindReplaceBarOpen() {
+            const bar = document.getElementById('findReplaceBar');
+            return !!bar && bar.style.display === 'block';
         }
 
         function closeFindReplaceBar() {
@@ -270,178 +282,122 @@ export const scripts = `
             clearHighlights();
         }
 
-        function performFind() {
+        function buildFindPattern() {
             const findText = document.getElementById('findInput').value;
+            if (!findText) return null;
             const useRegex = document.getElementById('regexCheckbox').checked;
             const caseSensitive = document.getElementById('caseSensitiveCheckbox').checked;
             const wholeWord = document.getElementById('wholeWordCheckbox').checked;
 
-            // Clear previous highlights
-            clearHighlights();
+            findReplaceState.findPattern = findText;
+            findReplaceState.useRegex = useRegex;
+            findReplaceState.caseSensitive = caseSensitive;
+            findReplaceState.wholeWord = wholeWord;
 
-            if (!findText) {
-                document.getElementById('findMatchCount').textContent = '0 matches';
-                document.getElementById('regexError').style.display = 'none';
-                findReplaceState.matches = [];
-                return;
+            if (useRegex) {
+                return new RegExp(findText, caseSensitive ? 'g' : 'gi');
             }
-
-            try {
-                // Build search pattern
-                let pattern;
-                if (useRegex) {
-                    pattern = new RegExp(findText, caseSensitive ? 'g' : 'gi');
-                } else {
-                    let escapedText = escapeRegex(findText);
-                    if (wholeWord) {
+            let escapedText = escapeRegex(findText);
+            if (wholeWord) {
                         escapedText = '\\\\b' + escapedText + '\\\\b';
-                    }
-                    pattern = new RegExp(escapedText, caseSensitive ? 'g' : 'gi');
-                }
+            }
+            return new RegExp(escapedText, caseSensitive ? 'g' : 'gi');
+        }
 
-                // Hide regex error if pattern is valid
-                document.getElementById('regexError').style.display = 'none';
+        function updateFindMatchCount() {
+            const matchCount = findReplaceState.matches.length;
+            document.getElementById('findMatchCount').textContent =
+                matchCount === 0 ? 'No matches' :
+                findReplaceState.currentMatchIndex >= 0 ? (findReplaceState.currentMatchIndex + 1) + ' of ' + matchCount :
+                matchCount === 1 ? '1 match' :
+                matchCount + ' matches';
+        }
 
-                // Store state
-                findReplaceState.findPattern = findText;
-                findReplaceState.useRegex = useRegex;
-                findReplaceState.caseSensitive = caseSensitive;
-                findReplaceState.wholeWord = wholeWord;
-
-                // Find matches based on current view
-                findMatchesInCurrentView(pattern);
-
-                // Update match count
-                const matchCount = findReplaceState.matches.length;
-                document.getElementById('findMatchCount').textContent =
-                    matchCount === 0 ? 'No matches' :
-                    matchCount === 1 ? '1 match' :
-                    matchCount + ' matches';
-
-                // Highlight first match
-                if (matchCount > 0) {
-                    findReplaceState.currentMatchIndex = 0;
-                    highlightCurrentMatch();
-                }
-
+        // Recompute the matches from the data. Returns false when the pattern
+        // is empty or invalid (the bar then shows why).
+        function refreshFindMatches() {
+            document.getElementById('regexError').style.display = 'none';
+            let pattern;
+            try {
+                pattern = buildFindPattern();
             } catch (error) {
-                // Show regex error
                 document.getElementById('regexError').textContent = 'Invalid regex pattern: ' + error.message;
                 document.getElementById('regexError').style.display = 'block';
                 findReplaceState.matches = [];
+                findReplaceState.currentMatchIndex = -1;
                 document.getElementById('findMatchCount').textContent = '0 matches';
+                return false;
+            }
+            if (!pattern) {
+                findReplaceState.matches = [];
+                findReplaceState.currentMatchIndex = -1;
+                document.getElementById('findMatchCount').textContent = '0 matches';
+                return false;
+            }
+            findMatchesInCurrentView(pattern);
+            return true;
+        }
+
+        function performFind() {
+            clearHighlights();
+            if (!refreshFindMatches()) return;
+            findReplaceState.currentMatchIndex = findReplaceState.matches.length > 0 ? 0 : -1;
+            if (findReplaceState.currentMatchIndex === 0) {
+                highlightCurrentMatch();
+            } else {
+                updateFindMatchCount();
             }
         }
 
+        // Find searches the data, not the rendered table. Rows render 200 at a
+        // time, so searching the DOM missed every row not yet scrolled to, and
+        // its cell references went stale as soon as an update rebuilt the table
+        // - the next Replace then wrote into whichever row had moved into that
+        // display position. A match names its file row and column instead.
+        // Strings are searched as they are, without the JSON quotes the cell
+        // shows; other values as their JSON text.
         function findMatchesInCurrentView(pattern) {
             findReplaceState.matches = [];
+            if (currentView !== 'table') return;
 
-            if (currentView === 'table') {
-                // Search in table cells (use raw value if available, otherwise text content)
-                const cells = document.querySelectorAll('#dataTable td');
-                cells.forEach((cell, index) => {
-                    // Use raw value for accurate matching (without JSON quotes)
-                    const text = cell.dataset.rawValue !== undefined ? cell.dataset.rawValue : cell.textContent;
-                    const matches = [...text.matchAll(pattern)];
-
-                    // Get the row index from the cell's parent row
-                    const row = cell.closest('tr');
-                    const rowIndex = row ? parseInt(row.dataset.index) || 0 : 0;
-                    const cellIndexInRow = Array.from(row.children).indexOf(cell);
-
-                    matches.forEach(match => {
+            const rows = currentData.rows || [];
+            const rowIndices = currentData.rowIndices || [];
+            const columns = getVisibleColumns();
+            for (let position = 0; position < rows.length; position++) {
+                const actualRowIndex = rowIndices[position] !== undefined ? rowIndices[position] : position;
+                for (const column of columns) {
+                    const value = getNestedValue(rows[position], column.path);
+                    if (value === undefined) continue;
+                    const text = typeof value === 'string' ? value : JSON.stringify(value);
+                    pattern.lastIndex = 0;
+                    for (const match of text.matchAll(pattern)) {
                         findReplaceState.matches.push({
-                            element: cell,
+                            position: position,
+                            actualRowIndex: actualRowIndex,
+                            columnPath: column.path,
+                            value: value,
                             text: text,
                             match: match[0],
-                            index: match.index,
-                            cellIndex: index,
-                            rowIndex: rowIndex,
-                            cellIndexInRow: cellIndexInRow,
-                            matchIndexInCell: match.index
+                            index: match.index
                         });
-                    });
-                });
-
-                // Sort matches by row, then by cell position in row, then by position in cell
-                // This ensures top-to-bottom, left-to-right order
-                findReplaceState.matches.sort((a, b) => {
-                    if (a.rowIndex !== b.rowIndex) {
-                        return a.rowIndex - b.rowIndex;
                     }
-                    if (a.cellIndexInRow !== b.cellIndexInRow) {
-                        return a.cellIndexInRow - b.cellIndexInRow;
-                    }
-                    return a.matchIndexInCell - b.matchIndexInCell;
-                });
-            } else if (currentView === 'json') {
-                // Search in JSON view
-                const jsonLines = document.querySelectorAll('.json-content-editable');
-                jsonLines.forEach((textarea, lineIndex) => {
-                    const text = textarea.value;
-                    const matches = [...text.matchAll(pattern)];
-
-                    matches.forEach(match => {
-                        findReplaceState.matches.push({
-                            element: textarea,
-                            text: text,
-                            match: match[0],
-                            index: match.index,
-                            lineIndex: lineIndex
-                        });
-                    });
-                });
-            } else if (currentView === 'raw') {
-                // Search in raw view
-                const rawLines = document.querySelectorAll('.raw-line-content');
-                rawLines.forEach((lineContent, lineIndex) => {
-                    const text = lineContent.textContent;
-                    const matches = [...text.matchAll(pattern)];
-
-                    matches.forEach(match => {
-                        findReplaceState.matches.push({
-                            element: lineContent,
-                            text: text,
-                            match: match[0],
-                            index: match.index,
-                            lineIndex: lineIndex
-                        });
-                    });
-                });
+                }
             }
         }
 
         function highlightCurrentMatch() {
-            // Clear previous current highlight
-            document.querySelectorAll('.find-highlight-current').forEach(el => {
-                el.classList.remove('find-highlight-current');
-                el.classList.add('find-highlight');
-            });
-
-            if (findReplaceState.currentMatchIndex < 0 ||
-                findReplaceState.currentMatchIndex >= findReplaceState.matches.length) {
-                return;
-            }
-
+            clearHighlights();
             const match = findReplaceState.matches[findReplaceState.currentMatchIndex];
-
-            // Scroll to and highlight the match
-            if (match.element) {
-                match.element.scrollIntoView({ behavior: 'smooth', block: 'center' });
-
-                // For table cells and raw content, add highlight class
-                if (currentView === 'table' || currentView === 'raw') {
-                    match.element.classList.add('find-highlight-current');
-                } else if (currentView === 'json') {
-                    // For JSON textareas, set selection
-                    match.element.focus();
-                    match.element.setSelectionRange(match.index, match.index + match.match.length);
+            if (match && currentView === 'table') {
+                // Render down to the row, then let the cell cursor scroll to it
+                ensureRowRendered(match.position);
+                setCellCursor(match.actualRowIndex, match.columnPath, true);
+                const td = getCursorCell();
+                if (td && td.classList) {
+                    td.classList.add('find-highlight-current');
                 }
             }
-
-            // Update count display
-            document.getElementById('findMatchCount').textContent =
-                (findReplaceState.currentMatchIndex + 1) + ' of ' + findReplaceState.matches.length;
+            updateFindMatchCount();
         }
 
         function clearHighlights() {
@@ -474,192 +430,143 @@ export const scripts = `
             highlightCurrentMatch();
         }
 
+        // Objects and arrays are found but not replaced into: their text is
+        // JSON, and a replacement there could rename keys or break the syntax
+        function isReplaceableMatch(match) {
+            return match.value === null || typeof match.value !== 'object';
+        }
+
+        // What a cell holds after replacing in its text. A string stays a
+        // string whatever it now reads like; any other value becomes what the
+        // new text parses to, or a string once it no longer parses.
+        function replacedCellValue(match, newText) {
+            if (typeof match.value === 'string') return newText;
+            try {
+                return JSON.parse(newText);
+            } catch (e) {
+                return newText;
+            }
+        }
+
+        // A replace goes to the extension, and the matches stay stale until its
+        // update arrives - a second replace before then would work from the old
+        // text and undo the first. So the buttons wait for that update.
+        let replaceAwaitingUpdate = false;
+        let replaceAwaitTimer = null;
+
+        function setReplaceAwaitingUpdate(waiting) {
+            replaceAwaitingUpdate = waiting;
+            clearTimeout(replaceAwaitTimer);
+            document.getElementById('replaceBtn').disabled = waiting;
+            document.getElementById('replaceAllBtn').disabled = waiting;
+            if (waiting) {
+                // Don't stay locked if the update never comes (the edit failed)
+                replaceAwaitTimer = setTimeout(() => {
+                    setReplaceAwaitingUpdate(false);
+                    refreshFindAfterUpdate();
+                }, 3000);
+            }
+        }
+
+        function sendCellReplacements(edits) {
+            if (edits.length === 0) return;
+            setReplaceAwaitingUpdate(true);
+            vscode.postMessage({ type: 'updateCells', edits: edits });
+        }
+
+        // Called after every update while the bar is open. After a replace the
+        // cursor moves on to the match now at the same place in the list; any
+        // other update only refreshes the matches, leaving the cursor alone.
+        function refreshFindAfterUpdate() {
+            if (!isFindReplaceBarOpen() || currentView !== 'table') return;
+            const wasReplace = replaceAwaitingUpdate;
+            if (wasReplace) {
+                setReplaceAwaitingUpdate(false);
+            }
+            const previousIndex = findReplaceState.currentMatchIndex;
+            if (!refreshFindMatches()) return;
+            const count = findReplaceState.matches.length;
+            findReplaceState.currentMatchIndex = count === 0 ? -1 : Math.min(Math.max(previousIndex, 0), count - 1);
+            if (wasReplace && count > 0) {
+                highlightCurrentMatch();
+            } else {
+                updateFindMatchCount();
+            }
+        }
+
         function replaceCurrent() {
-            if (findReplaceState.currentMatchIndex < 0 ||
-                findReplaceState.matches.length === 0) {
+            if (replaceAwaitingUpdate || currentView !== 'table') return;
+            // Work from the current data, not from matches an update may have outdated
+            const previousIndex = findReplaceState.currentMatchIndex;
+            if (!refreshFindMatches() || findReplaceState.matches.length === 0) {
+                updateFindMatchCount();
                 return;
             }
-
+            findReplaceState.currentMatchIndex = Math.min(Math.max(previousIndex, 0), findReplaceState.matches.length - 1);
             const match = findReplaceState.matches[findReplaceState.currentMatchIndex];
-            const replaceText = document.getElementById('replaceInput').value;
-
-            if (currentView === 'table') {
-                // Replace in table cell
-                const cell = match.element;
-                const row = cell.closest('tr');
-                const rowIndex = parseInt(row.dataset.index);
-                const columnPath = cell.dataset.columnPath;
-
-                // Get actual row data with safety checks
-                const actualRowIndex = currentData.rowIndices && currentData.rowIndices[rowIndex] !== undefined
-                    ? currentData.rowIndices[rowIndex]
-                    : rowIndex;
-
-                const allRows = currentData.allRows || currentData.rows || [];
-                const rowData = allRows[actualRowIndex];
-
-                if (!rowData) {
-                    console.error('Could not find row data for index:', actualRowIndex);
-                    console.error('Available data:', {
-                        rowIndex,
-                        actualRowIndex,
-                        allRowsLength: allRows.length,
-                        hasRowIndices: !!currentData.rowIndices
-                    });
-                    return;
-                }
-
-                // Get current value from the stored raw value (which matches what we searched)
-                let currentValueStr = match.text; // Use the text we found the match in
-
-                // Perform replacement on the actual value
-                const newValueStr = currentValueStr.substring(0, match.index) +
-                                    replaceText +
-                                    currentValueStr.substring(match.index + match.match.length);
-
-                // Update display (JSON stringify for consistent display)
-                match.element.textContent = JSON.stringify(newValueStr);
-                // Update the raw value data attribute
-                match.element.dataset.rawValue = newValueStr;
-
-                // Send update to backend
-                vscode.postMessage({
-                    type: 'updateCell',
-                    rowIndex: actualRowIndex,
-                    columnPath: columnPath,
-                    value: newValueStr
-                });
-
-            } else if (currentView === 'json') {
-                // Replace in JSON textarea
-                const textarea = match.element;
-                const oldValue = textarea.value;
-                const newValue = oldValue.substring(0, match.index) +
-                                 replaceText +
-                                 oldValue.substring(match.index + match.match.length);
-
-                textarea.value = newValue;
-
-                // Trigger update
-                const rowIndex = parseInt(textarea.closest('.json-line').dataset.index);
-                const actualRowIndex = currentData.rowIndices ? currentData.rowIndices[rowIndex] : rowIndex;
-
-                try {
-                    const parsedData = JSON.parse(newValue);
-                    vscode.postMessage({
-                        type: 'documentChanged',
-                        rowIndex: actualRowIndex,
-                        newData: parsedData
-                    });
-                } catch (e) {
-                    // Invalid JSON after replace
-                }
-
-            } else if (currentView === 'raw') {
-                // Raw view is read-only for cell-level edits, so skip
-                vscode.window.showWarningMessage('Replace is not supported in Raw view. Switch to Table or JSON view.');
+            if (!isReplaceableMatch(match)) {
+                document.getElementById('findMatchCount').textContent = 'Cannot replace inside an object or array - edit the cell instead';
                 return;
             }
 
-            // Re-run find to update matches
-            performFind();
+            const replaceText = document.getElementById('replaceInput').value;
+            const newText = match.text.substring(0, match.index) +
+                            replaceText +
+                            match.text.substring(match.index + match.match.length);
+            sendCellReplacements([{
+                rowIndex: match.actualRowIndex,
+                columnPath: match.columnPath,
+                value: JSON.stringify(replacedCellValue(match, newText))
+            }]);
         }
 
         function replaceAll() {
-            if (findReplaceState.matches.length === 0) {
+            if (replaceAwaitingUpdate || currentView !== 'table') return;
+            if (!refreshFindMatches() || findReplaceState.matches.length === 0) {
+                updateFindMatchCount();
                 return;
             }
 
             const replaceText = document.getElementById('replaceInput').value;
-            const matchCount = findReplaceState.matches.length;
 
-            // Note: confirm() doesn't work in sandboxed webviews, so we skip confirmation
-            // User can always undo with Ctrl+Z
-
-            // Group matches by element to reduce updates
-            const elementMatches = new Map();
+            // Group by cell; every row is searched, rendered or not
+            const cells = new Map();
+            let skipped = 0;
             findReplaceState.matches.forEach(match => {
-                if (!elementMatches.has(match.element)) {
-                    elementMatches.set(match.element, []);
+                if (!isReplaceableMatch(match)) {
+                    skipped++;
+                    return;
                 }
-                elementMatches.get(match.element).push(match);
+                const key = JSON.stringify([match.actualRowIndex, match.columnPath]);
+                if (!cells.has(key)) {
+                    cells.set(key, []);
+                }
+                cells.get(key).push(match);
             });
 
-            // Replace in each element (process in reverse order to maintain indices)
-            elementMatches.forEach((matches, element) => {
-                matches.sort((a, b) => b.index - a.index); // Reverse order
-
-                if (currentView === 'table') {
-                    const row = element.closest('tr');
-                    const rowIndex = parseInt(row.dataset.index);
-                    const columnPath = element.dataset.columnPath;
-
-                    // Get actual row data with safety checks
-                    const actualRowIndex = currentData.rowIndices && currentData.rowIndices[rowIndex] !== undefined
-                        ? currentData.rowIndices[rowIndex]
-                        : rowIndex;
-
-                    const allRows = currentData.allRows || currentData.rows || [];
-                    const rowData = allRows[actualRowIndex];
-
-                    if (!rowData) {
-                        console.error('Could not find row data for index:', actualRowIndex);
-                        return;
-                    }
-
-                    // Get current value from the first match's text (all matches in same element have same text)
-                    let newText = matches[0].text;
-
-                    // Apply all replacements in reverse order (already sorted)
-                    matches.forEach(match => {
-                        newText = newText.substring(0, match.index) +
-                                  replaceText +
-                                  newText.substring(match.index + match.match.length);
-                    });
-
-                    // Update display (JSON stringify for consistent display)
-                    element.textContent = JSON.stringify(newText);
-                    // Update the raw value data attribute
-                    element.dataset.rawValue = newText;
-
-                    // Send update
-                    vscode.postMessage({
-                        type: 'updateCell',
-                        rowIndex: actualRowIndex,
-                        columnPath: columnPath,
-                        value: newText
-                    });
-
-                } else if (currentView === 'json') {
-                    let newValue = element.value;
-                    matches.forEach(match => {
-                        newValue = newValue.substring(0, match.index) +
-                                   replaceText +
-                                   newValue.substring(match.index + match.match.length);
-                    });
-
-                    element.value = newValue;
-
-                    const rowIndex = parseInt(element.closest('.json-line').dataset.index);
-                    const actualRowIndex = currentData.rowIndices ? currentData.rowIndices[rowIndex] : rowIndex;
-
-                    try {
-                        const parsedData = JSON.parse(newValue);
-                        vscode.postMessage({
-                            type: 'documentChanged',
-                            rowIndex: actualRowIndex,
-                            newData: parsedData
-                        });
-                    } catch (e) {
-                        // Invalid JSON
-                    }
-                }
+            const edits = [];
+            let replaced = 0;
+            cells.forEach(matches => {
+                // Back to front, so earlier indices stay valid
+                matches.sort((a, b) => b.index - a.index);
+                let newText = matches[0].text;
+                matches.forEach(match => {
+                    newText = newText.substring(0, match.index) +
+                              replaceText +
+                              newText.substring(match.index + match.match.length);
+                });
+                replaced += matches.length;
+                edits.push({
+                    rowIndex: matches[0].actualRowIndex,
+                    columnPath: matches[0].columnPath,
+                    value: JSON.stringify(replacedCellValue(matches[0], newText))
+                });
             });
 
-            vscode.window.showInformationMessage('Replaced ' + matchCount + ' occurrences');
-
-            // Re-run find
-            performFind();
+            sendCellReplacements(edits);
+            document.getElementById('findMatchCount').textContent =
+                'Replaced ' + replaced + (replaced === 1 ? ' occurrence' : ' occurrences') +
+                (skipped > 0 ? ' (' + skipped + ' inside objects or arrays left alone)' : '');
         }
 
         // Find/Replace Event Listeners
@@ -680,7 +587,7 @@ export const scripts = `
             if ((e.metaKey || e.ctrlKey) && e.key === 'f') {
                 if (currentView === 'table') {
                     e.preventDefault();
-                    openFindReplaceBar();
+                    openFindReplaceBar(true);
                 } else if (currentView === 'json' && prettyEditor) {
                     e.preventDefault();
                     prettyEditor.getAction('actions.find').run();
@@ -694,7 +601,7 @@ export const scripts = `
             if ((e.metaKey || e.ctrlKey) && e.key === 'h') {
                 if (currentView === 'table') {
                     e.preventDefault();
-                    openFindReplaceBar();
+                    openFindReplaceBar(true);
                     document.getElementById('replaceInput').focus();
                 }
                 // For 'json' and 'raw' views, let Monaco's built-in Find widget handle it
@@ -749,7 +656,7 @@ export const scripts = `
             if (isRefreshKey) {
                 e.preventDefault();
                 e.stopPropagation();
-                vscode.postMessage({ type: 'refresh' });
+                requestRefresh();
                 return;
             }
             if (e.key === 'Escape' && !document.querySelector('td.editing') &&
@@ -833,20 +740,29 @@ export const scripts = `
 
         // Refresh and Follow buttons
         document.getElementById('refreshBtn').addEventListener('click', () => {
-            vscode.postMessage({ type: 'refresh' });
+            requestRefresh();
         });
         document.getElementById('followBtn').addEventListener('click', () => {
             followMode = !followMode;
             document.getElementById('followBtn').classList.toggle('toggled', followMode);
             vscode.postMessage({ type: 'setFollowMode', enabled: followMode });
             if (followMode) {
-                vscode.postMessage({ type: 'refresh' });
+                requestRefresh();
                 followScrollToBottom();
             }
         });
 
+        // Reloading from disk discards unsaved changes, and that includes
+        // keystrokes in Raw or Pretty Print still waiting on their debounce:
+        // sent after the reload, they would write the discarded edit back
+        function requestRefresh() {
+            clearTimeout(window.rawEditTimeout);
+            clearTimeout(window.prettyEditTimeout);
+            vscode.postMessage({ type: 'refresh' });
+        }
+
         // Find/Replace Button
-        document.getElementById('findReplaceBtn').addEventListener('click', openFindReplaceBar);
+        document.getElementById('findReplaceBtn').addEventListener('click', () => openFindReplaceBar(false));
 
         // File stats popover
         document.getElementById('fileInfoBtn').addEventListener('click', () => toggleFileInfo());
@@ -2473,7 +2389,13 @@ export const scripts = `
                     }
                     break;
                 case 'insertAIRows':
-                    checkAPIKeyAndOpenModal(openAIRowsModal, contextMenuRow);
+                    {
+                        // Like every row action: the file row, not the display position
+                        const actualRowIndex = currentData.rowIndices && currentData.rowIndices[contextMenuRow] !== undefined
+                            ? currentData.rowIndices[contextMenuRow]
+                            : contextMenuRow;
+                        checkAPIKeyAndOpenModal(openAIRowsModal, actualRowIndex);
+                    }
                     break;
                 case 'pasteAbove':
                     {
@@ -2601,6 +2523,11 @@ export const scripts = `
             } else {
                 rebuildTable();
             }
+
+            // Matches name rows and columns of the previous data
+            refreshFindAfterUpdate();
+
+            refreshOpenEditor(data);
 
             // Restore wrap text once, now that the table header exists
             if (data.uiPreferences && !uiPreferencesApplied) {
@@ -2772,10 +2699,13 @@ export const scripts = `
                 errorCountElement.textContent = errorCount;
                 errorCountElement.style.display = 'flex';
                 // Default to raw view if there are errors, but not while following a
-                // live-appended file (a mid-write partial last line parses as an error)
-                if (currentView === 'table' && !followMode) {
+                // live-appended file (a mid-write partial last line parses as an error).
+                // Only once: doing it on every update made Table view unusable for a
+                // file with a single bad line - each sort or edit bounced back to Raw
+                if (currentView === 'table' && !followMode && !switchedToRawForErrors) {
                     switchView('raw', false);
                 }
+                switchedToRawForErrors = true;
             } else {
                 errorCountElement.style.display = 'none';
             }
@@ -3003,9 +2933,14 @@ export const scripts = `
             th.classList.add('dragging-header');
             e.dataTransfer.effectAllowed = 'move';
             
-            // Find the index of this column (excluding row header)
-            const headers = Array.from(th.parentNode.children).filter(el => !el.classList.contains('row-header'));
-            draggedHeaderIndex = headers.indexOf(th);
+            draggedHeaderIndex = getColumnIndexForHeader(th);
+        }
+
+        // reorderColumns works on the full column list, hidden columns and
+        // expanded parents included - not on the visible headers' positions
+        function getColumnIndexForHeader(th) {
+            const index = (currentData.columns || []).findIndex(col => col.path === th.dataset.columnPath);
+            return index === -1 ? null : index;
         }
         
         function handleHeaderDragEnd(e) {
@@ -3041,11 +2976,9 @@ export const scripts = `
                 return;
             }
             
-            // Find the index of target column (excluding row header)
-            const headers = Array.from(targetTh.parentNode.children).filter(el => !el.classList.contains('row-header'));
-            const targetIndex = headers.indexOf(targetTh);
+            const targetIndex = getColumnIndexForHeader(targetTh);
             
-            if (draggedHeaderIndex !== null && draggedHeaderIndex !== targetIndex) {
+            if (draggedHeaderIndex !== null && targetIndex !== null && draggedHeaderIndex !== targetIndex) {
                 vscode.postMessage({
                     type: 'reorderColumns',
                     fromIndex: draggedHeaderIndex,
@@ -4428,6 +4361,65 @@ export const scripts = `
             }
         }
 
+        // --- shared:nested-path (keep in sync with src/jsonl/utils.ts) ---
+        // A key can contain "." or "[" itself ("user.name" in flat log
+        // records), so a path is matched against the object's own keys, longest
+        // first; inherited properties ("constructor") never match.
+        function keyEnds(rest) {
+            const ends = [rest.length];
+            for (let i = rest.length - 1; i > 0; i--) {
+                if (rest[i] === '.' || rest[i] === '[') {
+                    ends.push(i);
+                }
+            }
+            return ends;
+        }
+
+        function afterSeparator(tail) {
+            return tail[0] === '.' ? tail.slice(1) : tail;
+        }
+
+        function leadingIndex(rest) {
+            const close = rest.indexOf(']');
+            if (rest[0] !== '[' || close < 2) {
+                return null;
+            }
+            const digits = rest.slice(1, close);
+            for (const ch of digits) {
+                if (ch < '0' || ch > '9') {
+                    return null;
+                }
+            }
+            return { index: Number(digits), tail: afterSeparator(rest.slice(close + 1)) };
+        }
+
+        function readPath(current, rest) {
+            if (rest === '') {
+                return current;
+            }
+            if (current === null) {
+                return null;
+            }
+            if (typeof current !== 'object') {
+                return undefined;
+            }
+            if (rest[0] === '[') {
+                const parsed = leadingIndex(rest);
+                return parsed && Array.isArray(current) ? readPath(current[parsed.index], parsed.tail) : undefined;
+            }
+            for (const end of keyEnds(rest)) {
+                const key = rest.slice(0, end);
+                if (!Object.prototype.hasOwnProperty.call(current, key)) {
+                    continue;
+                }
+                const value = readPath(current[key], afterSeparator(rest.slice(end)));
+                if (value !== undefined) {
+                    return value;
+                }
+            }
+            return undefined;
+        }
+
         function getNestedValue(obj, path) {
             if (!path) return undefined;
 
@@ -4436,40 +4428,19 @@ export const scripts = `
             if (obj === null || obj === undefined) {
                 return undefined;
             }
-            
+
             // Handle special case for primitive values with "(value)" path
             if (path === '(value)' && (typeof obj === 'string' || typeof obj === 'number' || typeof obj === 'boolean' || obj === null || Array.isArray(obj))) {
                 return obj;
             }
-            
-            const parts = path.split('.');
-            let current = obj;
-            
-            for (const part of parts) {
-                if (current === null || current === undefined) {
-                    break;
-                }
-                
-                if (part.includes('[') && part.includes(']')) {
-                    const [key, indexStr] = part.split('[');
-                    const index = parseInt(indexStr.replace(']', ''));
-                    if (isNaN(index)) return undefined;
-                    current = current[key];
-                    if (Array.isArray(current)) {
-                        current = current[index];
-                    } else {
-                        return undefined;
-                    }
-                } else {
-                    current = current[part];
-                }
-                
-                if (current === undefined || current === null) break;
+
+            if (typeof obj !== 'object') {
+                return undefined;
             }
-            
-            return current;
+            return readPath(obj, path);
         }
-        
+        // --- end shared:nested-path ---
+
         function getSampleValue(rows, columnPath) {
             for (const row of rows) {
                 const value = getNestedValue(row, columnPath);
@@ -4525,8 +4496,14 @@ export const scripts = `
             // Handle save on blur or enter
             function saveEdit() {
                 if (editFinished) return;
-                editFinished = true;
                 const newValue = input.value;
+                if (newValue === originalValue) {
+                    // Nothing changed: writing it back would still dirty the
+                    // file, and turn a missing key into "key": null
+                    cancelEdit();
+                    return;
+                }
+                editFinished = true;
                 td.classList.remove('editing');
                 td.textContent = newValue;
                 td.title = newValue;
@@ -4720,7 +4697,8 @@ export const scripts = `
                 clearTimeout(window.prettyEditTimeout);
                 vscode.postMessage({
                     type: 'prettyContentChanged',
-                    newContent: prettyEditor.getValue()
+                    newContent: prettyEditor.getValue(),
+                    partial: prettyEditorPartial
                 });
             }
 
@@ -4946,6 +4924,33 @@ export const scripts = `
             };
         }
 
+        function isStillLoading(data) {
+            return !!(data && data.loadingProgress && data.loadingProgress.loadingChunks);
+        }
+
+        // The Raw and Pretty Print editors are built when their view opens and
+        // don't follow updates by themselves. An editor holding no edits of its
+        // own is rebuilt when the document moves on (the end of background
+        // loading, a change made outside, follow mode), and a reload from disk
+        // drops its edits - otherwise the stale text was written back over the
+        // newer file at the next keystroke or view switch.
+        function refreshOpenEditor(data) {
+            if (data.reloadedFromDisk) {
+                clearTimeout(window.rawEditTimeout);
+                clearTimeout(window.prettyEditTimeout);
+                prettyEditorModified = false;
+                rawEditorModified = false;
+            }
+            if (currentView === 'json' && prettyEditor && !prettyEditorModified &&
+                (prettyEditorContent !== (data.prettyContent || '') || prettyEditorPartial !== isStillLoading(data))) {
+                updatePrettyView();
+            }
+            if (currentView === 'raw' && rawEditor && !rawEditorModified &&
+                rawEditor.getValue() !== (data.rawContent || '')) {
+                updateRawView();
+            }
+        }
+
         function updatePrettyView() {
             const editorContainer = document.getElementById('prettyEditor');
             if (!editorContainer) return;
@@ -4960,6 +4965,8 @@ export const scripts = `
 
                 // Use pre-formatted pretty content from Extension Host
                 const prettyContent = currentData.prettyContent || '';
+                prettyEditorContent = prettyContent;
+                prettyEditorPartial = isStillLoading(currentData);
 
                 // The gutter numbers each record on its first line and leaves
                 // the rest blank. Record starts are recomputed from the
@@ -4984,7 +4991,11 @@ export const scripts = `
                 prettyEditor = monaco.editor.create(editorContainer, Object.assign(getSharedEditorOptions(), {
                     value: prettyContent,
                     language: 'json',
-                    lineNumbers: renderRecordNumber
+                    lineNumbers: renderRecordNumber,
+                    // Built from the rows loaded so far: an edit here would be
+                    // merged as if it were the whole file. It is rebuilt, editable,
+                    // when loading finishes
+                    readOnly: prettyEditorPartial
                 }));
 
                 // Disable JSON validation for JSONL files
@@ -5025,7 +5036,8 @@ export const scripts = `
                     window.prettyEditTimeout = setTimeout(() => {
                         vscode.postMessage({
                             type: 'prettyContentChanged',
-                            newContent: prettyEditor.getValue()
+                            newContent: prettyEditor.getValue(),
+                            partial: prettyEditorPartial
                         });
                     }, 500);
                 });
@@ -5034,7 +5046,8 @@ export const scripts = `
                 prettyEditor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyS, () => {
                     vscode.postMessage({
                         type: 'prettyContentSave',
-                        newContent: prettyEditor.getValue()
+                        newContent: prettyEditor.getValue(),
+                        partial: prettyEditorPartial
                     });
                 });
 
@@ -5131,6 +5144,9 @@ export const scripts = `
                     rawEditorModified = true;
                     clearTimeout(window.rawEditTimeout);
                     window.rawEditTimeout = setTimeout(() => {
+                        // Sent, so no longer an edit the document lacks - a later
+                        // update from outside may refresh the editor again
+                        rawEditorModified = false;
                         vscode.postMessage({
                             type: 'rawContentChanged',
                             newContent: rawEditor.getValue()

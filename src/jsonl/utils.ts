@@ -2,9 +2,158 @@
  * Utility functions for JSONL data manipulation
  */
 
+// Column paths join keys with "." and array indices with "[n]", but a key can
+// contain those characters itself: logs routinely carry flat keys such as
+// "user.name", "http.status" or "k8s.io/app". So a path is matched against the
+// object's own keys, longest first - "user.name" is the key "user.name" when
+// the object has one, and user -> name otherwise. Inherited properties
+// ("constructor", "toString") never match.
+//
+// Keep readPath / readIndex in sync with the copy in src/webview/scripts.ts
+// (the `shared:nested-path` block, which test/nestedPath.test.js extracts).
+
+function hasOwnKey(obj: any, key: string): boolean {
+    return Object.prototype.hasOwnProperty.call(obj, key);
+}
+
+/** Positions where a path can split into a key and the rest, longest key first. */
+function keyEnds(rest: string): number[] {
+    const ends = [rest.length];
+    for (let i = rest.length - 1; i > 0; i--) {
+        if (rest[i] === '.' || rest[i] === '[') {
+            ends.push(i);
+        }
+    }
+    return ends;
+}
+
+/** The rest of a path after a key or index: drops the "." separator. */
+function afterSeparator(tail: string): string {
+    return tail[0] === '.' ? tail.slice(1) : tail;
+}
+
+/** Parse a leading "[n]"; null if the path doesn't start with one. */
+function leadingIndex(rest: string): { index: number; tail: string } | null {
+    const close = rest.indexOf(']');
+    if (rest[0] !== '[' || close < 2) {
+        return null;
+    }
+    const digits = rest.slice(1, close);
+    for (const ch of digits) {
+        if (ch < '0' || ch > '9') {
+            return null;
+        }
+    }
+    return { index: Number(digits), tail: afterSeparator(rest.slice(close + 1)) };
+}
+
+function readPath(current: any, rest: string): any {
+    if (rest === '') {
+        return current;
+    }
+    if (current === null) {
+        return null; // A path through a null shows the null, as it always has
+    }
+    if (typeof current !== 'object') {
+        return undefined;
+    }
+    if (rest[0] === '[') {
+        const parsed = leadingIndex(rest);
+        return parsed && Array.isArray(current) ? readPath(current[parsed.index], parsed.tail) : undefined;
+    }
+    for (const end of keyEnds(rest)) {
+        const key = rest.slice(0, end);
+        if (!hasOwnKey(current, key)) {
+            continue;
+        }
+        const value = readPath(current[key], afterSeparator(rest.slice(end)));
+        if (value !== undefined) {
+            return value;
+        }
+    }
+    return undefined;
+}
+
+function writePath(current: any, rest: string, value: any): boolean {
+    if (current === null || typeof current !== 'object') {
+        return false;
+    }
+    if (rest[0] === '[') {
+        const parsed = leadingIndex(rest);
+        if (!parsed || !Array.isArray(current)) {
+            return false;
+        }
+        if (parsed.tail === '') {
+            current[parsed.index] = value;
+            return true;
+        }
+        const child = current[parsed.index];
+        if (child === null || typeof child !== 'object') {
+            current[parsed.index] = parsed.tail[0] === '[' ? [] : {};
+        }
+        return writePath(current[parsed.index], parsed.tail, value);
+    }
+    for (const end of keyEnds(rest)) {
+        const key = rest.slice(0, end);
+        if (!hasOwnKey(current, key)) {
+            continue;
+        }
+        const tail = afterSeparator(rest.slice(end));
+        if (tail === '') {
+            current[key] = value;
+            return true;
+        }
+        if (writePath(current[key], tail, value)) {
+            return true;
+        }
+    }
+    // No own key leads there: create it, splitting at the first "." or "[".
+    // An existing object is never replaced - only a missing key or a value
+    // that can't hold children (null, a number...) makes way for a container.
+    const boundary = rest.search(/[.[]/);
+    if (boundary === -1) {
+        current[rest] = value;
+        return true;
+    }
+    const key = rest.slice(0, boundary);
+    const existing = current[key];
+    if (hasOwnKey(current, key) && existing !== null && typeof existing === 'object') {
+        return false;
+    }
+    const tail = afterSeparator(rest.slice(boundary));
+    current[key] = tail[0] === '[' ? [] : {};
+    return writePath(current[key], tail, value);
+}
+
+function deletePath(current: any, rest: string): boolean {
+    if (current === null || typeof current !== 'object') {
+        return false;
+    }
+    if (rest[0] === '[') {
+        // Array elements aren't deleted: that would shift every later one
+        const parsed = leadingIndex(rest);
+        return !!parsed && parsed.tail !== '' && Array.isArray(current) && deletePath(current[parsed.index], parsed.tail);
+    }
+    for (const end of keyEnds(rest)) {
+        const key = rest.slice(0, end);
+        if (!hasOwnKey(current, key)) {
+            continue;
+        }
+        const tail = afterSeparator(rest.slice(end));
+        if (tail === '') {
+            delete current[key];
+            return true;
+        }
+        if (deletePath(current[key], tail)) {
+            return true;
+        }
+    }
+    return false;
+}
+
 /**
  * Get a value from a nested object using dot notation path
- * Supports array notation like "field[0]"
+ * Supports array notation like "field[0]", and keys that contain dots
  *
  * @param obj - The object to get the value from
  * @param path - Dot notation path (e.g., "user.name" or "items[0].title")
@@ -21,68 +170,23 @@ export function getNestedValue(obj: any, path: string): any {
         return obj;
     }
 
-    const parts = path.split('.');
-    let current = obj;
-
-    for (const part of parts) {
-        if (current === null || current === undefined) {
-            break;
-        }
-
-        if (part.includes('[') && part.includes(']')) {
-            const [key, indexStr] = part.split('[');
-            const index = parseInt(indexStr.replace(']', ''));
-            if (isNaN(index)) {
-                return undefined;
-            }
-            current = current[key]?.[index];
-        } else {
-            current = current[part];
-        }
-
-        if (current === undefined) break;
+    if (!path || typeof obj !== 'object') {
+        return undefined;
     }
-
-    return current;
+    return readPath(obj, path);
 }
 
 /**
- * Set a value in a nested object using dot notation path
- * Creates intermediate objects/arrays as needed
- * Supports array notation like "field[0]"
+ * Set a value in a nested object using dot notation path. Follows existing
+ * keys (including keys that contain dots) and creates intermediate
+ * objects/arrays as needed. Supports array notation like "field[0]".
  *
  * @param obj - The object to set the value in
  * @param path - Dot notation path (e.g., "user.name" or "items[0].title")
  * @param value - The value to set
  */
 export function setNestedValue(obj: any, path: string, value: any): void {
-    const parts = path.split('.');
-    let current = obj;
-
-    for (let i = 0; i < parts.length - 1; i++) {
-        const part = parts[i];
-
-        if (part.includes('[') && part.includes(']')) {
-            const [key, indexStr] = part.split('[');
-            const index = parseInt(indexStr.replace(']', ''));
-            if (!current[key]) current[key] = [];
-            if (!current[key][index]) current[key][index] = {};
-            current = current[key][index];
-        } else {
-            if (!current[part]) current[part] = {};
-            current = current[part];
-        }
-    }
-
-    const lastPart = parts[parts.length - 1];
-    if (lastPart.includes('[') && lastPart.includes(']')) {
-        const [key, indexStr] = lastPart.split('[');
-        const index = parseInt(indexStr.replace(']', ''));
-        if (!current[key]) current[key] = [];
-        current[key][index] = value;
-    } else {
-        current[lastPart] = value;
-    }
+    writePath(obj, path, value);
 }
 
 /**
@@ -92,28 +196,7 @@ export function setNestedValue(obj: any, path: string, value: any): void {
  * @param path - Dot notation path (e.g., "user.name")
  */
 export function deleteNestedProperty(obj: any, path: string): void {
-    const parts = path.split('.');
-    if (parts.length === 1) {
-        // Top-level property
-        delete obj[path];
-    } else {
-        // Nested property
-        const parentPath = parts.slice(0, -1);
-        const propertyName = parts[parts.length - 1];
-
-        let current = obj;
-        for (const part of parentPath) {
-            if (current && typeof current === 'object' && part in current) {
-                current = current[part];
-            } else {
-                return; // Path doesn't exist
-            }
-        }
-
-        if (current && typeof current === 'object') {
-            delete current[propertyName];
-        }
-    }
+    deletePath(obj, path);
 }
 
 /**

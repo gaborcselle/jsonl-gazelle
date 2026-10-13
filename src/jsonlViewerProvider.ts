@@ -5,6 +5,7 @@ import * as utils from './jsonl/utils';
 import { filterRowsWithIndices } from './jsonl/rowMapping';
 import { ColumnType, SortDirection, detectColumnType, sortRows, sortRowsWithIndices } from './jsonl/sorting';
 import { getUnhideableColumns } from './jsonl/columns';
+import { rebuildJsonlText } from './jsonl/documentText';
 import { getHtmlTemplate } from './webview/template';
 import { styles } from './webview/styles';
 import { scripts } from './webview/scripts';
@@ -21,8 +22,38 @@ function getNonce(): string {
 
 type ColumnPreferences = { order: string[]; visibility: { [path: string]: boolean }; updatedAt?: number };
 
+// Everything the provider's fields hold about one open document, kept while
+// another document's editor is the one being used
+type DocumentState = {
+    panel: vscode.WebviewPanel;
+    rows: JsonRow[];
+    filteredRows: JsonRow[];
+    filteredRowIndices: number[];
+    columns: ColumnInfo[];
+    searchTerm: string;
+    displaySort: { columnPath: string; direction: SortDirection } | null;
+    parsedLines: ParsedLine[];
+    rawContent: string;
+    errorCount: number;
+    totalLines: number;
+    loadedLines: number;
+    fileSizeBytes: number;
+    pathCounts: { [key: string]: number };
+    memoryOptimized: boolean;
+    // False when it was saved mid-load: such a state is reloaded, not reused
+    complete: boolean;
+};
+
 export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
     private static readonly viewType = 'jsonl-gazelle.jsonlViewer';
+    // Messages that rewrite the document from this.rows. They wait for
+    // background chunk loading to finish: before that, this.rows holds only
+    // the start of the file
+    private static readonly ROW_WRITE_MESSAGES = new Set([
+        'removeColumn', 'updateCell', 'updateCells', 'documentChanged', 'prettyContentChanged', 'prettyContentSave',
+        'unstringifyColumn', 'deleteRow', 'insertRow', 'duplicateRow', 'pasteRow', 'reorderColumns',
+        'reorderRows', 'sortRows', 'addColumn', 'addAIColumn', 'generateAIRows'
+    ]);
     private rows: JsonRow[] = [];
     private filteredRows: JsonRow[] = [];
     private filteredRowIndices: number[] = [];
@@ -54,6 +85,11 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
         return vscode.workspace.getConfiguration('jsonl-gazelle').get<number>('performance.chunkedLoadingThreshold', 1000);
     }
     private loadingChunks: boolean = false;
+    // Bumped whenever the parsed state is replaced (a reload, a raw or pretty
+    // edit, switching documents). A background chunk load from an older parse
+    // stops at its next yield instead of appending its lines to the new rows.
+    private loadGeneration: number = 0;
+    private backgroundLoad: Promise<void> | null = null;
     // Delta ('appendRows') bookkeeping for background chunk loading: how much of
     // rows/parsedLines the webview already has, and whether it holds this.rows
     // unfiltered (a prerequisite for sending append-only deltas)
@@ -66,12 +102,22 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
     private pathCounts: { [key: string]: number } = {};
     private currentWebviewPanel: vscode.WebviewPanel | null = null;
     private memoryOptimized: boolean = false;
+    // Set by Refresh: the next update tells the webview to drop editor edits
+    private reloadedFromDisk: boolean = false;
     private isUpdating: boolean = false; // Flag to prevent recursive updates
     private pendingSaveTimeout: NodeJS.Timeout | null = null; // For debouncing saves
     private activeDocumentUri: string | null = null;
     private activeDocument: vscode.TextDocument | null = null;
-    private followWatcher: vscode.FileSystemWatcher | null = null; // Watches the file on disk while follow mode is on
-    private followDebounce: NodeJS.Timeout | null = null;
+    // Follow mode watchers, per document URI: each editor has its own toggle
+    private followWatchers: Map<string, { watcher: vscode.FileSystemWatcher; debounce: NodeJS.Timeout | null }> = new Map();
+    private pendingSaveDocument: vscode.TextDocument | null = null; // Target of the debounced cell save
+    // One provider instance serves every open JSONL editor, but its fields hold
+    // one document's rows. The others' are parked here and swapped back in by
+    // activateDocument before any of their messages is handled.
+    private documentStates: Map<string, DocumentState> = new Map();
+    private activation: Promise<void> = Promise.resolve();
+    private activeOperations: number = 0; // Messages being handled for the active document
+    private idleWaiters: Array<() => void> = [];
     private manualColumnsPerFile: Map<string, ColumnInfo[]> = new Map(); // Store manual columns per file
     private columnPreferencesPerFile: Map<string, ColumnPreferences> = new Map();
     private ratingPromptCallback: (() => Promise<void>) | null = null; // Callback for rating prompt
@@ -96,22 +142,10 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
         webviewPanel: vscode.WebviewPanel,
         _token: vscode.CancellationToken
     ): Promise<void> {
+        const documentUri = document.uri.toString();
         try {
-            // Reset pending saves when switching documents to avoid stale writes.
-            if (this.pendingSaveTimeout) {
-                clearTimeout(this.pendingSaveTimeout);
-                this.pendingSaveTimeout = null;
-            }
-
-            // Display sort belongs to the file it was applied to
-            if (this.activeDocumentUri !== document.uri.toString()) {
-                this.displaySort = null;
-                this.invalidateColumnTypes();
-            }
-
-            this.activeDocumentUri = document.uri.toString();
-            this.activeDocument = document;
-            this.disposeFollowWatcher(); // Follow mode is per-session; the webview toggle starts off
+            // Follow mode is per editor session; the new webview's toggle starts off
+            this.disposeFollowWatcher(documentUri);
 
             // Check and show rating prompt if needed
             if (this.ratingPromptCallback) {
@@ -120,7 +154,6 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
                 });
             }
 
-            this.currentWebviewPanel = webviewPanel;
             webviewPanel.webview.options = {
                 enableScripts: true,
                 enableCommandUris: true
@@ -131,7 +164,19 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
             // Handle messages from the webview
             webviewPanel.webview.onDidReceiveMessage(
                 async (message) => {
+                    let counted = false;
                     try {
+                        // Swap this editor's document in first - the fields may
+                        // hold another open file's rows
+                        while (this.activeDocumentUri !== documentUri) {
+                            await this.activateDocument(document, webviewPanel);
+                        }
+                        this.currentWebviewPanel = webviewPanel;
+                        this.activeOperations++;
+                        counted = true;
+                        if (JsonlViewerProvider.ROW_WRITE_MESSAGES.has(message.type)) {
+                            await this.waitForBackgroundLoad();
+                        }
                         switch (message.type) {
                             case 'search':
                                 this.searchTerm = message.searchTerm;
@@ -142,7 +187,11 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
                                 await this.removeColumn(message.columnPath, webviewPanel, document);
                                 break;
                             case 'updateCell':
-                                await this.updateCell(message.rowIndex, message.columnPath, message.value, webviewPanel, document);
+                                await this.updateCells([{ rowIndex: message.rowIndex, columnPath: message.columnPath, value: message.value }], webviewPanel, document);
+                                break;
+                            case 'updateCells':
+                                // Several cells at once (Replace All): one document edit, one update
+                                await this.updateCells(Array.isArray(message.edits) ? message.edits : [], webviewPanel, document);
                                 break;
                             case 'expandColumn':
                                 this.expandColumn(message.columnPath);
@@ -165,10 +214,18 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
                                 await this.handleRawContentSave(message.newContent, webviewPanel, document);
                                 break;
                             case 'prettyContentChanged':
-                                await this.handlePrettyContentChange(message.newContent, webviewPanel, document);
-                                break;
                             case 'prettyContentSave':
-                                await this.handlePrettyContentSave(message.newContent, webviewPanel, document);
+                                if (message.partial) {
+                                    // Built before the file finished loading, so it holds only
+                                    // the first rows; merging it would delete the rest
+                                    vscode.window.showWarningMessage('JSONL Gazelle: Pretty Print was opened before the file finished loading and shows only part of it, so the edit was not applied. Switch views and back to edit the whole file.');
+                                    break;
+                                }
+                                if (message.type === 'prettyContentSave') {
+                                    await this.handlePrettyContentSave(message.newContent, webviewPanel, document);
+                                } else {
+                                    await this.handlePrettyContentChange(message.newContent, webviewPanel, document);
+                                }
                                 break;
                             case 'forceSave':
                                 await document.save();
@@ -266,13 +323,19 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
                         }
                     } catch (error) {
                         console.error('Error handling webview message:', error);
+                    } finally {
+                        if (counted) {
+                            this.endOperation();
+                        }
                     }
                 }
             );
 
             // Handle document changes
             const changeDocumentSubscription = vscode.workspace.onDidChangeTextDocument(e => {
-                if (e.document.uri.toString() === document.uri.toString()) {
+                // A document whose state is parked is reloaded when its editor
+                // is next activated (its saved text no longer matches)
+                if (e.document.uri.toString() === documentUri && this.activeDocumentUri === documentUri) {
                     // Skip reload if we're currently updating the document
                     if (!this.isUpdating) {
                         // Only reload if the content actually changed
@@ -284,27 +347,45 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
                 }
             });
 
-            // Store subscription for cleanup
-            webviewPanel.onDidDispose(() => {
-                changeDocumentSubscription.dispose();
-
-                if (this.pendingSaveTimeout) {
-                    clearTimeout(this.pendingSaveTimeout);
-                    this.pendingSaveTimeout = null;
-                }
-
-                if (this.activeDocumentUri === document.uri.toString()) {
-                    this.activeDocumentUri = null;
-                    this.activeDocument = null;
-                    this.disposeFollowWatcher();
+            // Coming back to this editor's tab brings its document's state back,
+            // reloading it if the file changed while another editor was in use
+            const viewStateSubscription = webviewPanel.onDidChangeViewState(e => {
+                if (e.webviewPanel.active && this.activeDocumentUri !== documentUri) {
+                    this.activateDocument(document, webviewPanel).catch(error => {
+                        console.error('Error activating document:', error);
+                    });
                 }
             });
 
-            // Load and parse the JSONL file
-            await this.loadJsonlFile(document);
-            
+            // Store subscription for cleanup
+            webviewPanel.onDidDispose(() => {
+                changeDocumentSubscription.dispose();
+                viewStateSubscription.dispose();
+                this.disposeFollowWatcher(documentUri);
+                if (this.documentStates.get(documentUri)?.panel === webviewPanel) {
+                    this.documentStates.delete(documentUri);
+                }
+
+                if (this.activeDocumentUri === documentUri && this.currentWebviewPanel === webviewPanel) {
+                    if (this.pendingSaveTimeout) {
+                        clearTimeout(this.pendingSaveTimeout);
+                        this.pendingSaveTimeout = null;
+                        this.pendingSaveDocument = null;
+                    }
+                    this.loadGeneration++; // Nothing left to show a background load to
+                    this.activeDocumentUri = null;
+                    this.activeDocument = null;
+                    this.currentWebviewPanel = null;
+                }
+            });
+
+            // Load and parse the JSONL file, as a fresh session: no search, no sort
+            await this.activateDocument(document, webviewPanel, true);
+
             // Always send an initial update to ensure webview gets data
-            this.updateWebview(webviewPanel);
+            if (this.activeDocumentUri === documentUri) {
+                this.updateWebview(webviewPanel);
+            }
         } catch (error) {
             console.error('Error in resolveCustomTextEditor:', error);
             // Send error message to webview
@@ -351,6 +432,10 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
             return;
         }
 
+        // A debounced cell edit counts as an unsaved change, and must not land
+        // after the revert
+        await this.flushPendingCellSave();
+
         if (document.isDirty) {
             const choice = await vscode.window.showWarningMessage(
                 'Refreshing will discard unsaved changes and reload the file from disk.',
@@ -372,11 +457,13 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
             this.isUpdating = false;
         }
 
+        this.reloadedFromDisk = true;
         await this.loadJsonlFile(document);
     }
 
     private setFollowMode(enabled: boolean, document: vscode.TextDocument): void {
-        this.disposeFollowWatcher();
+        const documentUri = document.uri.toString();
+        this.disposeFollowWatcher(documentUri);
         if (!enabled || document.uri.scheme !== 'file') {
             return;
         }
@@ -385,13 +472,18 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
             vscode.Uri.file(path.dirname(document.uri.fsPath)),
             path.basename(document.uri.fsPath)
         );
-        this.followWatcher = vscode.workspace.createFileSystemWatcher(pattern);
+        const follow: { watcher: vscode.FileSystemWatcher; debounce: NodeJS.Timeout | null } = {
+            watcher: vscode.workspace.createFileSystemWatcher(pattern),
+            debounce: null
+        };
+        this.followWatchers.set(documentUri, follow);
 
         const onDiskChange = () => {
-            if (this.followDebounce) {
-                clearTimeout(this.followDebounce);
+            if (follow.debounce) {
+                clearTimeout(follow.debounce);
             }
-            this.followDebounce = setTimeout(async () => {
+            follow.debounce = setTimeout(async () => {
+                follow.debounce = null;
                 // Never revert while an internal edit is in flight or the user has unsaved changes
                 if (this.isUpdating || document.isDirty || document.isClosed) {
                     return;
@@ -406,24 +498,148 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
             }, 300);
         };
 
-        this.followWatcher.onDidChange(onDiskChange);
-        this.followWatcher.onDidCreate(onDiskChange);
+        follow.watcher.onDidChange(onDiskChange);
+        follow.watcher.onDidCreate(onDiskChange);
     }
 
-    private disposeFollowWatcher(): void {
-        if (this.followDebounce) {
-            clearTimeout(this.followDebounce);
-            this.followDebounce = null;
+    private disposeFollowWatcher(documentUri: string): void {
+        const follow = this.followWatchers.get(documentUri);
+        if (!follow) {
+            return;
         }
-        if (this.followWatcher) {
-            this.followWatcher.dispose();
-            this.followWatcher = null;
+        if (follow.debounce) {
+            clearTimeout(follow.debounce);
+        }
+        follow.watcher.dispose();
+        this.followWatchers.delete(documentUri);
+    }
+
+    /**
+     * Make `document` the one whose rows, columns and search the provider's
+     * fields hold, saving the previously active document's state first.
+     *
+     * A single provider instance serves every open JSONL editor, so this runs
+     * before any message from an editor is handled. Without it, editing file A
+     * after opening file B edited B's rows, and deleting a row in A wrote B's
+     * rows into A. Switches are serialized, and wait for messages still being
+     * handled for the outgoing document. `fresh` starts a new editor session:
+     * reload, with no search or sort carried over.
+     */
+    private activateDocument(document: vscode.TextDocument, panel: vscode.WebviewPanel, fresh: boolean = false): Promise<void> {
+        const documentUri = document.uri.toString();
+        const run = async () => {
+            if (this.activeDocumentUri === documentUri && !fresh) {
+                return;
+            }
+            await this.waitForIdle();
+            await this.saveActiveDocumentState();
+
+            const saved = fresh ? undefined : this.documentStates.get(documentUri);
+            this.documentStates.delete(documentUri);
+            this.activeDocumentUri = documentUri;
+            this.activeDocument = document;
+            this.currentWebviewPanel = panel;
+
+            if (saved && saved.complete && saved.rawContent === document.getText()) {
+                this.restoreDocumentState(saved);
+                return;
+            }
+
+            // Reload. Search and sort survive; columns are rebuilt from the
+            // file (manually added ones and saved preferences are re-applied)
+            this.searchTerm = saved ? saved.searchTerm : '';
+            this.displaySort = saved ? saved.displaySort : null;
+            this.columns = [];
+            this.invalidateColumnTypes();
+            await this.loadJsonlFile(document);
+        };
+        const next = this.activation.then(run, run);
+        this.activation = next.catch(() => undefined);
+        return next;
+    }
+
+    private async saveActiveDocumentState(): Promise<void> {
+        const documentUri = this.activeDocumentUri;
+        if (!documentUri || !this.activeDocument || !this.currentWebviewPanel) {
+            return;
+        }
+        // A cell edit still waiting on its debounce belongs to this document
+        await this.flushPendingCellSave();
+
+        const manualColumns = this.columns.filter(col => col.isManuallyAdded);
+        if (manualColumns.length > 0) {
+            this.manualColumnsPerFile.set(documentUri, manualColumns);
+        }
+        this.documentStates.set(documentUri, {
+            panel: this.currentWebviewPanel,
+            rows: this.rows,
+            filteredRows: this.filteredRows,
+            filteredRowIndices: this.filteredRowIndices,
+            columns: this.columns,
+            searchTerm: this.searchTerm,
+            displaySort: this.displaySort,
+            parsedLines: this.parsedLines,
+            rawContent: this.rawContent,
+            errorCount: this.errorCount,
+            totalLines: this.totalLines,
+            loadedLines: this.loadedLines,
+            fileSizeBytes: this.fileSizeBytes,
+            pathCounts: this.pathCounts,
+            memoryOptimized: this.memoryOptimized,
+            complete: !this.isIndexing && !this.loadingChunks
+        });
+
+        // A background load of this document must stop touching the fields
+        this.loadGeneration++;
+        this.loadingChunks = false;
+        this.backgroundLoad = null;
+        this.isIndexing = false;
+    }
+
+    private restoreDocumentState(state: DocumentState): void {
+        this.rows = state.rows;
+        this.filteredRows = state.filteredRows;
+        this.filteredRowIndices = state.filteredRowIndices;
+        this.columns = state.columns;
+        this.searchTerm = state.searchTerm;
+        this.displaySort = state.displaySort;
+        this.parsedLines = state.parsedLines;
+        this.rawContent = state.rawContent;
+        this.errorCount = state.errorCount;
+        this.totalLines = state.totalLines;
+        this.loadedLines = state.loadedLines;
+        this.fileSizeBytes = state.fileSizeBytes;
+        this.pathCounts = state.pathCounts;
+        this.memoryOptimized = state.memoryOptimized;
+        this.isIndexing = false;
+        this.loadingChunks = false;
+        this.invalidateColumnTypes();
+        // Its webview still shows exactly this state, but no append deltas
+        // can follow until a full update has been sent
+        this.webviewRowsSynced = false;
+    }
+
+    private async waitForIdle(): Promise<void> {
+        while (this.activeOperations > 0) {
+            await new Promise<void>(resolve => this.idleWaiters.push(resolve));
+        }
+    }
+
+    private endOperation(): void {
+        this.activeOperations--;
+        if (this.activeOperations === 0) {
+            const waiters = this.idleWaiters;
+            this.idleWaiters = [];
+            waiters.forEach(resolve => resolve());
         }
     }
 
     private async loadJsonlFile(document: vscode.TextDocument) {
+        const generation = ++this.loadGeneration;
         try {
             this.isIndexing = true;
+            this.loadingChunks = false;
+            this.backgroundLoad = null;
             const text = document.getText();
             this.rawContent = text;
             if (document.uri.scheme === 'file' && !document.isDirty) {
@@ -436,6 +652,9 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
             } else {
                 // Unsaved edits (or a non-file scheme) make the on-disk size wrong
                 this.fileSizeBytes = Buffer.byteLength(text, 'utf8');
+            }
+            if (generation !== this.loadGeneration) {
+                return; // A newer load started while the file was being stat'ed
             }
             const lines = text.split('\n');
             
@@ -489,9 +708,9 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
             // Re-apply persisted column order and visibility for this file
             this.restoreColumnPreferences(fileUri);
 
-            this.filteredRows = this.rows; // Point to same array for small files
-            this.filteredRowIndices = this.rows.map((_, index) => index);
-            this.applyDisplaySort();
+            // Keeps sharing this.rows when no search is active; with one, the
+            // reloaded rows must be filtered just like the old ones were
+            this.filterRows();
             this.isIndexing = false;
             
             if (this.currentWebviewPanel) {
@@ -525,9 +744,7 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
         // Re-apply persisted column order and visibility for this file
         this.restoreColumnPreferences(fileUri);
 
-        this.filteredRows = this.rows; // Point to same array initially
-        this.filteredRowIndices = this.rows.map((_, index) => index);
-        this.applyDisplaySort();
+        this.filterRows();
         this.isIndexing = false;
         // Mark background loading as active before the first update so the
         // progress banner shows from the start
@@ -539,7 +756,7 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
 
         // Continue loading remaining chunks in background
         if (this.loadedLines < this.totalLines) {
-            this.loadRemainingChunks(lines);
+            this.backgroundLoad = this.loadRemainingChunks(lines, generation);
         }
         } catch (error) {
             console.error('Error loading JSONL file:', error);
@@ -557,9 +774,9 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
         }
     }
     
-    private async loadRemainingChunks(lines: string[]) {
+    private async loadRemainingChunks(lines: string[], generation: number) {
         this.loadingChunks = true;
-        
+
         // Process all chunks without async/await in loop for maximum speed
         for (let startIndex = this.loadedLines; startIndex < this.totalLines; startIndex += this.CHUNK_SIZE) {
             const endIndex = Math.min(startIndex + this.CHUNK_SIZE, this.totalLines);
@@ -595,6 +812,9 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
             // Yield only every 1000 lines to maintain responsiveness
             if (startIndex % (this.CHUNK_SIZE * 10) === 0) {
                 await new Promise(resolve => setTimeout(resolve, 10));
+                if (generation !== this.loadGeneration) {
+                    return; // Superseded: these lines belong to an older parse
+                }
             }
         }
 
@@ -602,15 +822,26 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
 
         // Final update
         if (this.currentWebviewPanel) {
-            if (this.displaySort) {
+            if (this.displaySort || this.searchTerm) {
+                // The last progress update filtered only what had loaded by then
                 this.filterRows();
-            } else if (!this.searchTerm) {
+            } else {
                 this.filteredRows = this.rows;
                 this.extendIdentityRowIndices();
             }
             // appendCompatible: rows were only appended since the last update,
             // so the webview may keep its table DOM and scroll position
             this.updateWebview(this.currentWebviewPanel, { appendCompatible: true });
+        }
+    }
+
+    private async waitForBackgroundLoad(): Promise<void> {
+        while (this.loadingChunks && this.backgroundLoad) {
+            const pending = this.backgroundLoad;
+            await pending;
+            if (this.backgroundLoad === pending) {
+                break;
+            }
         }
     }
 
@@ -931,16 +1162,9 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
             
             // Update filtered rows if search is active
             this.filterRows();
-            
-            // Update parsedLines to reflect the changes
-            this.parsedLines = this.rows.map((row, index) => ({
-                data: row,
-                lineNumber: index + 1,
-                rawLine: JSON.stringify(row)
-            }));
-            
-            // Update raw content
-            this.rawContent = this.rows.map(row => JSON.stringify(row)).join('\n');
+
+            // Rebuild the text from the document's own, so lines the edit didn't touch stay as they were
+            this.composeDocumentText(document);
             
             // Update the document content
             const edit = new vscode.WorkspaceEdit();
@@ -1148,15 +1372,9 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
                     Object.keys(row).forEach(key => delete row[key]);
                     Object.assign(row, newRow);
                 });
-                
-                // Update parsedLines and rawContent
-                this.parsedLines = this.rows.map((row, index) => ({
-                    data: row,
-                    lineNumber: index + 1,
-                    rawLine: JSON.stringify(row)
-                }));
-                
-                this.rawContent = this.rows.map(row => JSON.stringify(row)).join('\n');
+
+                // Rebuild the text from the document's own, so lines the edit didn't touch stay as they were
+                this.composeDocumentText(document);
                 
                 // Save to document
                 this.isUpdating = true;
@@ -1444,15 +1662,8 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
             // Update filtered rows
             this.filterRows();
 
-            // Update parsedLines to reflect the changes
-            this.parsedLines = this.rows.map((row, index) => ({
-                data: row,
-                lineNumber: index + 1,
-                rawLine: JSON.stringify(row)
-            }));
-
-            // Update raw content
-            this.rawContent = this.rows.map(row => JSON.stringify(row)).join('\n');
+            // Rebuild the text from the document's own, so lines the edit didn't touch stay as they were
+            this.composeDocumentText(document);
 
             // Update the document content (set flag to prevent reload)
             this.isUpdating = true;
@@ -1746,15 +1957,8 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
             // Update filtered rows
             this.filterRows();
 
-            // Update parsedLines to reflect the changes
-            this.parsedLines = this.rows.map((row, index) => ({
-                data: row,
-                lineNumber: index + 1,
-                rawLine: JSON.stringify(row)
-            }));
-
-            // Update raw content
-            this.rawContent = this.rows.map(row => JSON.stringify(row)).join('\n');
+            // Rebuild the text from the document's own, so lines the edit didn't touch stay as they were
+            this.composeDocumentText(document);
 
             // Update the document content
             const edit = new vscode.WorkspaceEdit();
@@ -2002,29 +2206,35 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
     }
 
     private async handlePrettyContentChange(newContent: string, webviewPanel: vscode.WebviewPanel, document: vscode.TextDocument) {
-        const jsonlContent = utils.convertPrettyToJsonl(newContent);
-        if (jsonlContent === null) {
+        const text = this.prettyContentToDocumentText(newContent, document);
+        if (text === null) {
             // Content is mid-edit and not valid JSON yet - wait until it
             // parses before touching the document to avoid losing rows
             return;
         }
-        await this.updateRawContent(this.preserveTrailingNewline(jsonlContent), webviewPanel, document, false);
+        await this.updateRawContent(text, webviewPanel, document, false);
     }
 
     private async handlePrettyContentSave(newContent: string, webviewPanel: vscode.WebviewPanel, document: vscode.TextDocument) {
-        const jsonlContent = utils.convertPrettyToJsonl(newContent);
-        if (jsonlContent === null) {
+        const text = this.prettyContentToDocumentText(newContent, document);
+        if (text === null) {
             vscode.window.showErrorMessage('Cannot save: content in Pretty Print view is not valid JSON');
             return;
         }
-        await this.updateRawContent(this.preserveTrailingNewline(jsonlContent), webviewPanel, document, true);
+        await this.updateRawContent(text, webviewPanel, document, true);
     }
 
-    private preserveTrailingNewline(content: string): string {
-        if (content && this.rawContent.endsWith('\n') && !content.endsWith('\n')) {
-            return content + '\n';
+    // Pretty Print shows the rows and nothing else, so its text can't simply
+    // replace the document - lines that don't parse would vanish, and every
+    // row would be re-serialized. Its records are merged into the document's
+    // text instead, the same way table edits are (see documentText.ts).
+    private prettyContentToDocumentText(newContent: string, document: vscode.TextDocument): string | null {
+        const jsonlContent = utils.convertPrettyToJsonl(newContent);
+        if (jsonlContent === null) {
+            return null;
         }
-        return content;
+        const rows = jsonlContent === '' ? [] : jsonlContent.split('\n').map(line => JSON.parse(line));
+        return rebuildJsonlText(document.getText(), rows).text;
     }
 
     private async handleGetSettings(webviewPanel: vscode.WebviewPanel) {
@@ -2310,18 +2520,12 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
                 const insertIndex = rowIndex + 1;
                 this.rows.splice(insertIndex, 0, ...generatedRows);
 
-                // Rebuild parsedLines
-                this.parsedLines = this.rows.map((row, index) => ({
-                    data: row,
-                    lineNumber: index + 1,
-                    rawLine: JSON.stringify(row)
-                }));
 
                 // Update filtered rows
                 this.filterRows();
 
-                // Update raw content
-                this.rawContent = this.rows.map(row => JSON.stringify(row)).join('\n');
+                // Rebuild the text from the document's own, so lines the edit didn't touch stay as they were
+                this.composeDocumentText(document);
 
                 // Update the document content
                 const edit = new vscode.WorkspaceEdit();
@@ -2476,50 +2680,20 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
                 // Update internal data structures for both save and content changes
                 // Parse the new content to update internal data without full reload
                 const lines = newContent.split('\n');
+                // This parse replaces every row; a background chunk load of
+                // the old text must not keep appending to them
+                this.loadGeneration++;
+                this.loadingChunks = false;
+                this.backgroundLoad = null;
                 this.totalLines = lines.length;
-                this.loadedLines = 0;
                 this.rows = [];
                 this.parsedLines = [];
-                
-                // Reset path counts for accurate column detection
                 this.pathCounts = {};
-                
-                // Parse lines to update rows and columns
-                for (let i = 0; i < lines.length; i++) {
-                    const line = lines[i].trim();
-                    if (line) {
-                        try {
-                            const parsed = JSON.parse(line);
-                            this.rows.push(parsed);
-                            this.parsedLines.push({
-                                data: parsed,
-                                lineNumber: i + 1,
-                                rawLine: line,
-                                error: undefined
-                            });
-                            
-                            // Count paths for column detection
-                            try {
-                                this.countPaths(parsed, '', this.pathCounts);
-                            } catch (countError) {
-                                console.warn(`Error counting paths for line ${i + 1}:`, countError);
-                            }
-                        } catch (error) {
-                            this.parsedLines.push({
-                                data: null,
-                                lineNumber: i + 1,
-                                rawLine: line,
-                                error: error instanceof Error ? error.message : String(error)
-                            });
-                        }
-                    }
-                }
-                
-                this.loadedLines = this.rows.length;
+                this.errorCount = 0;
+                this.processChunk(lines, 0);
+                this.loadedLines = this.totalLines;
                 this.invalidateColumnTypes();
-                this.filteredRows = this.rows;
-                this.filteredRowIndices = this.rows.map((_, index) => index);
-                this.applyDisplaySort();
+                this.filterRows();
 
                 // Update columns based on new data
                 this.updateColumns();
@@ -2555,16 +2729,23 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
 
     private async handleDocumentChange(rowIndex: number, newData: any, webviewPanel: vscode.WebviewPanel, document: vscode.TextDocument) {
         try {
+            if (rowIndex < 0 || rowIndex >= this.rows.length) {
+                return;
+            }
+
+            this.isUpdating = true;
+
             // Update the row data
             this.rows[rowIndex] = newData;
+            this.filterRows();
+            this.composeDocumentText(document);
 
             // Update the document content
-            const jsonlContent = this.rows.map(row => JSON.stringify(row)).join('\n');
             const edit = new vscode.WorkspaceEdit();
             edit.replace(
                 document.uri,
                 new vscode.Range(0, 0, document.lineCount, 0),
-                jsonlContent
+                this.rawContent
             );
             await vscode.workspace.applyEdit(edit);
 
@@ -2574,6 +2755,10 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
             console.error('Error handling document change:', error);
             const errorMessage = error instanceof Error ? error.message : String(error);
             vscode.window.showErrorMessage('Failed to save changes: ' + errorMessage);
+        } finally {
+            setTimeout(() => {
+                this.isUpdating = false;
+            }, 100);
         }
     }
 
@@ -2601,18 +2786,12 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
             // Remove the row from the arrays
             this.rows.splice(rowIndex, 1);
 
-            // Also update parsedLines - need to rebuild from rows
-            this.parsedLines = this.rows.map((row, index) => ({
-                data: row,
-                lineNumber: index + 1,
-                rawLine: JSON.stringify(row)
-            }));
 
             // Update filtered rows if search is active
             this.filterRows();
 
-            // Update the raw content
-            this.rawContent = this.rows.map(row => JSON.stringify(row)).join('\n');
+            // Rebuild the text from the document's own, so lines the edit didn't touch stay as they were
+            this.composeDocumentText(document);
 
             // Update the document content
             const edit = new vscode.WorkspaceEdit();
@@ -2666,18 +2845,12 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
             const insertIndex = position === 'above' ? rowIndex : rowIndex + 1;
             this.rows.splice(insertIndex, 0, newRow);
 
-            // Rebuild parsedLines from rows
-            this.parsedLines = this.rows.map((row, index) => ({
-                data: row,
-                lineNumber: index + 1,
-                rawLine: JSON.stringify(row)
-            }));
 
             // Update filtered rows if search is active
             this.filterRows();
 
-            // Update the raw content
-            this.rawContent = this.rows.map(row => JSON.stringify(row)).join('\n');
+            // Rebuild the text from the document's own, so lines the edit didn't touch stay as they were
+            this.composeDocumentText(document);
 
             // Update the document content
             const edit = new vscode.WorkspaceEdit();
@@ -2717,14 +2890,10 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
             const insertIndex = fromIndex < toIndex ? toIndex - 1 : toIndex;
             this.rows.splice(insertIndex, 0, movedRow);
 
-            this.parsedLines = this.rows.map((row, index) => ({
-                data: row,
-                lineNumber: index + 1,
-                rawLine: JSON.stringify(row)
-            }));
 
             this.filterRows();
-            this.rawContent = this.rows.map(row => JSON.stringify(row)).join('\n');
+            // Rebuild the text from the document's own, so lines the edit didn't touch stay as they were
+            this.composeDocumentText(document);
 
             const edit = new vscode.WorkspaceEdit();
             edit.replace(
@@ -2794,17 +2963,13 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
 
             this.rows = sortRows(this.rows, columnPath, direction, this.getColumnType(columnPath));
 
-            this.parsedLines = this.rows.map((row, index) => ({
-                data: row,
-                lineNumber: index + 1,
-                rawLine: JSON.stringify(row)
-            }));
 
             // The file now carries the order itself; a display sort on top of it
             // would be redundant
             this.displaySort = null;
             this.filterRows();
-            this.rawContent = this.rows.map(row => JSON.stringify(row)).join('\n');
+            // Rebuild the text from the document's own, so lines the edit didn't touch stay as they were
+            this.composeDocumentText(document);
 
             const edit = new vscode.WorkspaceEdit();
             edit.replace(
@@ -2862,18 +3027,12 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
             // Insert the duplicated row right after the original
             this.rows.splice(rowIndex + 1, 0, duplicatedRow);
 
-            // Rebuild parsedLines from rows
-            this.parsedLines = this.rows.map((row, index) => ({
-                data: row,
-                lineNumber: index + 1,
-                rawLine: JSON.stringify(row)
-            }));
 
             // Update filtered rows if search is active
             this.filterRows();
 
-            // Update the raw content
-            this.rawContent = this.rows.map(row => JSON.stringify(row)).join('\n');
+            // Rebuild the text from the document's own, so lines the edit didn't touch stay as they were
+            this.composeDocumentText(document);
 
             // Update the document content
             const edit = new vscode.WorkspaceEdit();
@@ -2925,18 +3084,12 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
             const insertIndex = position === 'above' ? rowIndex : rowIndex + 1;
             this.rows.splice(insertIndex, 0, parsedData);
 
-            // Rebuild parsedLines from rows
-            this.parsedLines = this.rows.map((row, index) => ({
-                data: row,
-                lineNumber: index + 1,
-                rawLine: JSON.stringify(row)
-            }));
 
             // Update filtered rows if search is active
             this.filterRows();
 
-            // Update the raw content
-            this.rawContent = this.rows.map(row => JSON.stringify(row)).join('\n');
+            // Rebuild the text from the document's own, so lines the edit didn't touch stay as they were
+            this.composeDocumentText(document);
 
             // Update the document content
             const edit = new vscode.WorkspaceEdit();
@@ -2989,6 +3142,33 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
                 isValidJson: false
             });
         }
+    }
+
+    /**
+     * The document text for this.rows, built from the document's current text
+     * rather than from the rows alone: lines that don't parse, blank lines, the
+     * exact spelling of every row the edit didn't change, the line endings and
+     * the trailing newline all come through as they were (see documentText.ts).
+     * Brings rawContent, parsedLines and errorCount in line with the new text.
+     */
+    private composeDocumentText(document: vscode.TextDocument): string {
+        const rebuilt = rebuildJsonlText(document.getText(), this.rows);
+        this.parsedLines = rebuilt.lines.map((line, index) => {
+            const parsedLine: ParsedLine = {
+                data: line.rowIndex === null ? null : this.rows[line.rowIndex],
+                lineNumber: index + 1,
+                rawLine: line.text
+            };
+            if (line.error) {
+                parsedLine.error = line.error;
+            }
+            return parsedLine;
+        });
+        this.errorCount = rebuilt.errorCount;
+        this.rawContent = rebuilt.text;
+        this.totalLines = rebuilt.lines.length;
+        this.loadedLines = this.totalLines;
+        return rebuilt.text;
     }
 
     private createEmptyRow(): JsonRow {
@@ -3051,9 +3231,11 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
                     uiPreferences: {
                         lastView: uiPrefs.lastView || 'table',
                         wrapText: uiPrefs.wrapText === true
-                    }
+                    },
+                    reloadedFromDisk: this.reloadedFromDisk
                 }
             });
+            this.reloadedFromDisk = false;
             this.webviewRowsSynced = unfiltered;
             this.lastSentRowCount = (this.filteredRows || []).length;
             this.lastSentParsedLineCount = (this.parsedLines || []).length;
@@ -3097,80 +3279,65 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
     }
 
     
-    private async updateCell(rowIndex: number, columnPath: string, value: string, webviewPanel: vscode.WebviewPanel, document: vscode.TextDocument) {
-        if (rowIndex < 0 || rowIndex >= this.rows.length) {
-            console.error(`Invalid row index for updateCell: ${rowIndex}, total rows: ${this.rows.length}`);
+    private applyCellEdit(rowIndex: number, columnPath: string, value: string): void {
+        // Try to parse as JSON first
+        let parsedValue: any = value;
+        if (value.trim() !== '') {
+            try {
+                parsedValue = JSON.parse(value);
+            } catch {
+                // If not valid JSON, treat as string
+                parsedValue = value;
+            }
+        } else {
+            parsedValue = null;
+        }
+
+        // Update the row in the main array. A bare value or array row
+        // (the "(value)" column) is the cell itself, so the row is replaced
+        const row = this.rows[rowIndex];
+        const column = this.columns.find(col => col.path === columnPath);
+        if (columnPath === '(value)' && (row === null || typeof row !== 'object' || Array.isArray(row))) {
+            this.rows[rowIndex] = parsedValue;
+        } else if (column && !column.parentPath && row !== null && typeof row === 'object' && !Array.isArray(row)) {
+            // A column that didn't come from expanding another is a key of
+            // the row itself, even when its name contains a dot ("user.name"):
+            // a row that lacks it gets that key, not a nested object
+            row[columnPath] = parsedValue;
+        } else {
+            this.setNestedValue(row, columnPath, parsedValue);
+        }
+    }
+
+    private async updateCells(
+        edits: Array<{ rowIndex: number; columnPath: string; value: string }>,
+        webviewPanel: vscode.WebviewPanel,
+        document: vscode.TextDocument
+    ) {
+        const validEdits = edits.filter(edit =>
+            edit && Number.isInteger(edit.rowIndex) && edit.rowIndex >= 0 && edit.rowIndex < this.rows.length &&
+            typeof edit.columnPath === 'string' && edit.columnPath !== '' && typeof edit.value === 'string');
+        if (validEdits.length === 0) {
+            console.error('updateCells: no valid edits', edits);
             return;
         }
 
         try {
-            // Try to parse as JSON first
-            let parsedValue: any = value;
-            if (value.trim() !== '') {
-                try {
-                    parsedValue = JSON.parse(value);
-                } catch {
-                    // If not valid JSON, treat as string
-                    parsedValue = value;
-                }
-            } else {
-                parsedValue = null;
-            }
-
-            // Update the row in the main array
-            this.setNestedValue(this.rows[rowIndex], columnPath, parsedValue);
-
-            // Rebuild parsedLines
-            this.parsedLines = this.rows.map((row, index) => ({
-                data: row,
-                lineNumber: index + 1,
-                rawLine: JSON.stringify(row)
-            }));
+            validEdits.forEach(edit => this.applyCellEdit(edit.rowIndex, edit.columnPath, edit.value));
 
             // Update filtered rows
             this.filterRows();
 
-            // Update raw content
-            this.rawContent = this.rows.map(row => JSON.stringify(row)).join('\n');
+            // Rebuild the text from the document's own, so lines the edit didn't touch stay as they were
+            this.composeDocumentText(document);
 
             // Debounce the save operation
             if (this.pendingSaveTimeout) {
                 clearTimeout(this.pendingSaveTimeout);
             }
-
-            this.pendingSaveTimeout = setTimeout(async () => {
-                try {
-                    const pendingContent = this.rawContent;
-                    const targetUri = document.uri.toString();
-
-                    if (this.activeDocumentUri !== targetUri) {
-                        return;
-                    }
-
-                    this.isUpdating = true;
-
-                    const fullRange = new vscode.Range(
-                        document.positionAt(0),
-                        document.positionAt(document.getText().length)
-                    );
-
-                    const edit = new vscode.WorkspaceEdit();
-                    edit.replace(document.uri, fullRange, pendingContent);
-
-                    const success = await vscode.workspace.applyEdit(edit);
-
-                    if (!success) {
-                        console.error('Failed to apply workspace edit');
-                        vscode.window.showErrorMessage('Failed to save changes');
-                    }
-                } catch (saveError) {
-                    console.error('Error saving cell update:', saveError);
-                } finally {
-                    this.pendingSaveTimeout = null;
-                    setTimeout(() => {
-                        this.isUpdating = false;
-                    }, 200);
-                }
+            this.pendingSaveDocument = document;
+            this.pendingSaveTimeout = setTimeout(() => {
+                this.flushPendingCellSave().catch(error => console.error('Error saving cell update:', error));
             }, 300); // Debounce for 300ms
 
             // Update the webview immediately to show the change
@@ -3181,6 +3348,46 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
         }
     }
     
+    // Write the debounced cell edits now. Also run before another document's
+    // state is swapped in, so a quick tab switch can't drop the last edit.
+    private async flushPendingCellSave(): Promise<void> {
+        if (!this.pendingSaveTimeout) {
+            return;
+        }
+        clearTimeout(this.pendingSaveTimeout);
+        this.pendingSaveTimeout = null;
+        const document = this.pendingSaveDocument;
+        this.pendingSaveDocument = null;
+        if (!document || document.isClosed || this.activeDocumentUri !== document.uri.toString()) {
+            return;
+        }
+
+        try {
+            this.isUpdating = true;
+
+            const fullRange = new vscode.Range(
+                document.positionAt(0),
+                document.positionAt(document.getText().length)
+            );
+
+            const edit = new vscode.WorkspaceEdit();
+            edit.replace(document.uri, fullRange, this.rawContent);
+
+            const success = await vscode.workspace.applyEdit(edit);
+
+            if (!success) {
+                console.error('Failed to apply workspace edit');
+                vscode.window.showErrorMessage('Failed to save changes');
+            }
+        } catch (saveError) {
+            console.error('Error saving cell update:', saveError);
+        } finally {
+            setTimeout(() => {
+                this.isUpdating = false;
+            }, 200);
+        }
+    }
+
     private setNestedValue(obj: any, path: string, value: any) {
         utils.setNestedValue(obj, path, value);
     }
@@ -3307,8 +3514,8 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
                 this.updateColumns();
             }
 
-            // Update raw content and save changes
-            this.rawContent = this.rows.map(row => JSON.stringify(row)).join('\n');
+            // Rebuild the text from the document's own, so lines the edit didn't touch stay as they were
+            this.composeDocumentText(document);
 
             // Save the changes to the file
             const fullRange = new vscode.Range(
