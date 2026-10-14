@@ -20,6 +20,15 @@ Fast JSONL viewer / editor for VS Code with advanced features including Table Vi
 
 ## What's new
 
+- *v0.7.4*: Bug fixes, several of which could lose data — updating is recommended:
+  - Moving, sorting or duplicating rows no longer turns large integer IDs that differ only in their last digits (Twitter / Discord-style IDs) into copies of one another
+  - Adding a column, by hand or with AI, under the name of a field the table doesn't show (because only a few rows have it) or of a nested field such as `user.name` is now refused instead of wiping that field's values
+  - A cell edit is written to the file at once, so saving or closing the tab right after `Enter` keeps it
+  - AI columns and rows: edits made while the model is working are turned away with a warning instead of being lost or shifting values onto the wrong rows, and a change to the file from outside is kept. One failed request leaves one empty cell rather than discarding the whole column. Prompts no longer see the "generating" placeholder or garble `$` in your data; `{{row.field}}` takes any field name (`first-name`, `Full Name`, `@timestamp`) and shows objects as JSON. Answers like ZIP codes, phone numbers and long IDs stay text, and generated rows keep every field of the rows around them
+  - Sorting: timestamps without a time zone sort the same in every time zone; long numeric IDs stored as text sort exactly; `1.500 €` sorts as fifteen hundred in columns that use a decimal comma; `3.8` sorts before `3.10`; numbers mixed with text like `n/a` sort as numbers; and a column you have filled with numbers sorts numerically
+  - Columns: collapsing a column also collapses the columns expanded inside it; columns of empty arrays or objects no longer vanish when expanded; expanding during a search makes columns for every row's fields; and an expanded column no longer comes back hidden when the file is reopened
+  - Split Large File asks before replacing the parts of an earlier split (so old parts are never left beside new ones), keeps the file's bytes exactly, including text that isn't UTF-8, and removes its parts if the split fails
+  - Diff: big changes to large files line up row by row instead of showing nearly everything as modified, a deleted row next to an edited one is paired correctly, changed large IDs show their real digits, and line-ending-only differences say so. Diff with Git HEAD works with Git in other languages, on files deleted from disk and on symlinked files, and says when Git isn't installed
 - *v0.7.3*: Bug fixes, several of which could lose data — updating is recommended:
   - Table and Pretty Print edits now change only the rows you edit. Lines that aren't valid JSON, blank lines, large integer IDs, number spellings like `1.50`, CRLF line endings and the final newline are all kept; before, a single cell edit rewrote the whole file and dropped them
   - With several JSONL files open, editing one could change another, or even replace it with the other file's rows. Each editor now works on its own file
