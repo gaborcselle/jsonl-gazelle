@@ -78,6 +78,64 @@ assert.strictEqual(rebuildJsonlText(messy, parseRows(messy)).text, messy);
     assert.strictEqual(rebuildJsonlText(text, [rows[1], rows[0]]).text, '{"id": 2}\n{"id": 12345678901234567890}\n');
 }
 
+// --- rows JSON.parse can't tell apart keep their own lines ------------------------
+// IDs beyond 2^53 that are a few apart parse to the same double, so several
+// lines can hold "equal" rows. Each must keep its own text, never a neighbour's.
+
+const parseRowsWithSources = text => {
+    const rows = [];
+    const sources = new WeakMap();
+    splitDocumentLines(text).forEach(line => {
+        if (!line.trim()) return;
+        try {
+            const row = JSON.parse(line.trim());
+            if (row !== null && typeof row === 'object') sources.set(row, line);
+            rows.push(row);
+        } catch { /* not a row */ }
+    });
+    return { rows, sourceTextOf: row => (row !== null && typeof row === 'object' ? sources.get(row) : undefined) };
+};
+
+{
+    const text =
+        '{"user_id":1700000000000000001,"event":"login"}\n' +
+        '{"user_id":1700000000000000002,"event":"login"}\n' +
+        '{"user_id":1700000000000000003,"event":"login"}\n' +
+        '{"user_id":42,"event":"admin"}\n';
+    const lines = text.split('\n');
+
+    // Moving an unrelated row past them: by value alone, in their original order
+    const plain = parseRows(text);
+    assert.strictEqual(
+        rebuildJsonlText(text, [plain[3], plain[0], plain[1], plain[2]]).text,
+        [lines[3], lines[0], lines[1], lines[2], ''].join('\n')
+    );
+
+    // With the caller naming each row's line, any reordering keeps each row's own text
+    const { rows, sourceTextOf } = parseRowsWithSources(text);
+    assert.strictEqual(
+        rebuildJsonlText(text, [rows[3], rows[2], rows[0], rows[1]], sourceTextOf).text,
+        [lines[3], lines[2], lines[0], lines[1], ''].join('\n')
+    );
+
+    // A duplicate carries its original's line
+    const copy = JSON.parse(JSON.stringify(rows[2]));
+    const withCopy = rebuildJsonlText(text, [rows[0], rows[1], rows[2], copy, rows[3]],
+        row => (row === copy ? lines[2] : sourceTextOf(row))).text;
+    assert.strictEqual(withCopy, [lines[0], lines[1], lines[2], lines[2], lines[3], ''].join('\n'));
+
+    // A new row equal to several different lines can't be one of them: it is
+    // written as parsed rather than as an arbitrary neighbour's ID
+    const pasted = rebuildJsonlText(text, [...rows, { user_id: 1700000000000000001, event: 'login' }], sourceTextOf).text;
+    assert.strictEqual(pasted.split('\n')[4], JSON.stringify({ user_id: 1700000000000000001, event: 'login' }));
+
+    // A hint that names some other line (a stale one) is ignored
+    assert.strictEqual(
+        rebuildJsonlText(text, [rows[3], rows[0], rows[1], rows[2]], () => lines[3]).text,
+        [lines[3], lines[0], lines[1], lines[2], ''].join('\n')
+    );
+}
+
 // --- every row changed: non-row lines stay where they were -------------------
 
 {
@@ -108,7 +166,7 @@ const random = () => {
     return seed / 0x7fffffff;
 };
 const pick = items => items[Math.floor(random() * items.length)];
-const rowTexts = ['{"a":1}', '{"a": 1.0}', '{"id":12345678901234567890}', '[1,2]', '"x"', '0', 'null', '{"b":{"c":[true]}}', '{"a":1}'];
+const rowTexts = ['{"a":1}', '{"a": 1.0}', '{"id":12345678901234567890}', '{"id":12345678901234567891}', '[1,2]', '"x"', '0', 'null', '{"b":{"c":[true]}}', '{"a":1}'];
 const otherTexts = ['', '   ', '{broken', 'not json', '{"a":}'];
 
 for (let iteration = 0; iteration < 3000; iteration++) {
@@ -157,6 +215,21 @@ for (let iteration = 0; iteration < 3000; iteration++) {
     result.lines.forEach((line, i) => {
         if (line.rowIndex !== null) {
             assert.strictEqual(JSON.stringify(JSON.parse(line.text)), JSON.stringify(edited[line.rowIndex]), 'mapping ' + i + ': ' + context);
+        }
+    });
+
+    // Told where each row came from, every row the edit didn't change keeps
+    // exactly its own line - even among rows JSON.parse can't tell apart
+    const traced = parseRowsWithSources(text);
+    const tracedEdited = edited.map(row => {
+        const index = rows.indexOf(row);
+        return index === -1 ? row : traced.rows[index];
+    });
+    const tracedResult = rebuildJsonlText(text, tracedEdited, traced.sourceTextOf);
+    tracedResult.lines.forEach((line, i) => {
+        const source = line.rowIndex === null ? undefined : traced.sourceTextOf(tracedEdited[line.rowIndex]);
+        if (source !== undefined) {
+            assert.strictEqual(line.text, source, 'source line ' + i + ': ' + context);
         }
     });
 }

@@ -6,6 +6,7 @@ import { filterRowsWithIndices } from './jsonl/rowMapping';
 import { ColumnType, SortDirection, detectColumnType, sortRows, sortRowsWithIndices } from './jsonl/sorting';
 import { getUnhideableColumns } from './jsonl/columns';
 import { rebuildJsonlText } from './jsonl/documentText';
+import { describeContextRows, extractGeneratedRows, fillPlaceholders, fillRowTemplate, fitGeneratedRow, parseModelNumber } from './jsonl/aiRows';
 import { getHtmlTemplate } from './webview/template';
 import { styles } from './webview/styles';
 import { scripts } from './webview/scripts';
@@ -18,6 +19,12 @@ function getNonce(): string {
         nonce += chars.charAt(Math.floor(Math.random() * chars.length));
     }
     return nonce;
+}
+
+// A JSON object row: the only kind a column can be added to. A file can also
+// hold bare values and arrays (and null), which have no keys to add.
+function isObjectRow(row: unknown): row is JsonRow {
+    return row !== null && typeof row === 'object' && !Array.isArray(row);
 }
 
 type ColumnPreferences = { order: string[]; visibility: { [path: string]: boolean }; updatedAt?: number };
@@ -54,6 +61,14 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
         'unstringifyColumn', 'deleteRow', 'insertRow', 'duplicateRow', 'pasteRow', 'reorderColumns',
         'reorderRows', 'sortRows', 'addColumn', 'addAIColumn', 'generateAIRows'
     ]);
+    // Messages turned away while an AI column or AI rows are being generated.
+    // That takes as long as the model does; the result is written over the rows
+    // as they were when it started, so any other change in between - an edit, a
+    // raw edit, a refresh - would be lost or would shift the AI values onto the
+    // wrong rows
+    private static readonly BLOCKED_DURING_AI = new Set([
+        ...JsonlViewerProvider.ROW_WRITE_MESSAGES, 'rawContentChanged', 'rawContentSave', 'refresh'
+    ]);
     private rows: JsonRow[] = [];
     private filteredRows: JsonRow[] = [];
     private filteredRowIndices: number[] = [];
@@ -70,6 +85,10 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
     private parsedLines: ParsedLine[] = [];
     private rawContent: string = '';
     private errorCount: number = 0;
+    // The document line each row object was read from (or last written as).
+    // Rows that JSON.parse can't tell apart - IDs beyond 2^53 a few apart -
+    // must each keep their own line when moved, sorted or duplicated
+    private rowSourceText: WeakMap<object, string> = new WeakMap();
 
     // Chunked loading properties
     private readonly CHUNK_SIZE = 100; // Lines per chunk
@@ -105,12 +124,12 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
     // Set by Refresh: the next update tells the webview to drop editor edits
     private reloadedFromDisk: boolean = false;
     private isUpdating: boolean = false; // Flag to prevent recursive updates
-    private pendingSaveTimeout: NodeJS.Timeout | null = null; // For debouncing saves
+    // What an AI operation in progress is doing ("AI column \"x\""), else null
+    private aiOperation: string | null = null;
     private activeDocumentUri: string | null = null;
     private activeDocument: vscode.TextDocument | null = null;
     // Follow mode watchers, per document URI: each editor has its own toggle
     private followWatchers: Map<string, { watcher: vscode.FileSystemWatcher; debounce: NodeJS.Timeout | null }> = new Map();
-    private pendingSaveDocument: vscode.TextDocument | null = null; // Target of the debounced cell save
     // One provider instance serves every open JSONL editor, but its fields hold
     // one document's rows. The others' are parked here and swapped back in by
     // activateDocument before any of their messages is handled.
@@ -174,6 +193,10 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
                         this.currentWebviewPanel = webviewPanel;
                         this.activeOperations++;
                         counted = true;
+                        if (this.aiOperation && JsonlViewerProvider.BLOCKED_DURING_AI.has(message.type)) {
+                            this.refuseDuringAI(webviewPanel);
+                            return;
+                        }
                         if (JsonlViewerProvider.ROW_WRITE_MESSAGES.has(message.type)) {
                             await this.waitForBackgroundLoad();
                         }
@@ -367,11 +390,6 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
                 }
 
                 if (this.activeDocumentUri === documentUri && this.currentWebviewPanel === webviewPanel) {
-                    if (this.pendingSaveTimeout) {
-                        clearTimeout(this.pendingSaveTimeout);
-                        this.pendingSaveTimeout = null;
-                        this.pendingSaveDocument = null;
-                    }
                     this.loadGeneration++; // Nothing left to show a background load to
                     this.activeDocumentUri = null;
                     this.activeDocument = null;
@@ -431,10 +449,11 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
         if (document.isClosed) {
             return;
         }
-
-        // A debounced cell edit counts as an unsaved change, and must not land
-        // after the revert
-        await this.flushPendingCellSave();
+        if (this.aiOperation) {
+            // The Refresh command doesn't come through the message handler
+            this.refuseDuringAI(this.currentWebviewPanel);
+            return;
+        }
 
         if (document.isDirty) {
             const choice = await vscode.window.showWarningMessage(
@@ -459,6 +478,14 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
 
         this.reloadedFromDisk = true;
         await this.loadJsonlFile(document);
+    }
+
+    private refuseDuringAI(webviewPanel: vscode.WebviewPanel | null): void {
+        vscode.window.showWarningMessage(`JSONL Gazelle: ${this.aiOperation} is still running. Wait for it to finish, then make the change again.`);
+        // The webview may already show the edit; put back what the rows hold
+        if (webviewPanel) {
+            this.updateWebview(webviewPanel);
+        }
     }
 
     private setFollowMode(enabled: boolean, document: vscode.TextDocument): void {
@@ -563,9 +590,6 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
         if (!documentUri || !this.activeDocument || !this.currentWebviewPanel) {
             return;
         }
-        // A cell edit still waiting on its debounce belongs to this document
-        await this.flushPendingCellSave();
-
         const manualColumns = this.columns.filter(col => col.isManuallyAdded);
         if (manualColumns.length > 0) {
             this.manualColumnsPerFile.set(documentUri, manualColumns);
@@ -906,6 +930,9 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
                 try {
                     const obj = JSON.parse(trimmedLine);
                     this.rows.push(obj);
+                    if (obj !== null && typeof obj === 'object') {
+                        this.rowSourceText.set(obj, line.endsWith('\r') ? line.slice(0, -1) : line);
+                    }
                     this.parsedLines.push({
                         data: obj,
                         lineNumber: globalIndex + 1,
@@ -1198,10 +1225,6 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
         const sampleValue = this.getSampleValue(columnPath);
         if (!sampleValue || (typeof sampleValue !== 'object')) return;
 
-        // Mark the parent column as expanded and hide it
-        column.isExpanded = true;
-        column.visible = false;
-
         const columnIndex = this.columns.indexOf(column);
         const newColumns: ColumnInfo[] = [];
 
@@ -1254,6 +1277,16 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
             });
         }
 
+        // Only arrays and objects that are empty in every row: nothing to show
+        // in its place, and hiding it would leave no way to get it back
+        if (newColumns.length === 0 && !this.columns.some(col => col.parentPath === columnPath)) {
+            return;
+        }
+
+        // Mark the parent column as expanded and hide it: its children stand in for it
+        column.isExpanded = true;
+        column.visible = false;
+
         // Insert new columns right after the current column
         this.columns.splice(columnIndex + 1, 0, ...newColumns);
     }
@@ -1269,25 +1302,32 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
         column.isExpanded = false;
         column.visible = true;
 
-        // Find all child columns (both auto-generated and manually added)
-        const childColumns = this.columns.filter(col => col.parentPath === columnPath);
-        
-        // Hide all child columns when collapsing
-        // If parent was expanded, this is normal collapse behavior
-        // If parent was not expanded, this hides manually added columns that were visible
-        childColumns.forEach(childCol => {
-            childCol.visible = false;
+        // Every column below this one, not just its children: a child that was
+        // itself expanded has columns of its own, which used to stay on screen,
+        // orphaned, with collapse buttons pointing at a column that was gone
+        const subtree = new Set([columnPath]);
+        let grew = true;
+        while (grew) {
+            grew = false;
+            this.columns.forEach(col => {
+                if (col.parentPath && subtree.has(col.parentPath) && !subtree.has(col.path)) {
+                    subtree.add(col.path);
+                    grew = true;
+                }
+            });
+        }
+        const descendants = this.columns.filter(col => col !== column && subtree.has(col.path));
+
+        // Hide them all. If the parent was expanded this is the normal collapse;
+        // if not, it hides manually added columns that were visible
+        descendants.forEach(col => {
+            col.visible = false;
+            col.isExpanded = false;
         });
-        
-        // Remove only auto-generated child columns from the list
-        // Manually added columns are kept but hidden, so they can reappear when parent is expanded again
-        this.columns = this.columns.filter(col => {
-            if (!col.parentPath || col.parentPath !== columnPath) {
-                return true; // Keep columns that are not children of this column
-            }
-            // Keep manually added columns (they're hidden but preserved), remove auto-generated ones
-            return col.isManuallyAdded === true;
-        });
+
+        // Remove only auto-generated ones from the list. Manually added columns
+        // are kept but hidden, so they can reappear when the parent is expanded again
+        this.columns = this.columns.filter(col => !descendants.includes(col) || col.isManuallyAdded === true);
     }
 
     private async reorderColumns(fromIndex: number, toIndex: number, webviewPanel?: vscode.WebviewPanel, document?: vscode.TextDocument) {
@@ -1356,14 +1396,14 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
                     
                     // Add keys in new column order
                     for (const colPath of columnOrder) {
-                        if (row.hasOwnProperty(colPath)) {
+                        if (Object.prototype.hasOwnProperty.call(row, colPath)) {
                             newRow[colPath] = row[colPath];
                         }
                     }
                     
                     // Add any remaining keys not in columns (shouldn't happen, but just in case)
                     for (const key of Object.keys(row)) {
-                        if (!newRow.hasOwnProperty(key)) {
+                        if (!Object.prototype.hasOwnProperty.call(newRow, key)) {
                             newRow[key] = row[key];
                         }
                     }
@@ -1438,7 +1478,7 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
         // Only restore manual columns that actually exist in the data
         const validSavedColumns = savedColumns.filter(col => {
             // Check if this column exists in any row
-            return this.rows.some(row => row.hasOwnProperty(col.path));
+            return this.rows.some(row => isObjectRow(row) && Object.prototype.hasOwnProperty.call(row, col.path));
         });
         
         // Insert saved manual columns back at their positions
@@ -1465,7 +1505,10 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
         const visibility: { [path: string]: boolean } = {};
 
         this.columns.forEach(col => {
-            visibility[col.path] = col.visible;
+            // An expanded column is hidden only because its children stand in
+            // for it. Stored as hidden, it came back hidden on the next load,
+            // which rebuilds columns collapsed
+            visibility[col.path] = col.visible || col.isExpanded === true;
         });
 
         this.columnPreferencesPerFile.set(fileUri, { order, visibility });
@@ -1552,6 +1595,31 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
         }
     }
 
+    /**
+     * Check that a column can be added under this name, telling the user why
+     * not when it can't. The table only shows a field as a column once it has a
+     * value in a tenth of the rows, so a name the table doesn't show can still
+     * hold data - adding a column over it used to wipe that data. A nested path
+     * ("user.name") counts too, read the way a cell is.
+     */
+    private refuseExistingColumnName(columnName: string): boolean {
+        if (!this.rows.some(isObjectRow)) {
+            vscode.window.showErrorMessage('Cannot add columns to primitive values. File must contain JSON objects.');
+            return false;
+        }
+        const withValues = this.rows.filter(row => {
+            const value = isObjectRow(row) ? utils.getNestedValue(row, columnName) : undefined;
+            return value !== undefined && value !== null;
+        }).length;
+        if (withValues > 0) {
+            vscode.window.showErrorMessage(
+                `Column "${columnName}" already exists in this file (${withValues} row${withValues === 1 ? ' has' : 's have'} a value for it). Choose another name.`
+            );
+            return false;
+        }
+        return true;
+    }
+
     private async handleAddColumn(
         columnName: string,
         position: 'before' | 'after',
@@ -1566,36 +1634,21 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
                 return;
             }
             
-            // Check if data contains objects (not primitives)
-            if (this.rows.length > 0 && typeof this.rows[0] !== 'object') {
-                vscode.window.showErrorMessage('Cannot add columns to primitive values. File must contain JSON objects.');
+            if (!this.refuseExistingColumnName(columnName)) {
                 return;
             }
 
-            // Check if column with this name already exists in the columns list
+            // A column of nothing but nulls (one added earlier, never filled) is
+            // replaced: dropping those nulls loses nothing
             const existingColumnIndex = this.columns.findIndex(col => col.path === columnName);
-
-            // If column exists but has no data (from a previous failed attempt), clean it up
-            const hasDataInRows = this.rows.some(row => row.hasOwnProperty(columnName) && row[columnName] !== null);
-
-            if (existingColumnIndex !== -1 && hasDataInRows) {
-                // Column exists and has real data - don't allow duplicate
-                vscode.window.showErrorMessage(`Column "${columnName}" already exists in this file.`);
-                return;
-            }
-
-            // Clean up any remnants from previous failed attempts
             if (existingColumnIndex !== -1) {
-                // Remove from columns list
                 this.columns.splice(existingColumnIndex, 1);
             }
-
-            // Remove from rows if present
-            if (this.rows.some(row => row.hasOwnProperty(columnName))) {
-                this.rows.forEach(row => {
+            this.rows.forEach(row => {
+                if (isObjectRow(row)) {
                     delete row[columnName];
-                });
-            }
+                }
+            });
 
             // Remove from manualColumnsPerFile to prevent restoration
             {
@@ -1630,6 +1683,9 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
 
             // Add null values to all rows for the new column at the correct position
             this.rows.forEach(row => {
+                if (!isObjectRow(row)) {
+                    return;
+                }
                 // Create new object with keys in the right order
                 const newRow: JsonRow = {};
                 let inserted = false;
@@ -1702,91 +1758,73 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
         document: vscode.TextDocument,
         enumValues?: string[] | null
     ) {
-        // Set isUpdating flag at the very start to prevent any reloads
+        if (columnName.length > 100) {
+            vscode.window.showErrorMessage('Column name is too long. Maximum length is 100 characters.');
+            return;
+        }
+        if (!this.refuseExistingColumnName(columnName)) {
+            return;
+        }
+        const refColumnIndex = this.columns.findIndex(col => col.path === referenceColumn);
+        if (refColumnIndex === -1) {
+            return;
+        }
+
+        // The prompts are built from the rows as they are now - before the
+        // "generating" placeholder goes in, which {{row}} would otherwise show
+        const totalRows = this.rows.length;
+        const targets: number[] = [];
+        const prompts: string[] = [];
+        this.rows.forEach((row, index) => {
+            if (isObjectRow(row)) {
+                targets.push(index);
+                prompts.push(this.buildAIColumnPrompt(promptTemplate, row, index, totalRows, enumValues || null));
+            }
+        });
+
+        // Everything needed to put the rows and columns back exactly as they
+        // were if the column isn't added after all. The document itself isn't
+        // touched until the end, so the rows are what needs restoring.
+        const fileUri = document.uri.toString();
+        const startText = document.getText();
+        const rowsBefore = new Map<JsonRow, string>();
+        targets.forEach(index => rowsBefore.set(this.rows[index], JSON.stringify(this.rows[index])));
+        const columnsBefore = this.columns.slice();
+        const manualColumnsBefore = this.manualColumnsPerFile.get(fileUri);
+        const restore = () => {
+            rowsBefore.forEach((json, row) => {
+                Object.keys(row).forEach(key => delete row[key]);
+                Object.assign(row, JSON.parse(json));
+            });
+            this.columns = columnsBefore;
+            if (manualColumnsBefore) {
+                this.manualColumnsPerFile.set(fileUri, manualColumnsBefore);
+            } else {
+                this.manualColumnsPerFile.delete(fileUri);
+            }
+            this.filterRows();
+        };
+
+        this.aiOperation = `The AI column "${columnName}"`;
+        // A reload in the middle would swap the rows out from under the fill;
+        // a change from outside is noticed at the end instead
         this.isUpdating = true;
-
         try {
-            // Validate column name length
-            if (columnName.length > 100) {
-                vscode.window.showErrorMessage('Column name is too long. Maximum length is 100 characters.');
-                this.isUpdating = false;
-                return;
-            }
-
-            // Check if data contains objects (not primitives)
-            if (this.rows.length > 0 && typeof this.rows[0] !== 'object') {
-                vscode.window.showErrorMessage('Cannot add columns to primitive values. File must contain JSON objects.');
-                this.isUpdating = false;
-                return;
-            }
-
-            // Check if column with this name already exists in the columns list
+            // A column of nothing but nulls (an earlier attempt) is replaced
             const existingColumnIndex = this.columns.findIndex(col => col.path === columnName);
-
-            // If column exists but has no data (from a previous failed attempt), clean it up
-            const hasDataInRows = this.rows.some(row => row.hasOwnProperty(columnName) && row[columnName] !== null);
-
-            if (existingColumnIndex !== -1 && hasDataInRows) {
-                // Column exists and has real data - don't allow duplicate
-                vscode.window.showErrorMessage(`Column "${columnName}" already exists in this file.`);
-                this.isUpdating = false;
-                return;
-            }
-
-            // Clean up any remnants from previous failed attempts
             if (existingColumnIndex !== -1) {
-                // Remove from columns list
                 this.columns.splice(existingColumnIndex, 1);
             }
-
-            // Remove from rows if present
-            if (this.rows.some(row => row.hasOwnProperty(columnName))) {
-                this.rows.forEach(row => {
-                    delete row[columnName];
-                });
+            targets.forEach(index => { delete this.rows[index][columnName]; });
+            const savedManualColumns = (manualColumnsBefore || []).filter(col => col.path !== columnName);
+            if (savedManualColumns.length > 0) {
+                this.manualColumnsPerFile.set(fileUri, savedManualColumns);
+            } else {
+                this.manualColumnsPerFile.delete(fileUri);
             }
 
-            // Remove from manualColumnsPerFile to prevent restoration
-            {
-                const fileUri = document.uri.toString();
-                const savedManualColumns = this.manualColumnsPerFile.get(fileUri) || [];
-                const filteredColumns = savedManualColumns.filter(col => col.path !== columnName);
-                if (filteredColumns.length > 0) {
-                    this.manualColumnsPerFile.set(fileUri, filteredColumns);
-                } else {
-                    this.manualColumnsPerFile.delete(fileUri);
-                }
-            }
-
-            // Find the reference column
-            const refColumnIndex = this.columns.findIndex(col => col.path === referenceColumn);
-            if (refColumnIndex === -1) {
-                this.isUpdating = false;
-                return;
-            }
-
-            // Determine if this is a nested column and find parent path
+            // A dotted name is a nested field ("user.score")
             const isNestedColumn = columnName.includes('.');
-            let parentPath: string | undefined = undefined;
-            
-            if (isNestedColumn) {
-                // Extract parent path (e.g., "user.id2" -> "user")
-                const parts = columnName.split('.');
-                parentPath = parts.slice(0, -1).join('.');
-                
-                // Check if parent column exists and is expanded
-                const parentColumn = this.columns.find(col => col.path === parentPath);
-                if (parentColumn && parentColumn.isExpanded) {
-                    // Parent is expanded, so this nested column should be visible
-                    // But we need to ensure parentPath is set correctly
-                } else if (parentColumn && !parentColumn.isExpanded) {
-                    // Parent exists but is not expanded - we should expand it or make column visible anyway
-                    // For now, we'll make the nested column visible even if parent is not expanded
-                    // This handles the case where user.id2 is added before user is expanded
-                }
-            }
-
-            // Create new column with position info
             const newColumn: ColumnInfo = {
                 path: columnName,
                 displayName: columnName,
@@ -1795,244 +1833,188 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
                 isManuallyAdded: true,
                 insertPosition: position,
                 insertReferenceColumn: referenceColumn,
-                parentPath: parentPath
+                parentPath: isNestedColumn ? columnName.split('.').slice(0, -1).join('.') : undefined
             };
-
-            // Insert column at the right position
-            const insertIndex = position === 'before' ? refColumnIndex : refColumnIndex + 1;
+            // Found again: replacing a column of nulls above may have moved it
+            const refIndex = this.columns.findIndex(col => col.path === referenceColumn);
+            const insertIndex = refIndex === -1 ? this.columns.length : position === 'before' ? refIndex : refIndex + 1;
             this.columns.splice(insertIndex, 0, newColumn);
 
-            // Add "generating" values to all rows for the new column (will be filled by AI)
-            // Use setNestedValue for nested columns
-            this.rows.forEach(row => {
+            // Show the column straight away, each cell saying "generating"
+            targets.forEach(index => {
+                const row = this.rows[index];
                 if (isNestedColumn) {
-                    // Use setNestedValue for nested paths
-                    this.setNestedValue(row, columnName, "generating");
-                } else {
-                    // For top-level columns, maintain order
-                    const newRow: JsonRow = {};
-                    let inserted = false;
-
-                    for (const key of Object.keys(row)) {
-                        if (key === referenceColumn && position === 'before' && !inserted) {
-                            newRow[columnName] = "generating";
-                            inserted = true;
-                        }
-
-                        newRow[key] = row[key];
-
-                        if (key === referenceColumn && position === 'after' && !inserted) {
-                            newRow[columnName] = "generating";
-                            inserted = true;
-                        }
-                    }
-
-                    if (!inserted) {
-                        newRow[columnName] = "generating";
-                    }
-
-                    Object.keys(row).forEach(key => delete row[key]);
-                    Object.assign(row, newRow);
+                    this.setNestedValue(row, columnName, 'generating');
+                    return;
                 }
+                // A top-level key goes next to the reference column
+                const newRow: JsonRow = {};
+                let inserted = false;
+                for (const key of Object.keys(row)) {
+                    if (key === referenceColumn && position === 'before' && !inserted) {
+                        newRow[columnName] = 'generating';
+                        inserted = true;
+                    }
+                    newRow[key] = row[key];
+                    if (key === referenceColumn && position === 'after' && !inserted) {
+                        newRow[columnName] = 'generating';
+                        inserted = true;
+                    }
+                }
+                if (!inserted) {
+                    newRow[columnName] = 'generating';
+                }
+                Object.keys(row).forEach(key => delete row[key]);
+                Object.assign(row, newRow);
             });
-
-            // Update webview to show the column with "generating" values
+            this.filterRows();
             this.updateWebview(webviewPanel);
 
-            // Now fill the column with AI-generated content
-            await this.fillColumnWithAI(columnName, promptTemplate, webviewPanel, document, enumValues || null);
+            const outcome = await this.fillColumnWithAI(columnName, targets, prompts, enumValues || null, webviewPanel);
 
-            // Save recent enum values to global state
+            if (document.getText() !== startText) {
+                // Someone else changed the file meanwhile (a checkout, another
+                // editor). Writing these rows would undo that change.
+                restore();
+                await this.loadJsonlFile(document);
+                vscode.window.showWarningMessage(`JSONL Gazelle: the file changed while the AI column "${columnName}" was being generated, so it was not added. Run it again to add it.`);
+                return;
+            }
+            if (outcome.filled === 0) {
+                restore();
+                this.updateWebview(webviewPanel);
+                this.showAIError(`Failed to add AI column "${columnName}"`, outcome.firstError || 'no value was generated');
+                return;
+            }
+
+            this.filterRows();
+            this.composeDocumentText(document);
+            const edit = new vscode.WorkspaceEdit();
+            edit.replace(document.uri, new vscode.Range(0, 0, document.lineCount, 0), this.rawContent);
+            await vscode.workspace.applyEdit(edit);
+            this.updateWebview(webviewPanel);
+
+            this.manualColumnsPerFile.set(fileUri, this.columns.filter(col => col.isManuallyAdded));
             if (enumValues && enumValues.length > 0) {
                 await this.saveRecentEnumValues(enumValues);
             }
 
+            if (outcome.failed > 0) {
+                vscode.window.showWarningMessage(
+                    `JSONL Gazelle: AI column "${columnName}" added, but ${outcome.failed} of ${targets.length} rows could not be generated and were left empty: ${outcome.firstError}`
+                );
+            } else {
+                vscode.window.showInformationMessage(`AI column "${columnName}" generated successfully for ${targets.length} rows`);
+            }
         } catch (error) {
-            // Rollback: Remove the column that was just added
-            const columnIndex = this.columns.findIndex(col => col.path === columnName);
-            if (columnIndex !== -1) {
-                this.columns.splice(columnIndex, 1);
-            }
-
-            // Remove the column from all rows
-            this.rows.forEach(row => {
-                delete row[columnName];
-            });
-
-            // Remove from manualColumnsPerFile
-            const fileUri = document.uri.toString();
-            const savedManualColumns = this.manualColumnsPerFile.get(fileUri) || [];
-            const filteredColumns = savedManualColumns.filter(col => col.path !== columnName);
-            if (filteredColumns.length > 0) {
-                this.manualColumnsPerFile.set(fileUri, filteredColumns);
-            } else {
-                this.manualColumnsPerFile.delete(fileUri);
-            }
-
-            // Update the webview to reflect the rollback
+            restore();
             this.updateWebview(webviewPanel);
-
-            // Show user-friendly error message
-            const errorMsg = error instanceof Error ? error.message : 'Unknown error';
-            if (errorMsg.includes('quota') || errorMsg.includes('limit') || errorMsg.includes('allowance')) {
-                vscode.window.showErrorMessage(`AI quota exceeded: ${errorMsg}`);
-            } else {
-                vscode.window.showErrorMessage(`Failed to add AI column: ${errorMsg}`);
-            }
+            this.showAIError(`Failed to add AI column "${columnName}"`, error instanceof Error ? error.message : 'Unknown error');
             console.error('Error adding AI column:', error);
         } finally {
-            // Always reset the flag when done
+            this.aiOperation = null;
             this.isUpdating = false;
         }
     }
 
-    private async fillColumnWithAI(
-        columnName: string,
-        promptTemplate: string,
-        webviewPanel: vscode.WebviewPanel,
-        document: vscode.TextDocument,
-        enumValues: string[] | null = null
-    ) {
-        const totalRows = this.rows.length;
-
-        // Note: isUpdating flag is already set by handleAddAIColumn
-        try {
-            await vscode.window.withProgress({
-                location: vscode.ProgressLocation.Notification,
-                title: `Generating AI content for column "${columnName}"`,
-                cancellable: false
-            }, async (progress) => {
-                progress.report({ increment: 0, message: `Processing ${totalRows.toLocaleString()} rows...` });
-
-                // Process rows in parallel batches
-                const batchSize = 10; // Process 10 rows concurrently
-                let processedCount = 0;
-
-            for (let i = 0; i < totalRows; i += batchSize) {
-                const endIndex = Math.min(i + batchSize, totalRows);
-                const batch = [];
-
-                for (let j = i; j < endIndex; j++) {
-                    batch.push(this.generateAIValueForRow(j, promptTemplate, totalRows, enumValues));
-                }
-
-                // Wait for all promises in the batch to resolve
-                const results = await Promise.all(batch);
-
-                // Assign results to rows
-                for (let j = 0; j < results.length; j++) {
-                    const rowIndex = i + j;
-                    const row = this.rows[rowIndex];
-
-                    // Check if this is a nested column
-                    const isNestedColumn = columnName.includes('.');
-                    
-                    if (isNestedColumn) {
-                        // Use setNestedValue for nested paths (e.g., "user.id2")
-                        this.setNestedValue(row, columnName, results[j]);
-                    } else {
-                        // For top-level columns, maintain column order when setting the value
-                        const newRow: JsonRow = {};
-                        for (const key of Object.keys(row)) {
-                            newRow[key] = key === columnName ? results[j] : row[key];
-                        }
-                        Object.keys(row).forEach(key => delete row[key]);
-                        Object.assign(row, newRow);
-                    }
-                }
-
-                processedCount = endIndex;
-                const progressPercent = Math.round((processedCount / totalRows) * 100);
-                progress.report({
-                    increment: (batchSize / totalRows) * 100,
-                    message: `Processed ${processedCount.toLocaleString()} of ${totalRows.toLocaleString()} rows (${progressPercent}%)`
-                });
-
-                // Update webview periodically
-                if (processedCount % 50 === 0 || processedCount === totalRows) {
-                    this.updateWebview(webviewPanel);
-                }
-            }
-
-            // Update filtered rows
-            this.filterRows();
-
-            // Rebuild the text from the document's own, so lines the edit didn't touch stay as they were
-            this.composeDocumentText(document);
-
-            // Update the document content
-            const edit = new vscode.WorkspaceEdit();
-            edit.replace(
-                document.uri,
-                new vscode.Range(0, 0, document.lineCount, 0),
-                this.rawContent
-            );
-            await vscode.workspace.applyEdit(edit);
-
-            // Final webview update
-            this.updateWebview(webviewPanel);
-
-                // Save manual columns for this file
-                const fileUri = document.uri.toString();
-                const manualColumns = this.columns.filter(col => col.isManuallyAdded);
-                this.manualColumnsPerFile.set(fileUri, manualColumns);
-
-                vscode.window.showInformationMessage(`AI column "${columnName}" generated successfully for ${totalRows} rows`);
-            });
-        } catch (error) {
-            vscode.window.showErrorMessage(`Failed to generate AI content: ${error instanceof Error ? error.message : 'Unknown error'}`);
-            console.error('Error generating AI content:', error);
-            throw error; // Re-throw so parent can handle
+    private showAIError(what: string, errorMsg: string) {
+        if (errorMsg.includes('quota') || errorMsg.includes('limit') || errorMsg.includes('allowance')) {
+            vscode.window.showErrorMessage(`AI quota exceeded: ${errorMsg}`);
+        } else {
+            vscode.window.showErrorMessage(`${what}: ${errorMsg}`);
         }
     }
 
-    private async generateAIValueForRow(rowIndex: number, promptTemplate: string, totalRows: number, enumValues: string[] | null = null): Promise<string | number | boolean> {
-        const row = this.rows[rowIndex];
+    /**
+     * Ask the model for each target row's value and put it in the row. A row
+     * whose request fails is left empty (null) rather than costing every other
+     * row its value; a batch in which every request fails means a dead key, a
+     * spent quota or an unreachable server, so the rest isn't asked for.
+     */
+    private async fillColumnWithAI(
+        columnName: string,
+        targets: number[],
+        prompts: string[],
+        enumValues: string[] | null,
+        webviewPanel: vscode.WebviewPanel
+    ): Promise<{ filled: number; failed: number; firstError: string | null }> {
+        // The same array throughout: other writes are turned away meanwhile
+        const rows = this.rows;
+        const isNestedColumn = columnName.includes('.');
+        const setValue = (row: JsonRow, value: unknown) => {
+            if (isNestedColumn) {
+                this.setNestedValue(row, columnName, value);
+            } else {
+                // The key is already in place, so assigning keeps its position
+                row[columnName] = value;
+            }
+        };
+        let filled = 0;
+        let failed = 0;
+        let firstError: string | null = null;
 
+        await vscode.window.withProgress({
+            location: vscode.ProgressLocation.Notification,
+            title: `Generating AI content for column "${columnName}"`,
+            cancellable: false
+        }, async (progress) => {
+            progress.report({ increment: 0, message: `Processing ${targets.length.toLocaleString()} rows...` });
+
+            const batchSize = 10; // Rows asked for concurrently
+            for (let i = 0; i < targets.length; i += batchSize) {
+                const batch = targets.slice(i, i + batchSize);
+                const results = await Promise.allSettled(batch.map((_, k) => this.callLanguageModel(prompts[i + k], enumValues)));
+                let batchFilled = 0;
+                results.forEach((result, k) => {
+                    const row = rows[batch[k]];
+                    if (result.status === 'fulfilled') {
+                        setValue(row, result.value);
+                        filled++;
+                        batchFilled++;
+                    } else {
+                        setValue(row, null);
+                        failed++;
+                        if (firstError === null) {
+                            firstError = result.reason instanceof Error ? result.reason.message : String(result.reason);
+                        }
+                    }
+                });
+
+                const processedCount = i + batch.length;
+                progress.report({
+                    increment: (batch.length / targets.length) * 100,
+                    message: `Processed ${processedCount.toLocaleString()} of ${targets.length.toLocaleString()} rows (${Math.round((processedCount / targets.length) * 100)}%)`
+                });
+
+                if (batchFilled === 0) {
+                    // Not asked for: empty, like the rows whose request failed
+                    targets.slice(processedCount).forEach(index => setValue(rows[index], null));
+                    failed += targets.length - processedCount;
+                    break;
+                }
+                if (processedCount % 50 === 0) {
+                    this.updateWebview(webviewPanel);
+                }
+            }
+        });
+
+        return { filled, failed, firstError };
+    }
+
+    private buildAIColumnPrompt(promptTemplate: string, row: JsonRow, rowIndex: number, totalRows: number, enumValues: string[] | null): string {
         // Replace template variables (use empty string if template is empty)
         let prompt = promptTemplate ? this.replaceTemplateVariables(promptTemplate, row, rowIndex, totalRows) : '';
 
         // When using enum with Structured Outputs, do not include the options list in the prompt.
         // The JSON Schema strictly constrains allowed values; keep only row context in the prompt.
-        if (enumValues && enumValues.length > 0) {
-            if (!prompt) {
-                prompt = `Given the following row JSON, select the single best value based on the context. Return exactly one value.\n\nRow:\n${JSON.stringify(row, null, 2)}`;
-            }
+        if (enumValues && enumValues.length > 0 && !prompt) {
+            prompt = `Given the following row JSON, select the single best value based on the context. Return exactly one value.\n\nRow:\n${JSON.stringify(row, null, 2)}`;
         }
-
-        // Call the language model API (let errors bubble up)
-        const result = await this.callLanguageModel(prompt, enumValues);
-
-        return result;
+        return prompt;
     }
 
     private replaceTemplateVariables(template: string, row: any, rowIndex: number, totalRows: number): string {
-        let result = template;
-
-        // Replace {{row}} with full JSON
-        result = result.replace(/\{\{row\}\}/g, JSON.stringify(row));
-
-        // Replace {{row.fieldname}}, {{row.fieldname[0]}}, etc.
-        const fieldRegex = /\{\{row\.([a-zA-Z0-9_.\[\]]+)\}\}/g;
-        result = result.replace(fieldRegex, (_match, fieldPath) => {
-            try {
-                const value = this.getNestedValue(row, fieldPath);
-                return value !== undefined && value !== null ? String(value) : '';
-            } catch {
-                return '';
-            }
-        });
-
-        // Replace {{row_number}} (1-based)
-        result = result.replace(/\{\{row_number\}\}/g, String(rowIndex + 1));
-
-        // Replace {{rows_before}}
-        result = result.replace(/\{\{rows_before\}\}/g, String(rowIndex));
-
-        // Replace {{rows_after}}
-        result = result.replace(/\{\{rows_after\}\}/g, String(totalRows - rowIndex - 1));
-
-        return result;
+        return fillRowTemplate(template, row, rowIndex, totalRows);
     }
 
     private getActiveProvider(): AIProvider {
@@ -2135,9 +2117,10 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
             return result;
         }
 
-        // Numbers — fast path via Number()
-        const num = Number(s);
-        if (!Number.isNaN(num) && s !== '') {
+        // Numbers - only what is spelled as one: a ZIP code "02134" or an ID
+        // too large for a double stays text (see parseModelNumber)
+        const num = parseModelNumber(s);
+        if (num !== null) {
             const result = Number.isInteger(num)
                 ? { kind: 'integer' as const, value: num }
                 : { kind: 'number' as const, value: num };
@@ -2427,7 +2410,9 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
             await this.context.globalState.update('jsonl-gazelle.openCount', 0);
             await this.context.globalState.update('jsonl-gazelle.lastPromptedCount', 0);
             await this.context.globalState.update('jsonl-gazelle.hasRated', false);
-            vscode.window.showInformationMessage('Settings reset successfully');
+            // Without this the prompt stays snoozed for two weeks after its last showing
+            await this.context.globalState.update('jsonl-gazelle.lastPromptAt', 0);
+            vscode.window.showInformationMessage('Rating prompt state reset');
         } catch (error) {
             vscode.window.showErrorMessage(`Failed to reset settings: ${error instanceof Error ? error.message : 'Unknown error'}`);
             console.error('Error resetting settings:', error);
@@ -2442,42 +2427,49 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
         webviewPanel: vscode.WebviewPanel,
         document: vscode.TextDocument
     ) {
-        // Set isUpdating flag to prevent reload during AI generation
-        this.isUpdating = true;
+        if (!Number.isInteger(rowIndex) || rowIndex < 0 || rowIndex >= this.rows.length) {
+            vscode.window.showErrorMessage('Invalid row index');
+            return;
+        }
 
-        try {
-            // Get context rows (previous rows before the selected row)
-            const startIndex = Math.max(0, rowIndex - contextRowCount + 1);
-            const contextRows = this.rows.slice(startIndex, rowIndex + 1);
+        // Get context rows (previous rows before the selected row)
+        const startIndex = Math.max(0, rowIndex - contextRowCount + 1);
+        const contextRows = this.rows.slice(startIndex, rowIndex + 1);
+        const shape = describeContextRows(contextRows);
 
-            // Replace template variables
-            let prompt = promptTemplate;
-            prompt = prompt.replace(/\{\{context_rows\}\}/g, JSON.stringify(contextRows, null, 2));
-            prompt = prompt.replace(/\{\{row_count\}\}/g, String(rowCount));
-            prompt = prompt.replace(/\{\{existing_count\}\}/g, String(this.rows.length));
-
-            // Extract column names and types from context rows
-            const columnNames = contextRows.length > 0 ? Object.keys(contextRows[0]) : [];
-            const firstRow = contextRows.length > 0 ? contextRows[0] : {};
-            const columnTypes = columnNames.map(name => {
-                const value = firstRow[name];
-                return `${name}: ${typeof value === 'number' ? 'number' : typeof value === 'boolean' ? 'boolean' : 'string'}`;
-            });
-
-            // Add strict instruction to return JSON array with exact structure
+        let prompt = fillPlaceholders(promptTemplate || '', {
+            context_rows: JSON.stringify(contextRows, null, 2),
+            row_count: String(rowCount),
+            existing_count: String(this.rows.length)
+        });
+        const typeName = (type: string) => (type === 'object' ? 'JSON object or array' : type);
+        if (shape.kind === 'object') {
             prompt += `\n\nIMPORTANT INSTRUCTIONS:
                 1. Return ONLY a valid JSON array of ${rowCount} objects
                 2. Each object MUST have ALL these fields with correct types:
-                   ${columnTypes.join('\n                   ')}
+                   ${shape.fields.map(field => `${field.name}: ${typeName(field.type)}`).join('\n                   ')}
                 3. Use proper JSON types: numbers without quotes, booleans as true/false, strings in quotes
                 4. Do NOT omit any fields
                 5. Do NOT add extra fields
                 6. No explanations, no markdown formatting, just the JSON array
 
                 Example row from context:
-                ${JSON.stringify(firstRow)}`;
+                ${JSON.stringify(shape.example)}`;
+        } else {
+            prompt += `\n\nIMPORTANT INSTRUCTIONS:
+                1. Return ONLY a valid JSON array of ${rowCount} values, each a ${typeName(shape.type)} like the context rows
+                2. No explanations, no markdown formatting, just the JSON array
 
+                Example value from context:
+                ${JSON.stringify(shape.example)}`;
+        }
 
+        const startText = document.getText();
+        this.aiOperation = 'AI row generation';
+        // A reload in the middle would swap the rows out; a change from outside
+        // is noticed before the rows are inserted instead
+        this.isUpdating = true;
+        try {
             await vscode.window.withProgress({
                 location: vscode.ProgressLocation.Notification,
                 title: `Generating ${rowCount} AI rows...`,
@@ -2485,115 +2477,57 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
             }, async (progress) => {
                 progress.report({ increment: 0, message: 'Calling AI model...' });
 
-                // Call the AI model
                 const result = await this.callLanguageModel(prompt);
 
                 progress.report({ increment: 50, message: 'Parsing generated rows...' });
 
-                // Parse the result
-                let generatedRows: any[];
-                try {
-                    // Ensure string for regex parsing
-                    const resultText = typeof result === 'string' ? result : JSON.stringify(result);
-                    // Try to extract JSON array from the response
-                    const jsonMatch = resultText.match(/\[[\s\S]*\]/);
-                    if (jsonMatch) {
-                        generatedRows = JSON.parse(jsonMatch[0]);
-                    } else {
-                        generatedRows = JSON.parse(resultText);
-                    }
+                const resultText = typeof result === 'string' ? result : JSON.stringify(result);
+                const found = extractGeneratedRows(resultText, shape.kind === 'object', rowCount);
+                if (!found) {
+                    throw new Error(`Failed to parse AI response as JSON rows.\n\nResponse: ${resultText}`);
+                }
+                const generatedRows = found.map(row => fitGeneratedRow(row, shape));
 
-                    if (!Array.isArray(generatedRows)) {
-                        throw new Error('AI did not return an array');
-                    }
-
-                    // Fix data types based on context rows
-                    generatedRows = generatedRows.map(row => this.fixDataTypes(row, firstRow));
-                } catch (parseError) {
-                    const resultText = typeof result === 'string' ? result : JSON.stringify(result);
-                    throw new Error(`Failed to parse AI response as JSON: ${parseError instanceof Error ? parseError.message : 'Unknown error'}\n\nResponse: ${resultText}`);
+                if (document.getText() !== startText) {
+                    // Changed from outside meanwhile: inserting into the old rows
+                    // and writing them back would undo that change
+                    await this.loadJsonlFile(document);
+                    vscode.window.showWarningMessage('JSONL Gazelle: the file changed while AI rows were being generated, so they were not inserted. Run it again to add them.');
+                    return;
                 }
 
                 progress.report({ increment: 25, message: 'Inserting rows...' });
 
                 // Insert the generated rows after the selected row
-                const insertIndex = rowIndex + 1;
-                this.rows.splice(insertIndex, 0, ...generatedRows);
-
-
-                // Update filtered rows
+                this.rows.splice(rowIndex + 1, 0, ...(generatedRows as JsonRow[]));
                 this.filterRows();
 
                 // Rebuild the text from the document's own, so lines the edit didn't touch stay as they were
                 this.composeDocumentText(document);
 
-                // Update the document content
                 const edit = new vscode.WorkspaceEdit();
-                edit.replace(
-                    document.uri,
-                    new vscode.Range(0, 0, document.lineCount, 0),
-                    this.rawContent
-                );
+                edit.replace(document.uri, new vscode.Range(0, 0, document.lineCount, 0), this.rawContent);
                 await vscode.workspace.applyEdit(edit);
 
                 progress.report({ increment: 25, message: 'Done!' });
-
-                // Update webview
                 this.updateWebview(webviewPanel);
 
                 vscode.window.showInformationMessage(`Successfully generated and inserted ${generatedRows.length} rows`);
             });
-
         } catch (error) {
-            // Show user-friendly error message
-            const errorMsg = error instanceof Error ? error.message : 'Unknown error';
-            if (errorMsg.includes('quota') || errorMsg.includes('limit') || errorMsg.includes('allowance')) {
-                vscode.window.showErrorMessage(`AI quota exceeded: ${errorMsg}`);
-            } else {
-                vscode.window.showErrorMessage(`Failed to generate AI rows: ${errorMsg}`);
-            }
+            this.showAIError('Failed to generate AI rows', error instanceof Error ? error.message : 'Unknown error');
             console.error('Error generating AI rows:', error);
         } finally {
-            // Always reset the isUpdating flag
+            this.aiOperation = null;
             this.isUpdating = false;
         }
     }
 
-    private fixDataTypes(generatedRow: any, templateRow: any): any {
-        const fixedRow: any = {};
-
-        for (const key in templateRow) {
-            if (generatedRow.hasOwnProperty(key)) {
-                const templateValue = templateRow[key];
-                const generatedValue = generatedRow[key];
-                const templateType = typeof templateValue;
-
-                // Convert to the correct type based on template
-                if (templateType === 'number') {
-                    // Convert string numbers to actual numbers
-                    fixedRow[key] = typeof generatedValue === 'string' ? parseFloat(generatedValue) : Number(generatedValue);
-                } else if (templateType === 'boolean') {
-                    // Convert string booleans to actual booleans
-                    if (typeof generatedValue === 'string') {
-                        fixedRow[key] = generatedValue.toLowerCase() === 'true';
-                    } else {
-                        fixedRow[key] = Boolean(generatedValue);
-                    }
-                } else {
-                    // Keep as string or original type
-                    fixedRow[key] = generatedValue;
-                }
-            } else {
-                // Field missing, use null
-                fixedRow[key] = null;
-            }
-        }
-
-        return fixedRow;
-    }
-
+    // Column structure (what expanding makes columns of) comes from every row,
+    // not just those matching a search - clearing the search would otherwise
+    // leave the other rows' fields without columns
     private getSampleValue(columnPath: string): any {
-        for (const row of this.filteredRows) {
+        for (const row of this.rows) {
             const value = this.getNestedValue(row, columnPath);
             if (value !== undefined && value !== null) {
                 return value;
@@ -2604,7 +2538,7 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
 
     private getMaxArrayLength(columnPath: string): number {
         let maxLength = 0;
-        for (const row of this.filteredRows) {
+        for (const row of this.rows) {
             const value = this.getNestedValue(row, columnPath);
             if (Array.isArray(value)) {
                 maxLength = Math.max(maxLength, value.length);
@@ -2615,7 +2549,7 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
 
     private getAllObjectKeys(columnPath: string): string[] {
         const allKeys = new Set<string>();
-        for (const row of this.filteredRows) {
+        for (const row of this.rows) {
             const value = this.getNestedValue(row, columnPath);
             if (typeof value === 'object' && value !== null && !Array.isArray(value)) {
                 Object.keys(value).forEach(key => allKeys.add(key));
@@ -3023,6 +2957,12 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
             // Deep clone the row to duplicate it
             const originalRow = this.rows[rowIndex];
             const duplicatedRow = JSON.parse(JSON.stringify(originalRow));
+            // The copy is written as the original's own line, digits and all
+            const originalText = originalRow !== null && typeof originalRow === 'object'
+                ? this.rowSourceText.get(originalRow) : undefined;
+            if (originalText !== undefined && duplicatedRow !== null && typeof duplicatedRow === 'object') {
+                this.rowSourceText.set(duplicatedRow, originalText);
+            }
 
             // Insert the duplicated row right after the original
             this.rows.splice(rowIndex + 1, 0, duplicatedRow);
@@ -3152,7 +3092,14 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
      * Brings rawContent, parsedLines and errorCount in line with the new text.
      */
     private composeDocumentText(document: vscode.TextDocument): string {
-        const rebuilt = rebuildJsonlText(document.getText(), this.rows);
+        const rebuilt = rebuildJsonlText(document.getText(), this.rows,
+            row => (row !== null && typeof row === 'object' ? this.rowSourceText.get(row) : undefined));
+        rebuilt.lines.forEach(line => {
+            const row = line.rowIndex === null ? null : this.rows[line.rowIndex];
+            if (row !== null && typeof row === 'object') {
+                this.rowSourceText.set(row, line.text);
+            }
+        });
         this.parsedLines = rebuilt.lines.map((line, index) => {
             const parsedLine: ParsedLine = {
                 data: line.rowIndex === null ? null : this.rows[line.rowIndex],
@@ -3168,6 +3115,10 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
         this.rawContent = rebuilt.text;
         this.totalLines = rebuilt.lines.length;
         this.loadedLines = this.totalLines;
+        // Every write passes here, and any of them can change what a column
+        // holds: a text column filled with numbers must then sort as numbers.
+        // The cache used to be dropped only when the row count changed.
+        this.invalidateColumnTypes();
         return rebuilt.text;
     }
 
@@ -3331,34 +3282,21 @@ export class JsonlViewerProvider implements vscode.CustomTextEditorProvider {
             // Rebuild the text from the document's own, so lines the edit didn't touch stay as they were
             this.composeDocumentText(document);
 
-            // Debounce the save operation
-            if (this.pendingSaveTimeout) {
-                clearTimeout(this.pendingSaveTimeout);
-            }
-            this.pendingSaveDocument = document;
-            this.pendingSaveTimeout = setTimeout(() => {
-                this.flushPendingCellSave().catch(error => console.error('Error saving cell update:', error));
-            }, 300); // Debounce for 300ms
-
             // Update the webview immediately to show the change
             this.updateWebview(webviewPanel);
+
+            // Written straight away, like every other edit. It used to wait out
+            // a 300 ms debounce, so Ctrl+S right after Enter saved the file
+            // without it, and closing the tab then dropped it with no prompt.
+            await this.writeCellEdits(document);
         } catch (error) {
             console.error('Error updating cell:', error);
             vscode.window.showErrorMessage('Failed to update cell value');
         }
     }
     
-    // Write the debounced cell edits now. Also run before another document's
-    // state is swapped in, so a quick tab switch can't drop the last edit.
-    private async flushPendingCellSave(): Promise<void> {
-        if (!this.pendingSaveTimeout) {
-            return;
-        }
-        clearTimeout(this.pendingSaveTimeout);
-        this.pendingSaveTimeout = null;
-        const document = this.pendingSaveDocument;
-        this.pendingSaveDocument = null;
-        if (!document || document.isClosed || this.activeDocumentUri !== document.uri.toString()) {
+    private async writeCellEdits(document: vscode.TextDocument): Promise<void> {
+        if (document.isClosed) {
             return;
         }
 

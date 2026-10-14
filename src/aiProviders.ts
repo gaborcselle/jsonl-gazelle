@@ -427,6 +427,7 @@ async function localChatCompletion(apiKey: string, model: string, request: ChatR
 
 /** Remove markdown code fences that smaller local models often wrap JSON in. */
 function stripJsonFences(text: string): string {
-    const match = text.trim().match(/^```(?:json)?\s*([\s\S]*?)\s*```$/);
+    // Any language tag, in any case: models write ```JSON as often as ```json
+    const match = text.trim().match(/^```[A-Za-z0-9]*\s*([\s\S]*?)\s*```$/);
     return match ? match[1] : text;
 }

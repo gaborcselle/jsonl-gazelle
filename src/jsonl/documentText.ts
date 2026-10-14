@@ -66,8 +66,21 @@ function canonical(value: unknown): string {
  * surplus old row lines are dropped. A new row whose value already appears in
  * the old file reuses that line's text, so moved and duplicated rows keep their
  * original spelling too.
+ *
+ * A value alone doesn't always say which line that is: JSON.parse rounds
+ * integers beyond 2^53, so `{"id":1700000000000000001}` and
+ * `{"id":1700000000000000003}` parse to equal rows. Giving every such row the
+ * first line's text turned distinct IDs into copies of one. `sourceTextOf`,
+ * when the caller knows it, names the line a row was read from, and it wins.
+ * Otherwise equal rows in the changed stretch take the old lines holding that
+ * value in order, each line once, and a value several different lines share is
+ * written as parsed rather than borrowing one of them.
  */
-export function rebuildJsonlText(oldText: string, newRows: readonly unknown[]): RebuiltDocument {
+export function rebuildJsonlText(
+    oldText: string,
+    newRows: readonly unknown[],
+    sourceTextOf?: (row: unknown) => string | undefined
+): RebuiltDocument {
     const eol = detectEol(oldText);
     const oldLines = splitDocumentLines(oldText);
 
@@ -75,6 +88,10 @@ export function rebuildJsonlText(oldText: string, newRows: readonly unknown[]): 
     const oldRowCanon: string[] = [];
     const oldRowLine: number[] = [];
     const textByCanon = new Map<string, string>();
+    // Values that differently spelled lines share (rounded big integers, 1.50
+    // and 1.5): no single line's text stands for all of them
+    const ambiguousCanon = new Set<string>();
+    const canonByText = new Map<string, string>();
     const info: OldLine[] = oldLines.map((line, lineIndex) => {
         const trimmed = line.trim();
         if (!trimmed) {
@@ -84,8 +101,12 @@ export function rebuildJsonlText(oldText: string, newRows: readonly unknown[]): 
             const canon = canonical(JSON.parse(trimmed));
             oldRowCanon.push(canon);
             oldRowLine.push(lineIndex);
-            if (!textByCanon.has(canon)) {
+            canonByText.set(line, canon);
+            const known = textByCanon.get(canon);
+            if (known === undefined) {
                 textByCanon.set(canon, line);
+            } else if (known !== line) {
+                ambiguousCanon.add(canon);
             }
             return { rowOrdinal: oldRowCanon.length - 1 };
         } catch (error) {
@@ -94,15 +115,25 @@ export function rebuildJsonlText(oldText: string, newRows: readonly unknown[]): 
     });
 
     const newCanon = newRows.map(canonical);
+    // The line each row was read from, when the caller knows it and that line
+    // still holds the row's value (an edited row is re-serialized instead)
+    const newSource = newRows.map((row, index) => {
+        const source = sourceTextOf ? sourceTextOf(row) : undefined;
+        return source !== undefined && canonByText.get(source) === newCanon[index] ? source : undefined;
+    });
+    // Old row r can stay where it is as new row j: same value, and not a row
+    // known to come from a different line (equal by value, different text)
+    const sameRow = (r: number, j: number) => oldRowCanon[r] === newCanon[j] &&
+        (newSource[j] === undefined || newSource[j] === oldLines[oldRowLine[r]]);
     const n = oldRowCanon.length;
     const m = newCanon.length;
 
     let prefix = 0;
-    while (prefix < n && prefix < m && oldRowCanon[prefix] === newCanon[prefix]) {
+    while (prefix < n && prefix < m && sameRow(prefix, prefix)) {
         prefix++;
     }
     let suffix = 0;
-    while (suffix < n - prefix && suffix < m - prefix && oldRowCanon[n - 1 - suffix] === newCanon[m - 1 - suffix]) {
+    while (suffix < n - prefix && suffix < m - prefix && sameRow(n - 1 - suffix, m - 1 - suffix)) {
         suffix++;
     }
     const oldMiddle = n - prefix - suffix;
@@ -125,11 +156,41 @@ export function rebuildJsonlText(oldText: string, newRows: readonly unknown[]): 
         }
     }
 
+    // The changed stretch's old lines by value, in order: equal rows written
+    // back there take them in turn rather than all taking the first
+    const middleTexts = new Map<string, { texts: string[]; next: number }>();
+    for (let r = prefix; r < n - suffix; r++) {
+        const queue = middleTexts.get(oldRowCanon[r]);
+        const text = oldLines[oldRowLine[r]];
+        if (queue) {
+            queue.texts.push(text);
+        } else {
+            middleTexts.set(oldRowCanon[r], { texts: [text], next: 0 });
+        }
+    }
+
+    const textFor = (rowIndex: number, canon: string): string => {
+        const source = newSource[rowIndex];
+        if (source !== undefined) {
+            return source;
+        }
+        const queue = middleTexts.get(canon);
+        if (queue && queue.next < queue.texts.length) {
+            return queue.texts[queue.next++];
+        }
+        if (!ambiguousCanon.has(canon)) {
+            const text = textByCanon.get(canon);
+            if (text !== undefined) {
+                return text;
+            }
+        }
+        return canon;
+    };
+
     const out: RebuiltLine[] = [];
     let errorCount = 0;
     const emitNew = (rowIndex: number) => {
-        const canon = newCanon[rowIndex];
-        out.push({ rowIndex, text: textByCanon.get(canon) ?? canon });
+        out.push({ rowIndex, text: textFor(rowIndex, newCanon[rowIndex]) });
     };
     const emitInserted = () => {
         for (let j = prefix; j < prefix + newMiddle; j++) {

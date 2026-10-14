@@ -39,6 +39,16 @@ function response(status, body) {
     await assert.rejects(chatCompletion('openai', 'key', 'gpt-x', { prompt: 'hi', temperature: 0.7 }), /OpenAI API error: 400/);
     assert.strictEqual(sent.length, 1);
 
+    // A local model's code fence is stripped whatever case its language tag is in
+    for (const fence of ['json', 'JSON', 'Json', '']) {
+        global.fetch = async () => response(200, { choices: [{ message: { content: '```' + fence + '\n{"value":"a"}\n```' } }] });
+        assert.strictEqual(
+            await chatCompletion('local', '', 'llama', { prompt: 'hi', schema: { type: 'object' }, schemaName: 's' }, 'http://localhost:1234/v1'),
+            '{"value":"a"}',
+            'fence ' + JSON.stringify(fence)
+        );
+    }
+
     console.log('aiProviders tests passed');
 })().catch(error => {
     console.error(error);
