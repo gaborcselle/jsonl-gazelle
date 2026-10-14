@@ -6,6 +6,8 @@
  * document content is ever interpreted as HTML.
  */
 
+import { NUMBER_LITERAL_MARK } from '../jsonl/diff';
+
 export function getDiffViewHtml(nonce: string): string {
     return `<!DOCTYPE html>
 <html lang="en">
@@ -255,7 +257,7 @@ export function getDiffViewHtml(nonce: string): string {
             <span class="stat unchanged" id="statUnchanged"></span>
         </div>
     </div>
-    <div class="diff-empty" id="diffEmpty">No changes — both versions have identical content.</div>
+    <div class="diff-empty" id="diffEmpty"></div>
     <div class="diff-list" id="diffList"></div>
 
     <script nonce="${nonce}">
@@ -273,13 +275,68 @@ export function getDiffViewHtml(nonce: string): string {
                 return node;
             }
 
+            // --- shared:number-literals (keep in sync with src/jsonl/diff.ts) ---
+            // Numbers JSON.parse would change (integers beyond 2^53 are
+            // rounded, 1e400 turns into null) travel as marked strings holding
+            // their text, and are written back as that text.
+            var NUMBER_LITERAL_MARK = ${JSON.stringify(NUMBER_LITERAL_MARK)};
+            var LONG_NUMBER_HINT = /\\d{16}|[eE][+-]?\\d{3}/;
+            var NUMBER_LITERAL = /^-?(?:0|[1-9]\\d*)(?:\\.\\d+)?(?:[eE][+-]?\\d+)?$/;
+            var MARKED_NUMBER = new RegExp('"' + NUMBER_LITERAL_MARK + '(-?[0-9][0-9.eE+-]*)"', 'g');
+
+            function protectNumberLiterals(text) {
+                if (!LONG_NUMBER_HINT.test(text) || text.indexOf(NUMBER_LITERAL_MARK[0]) !== -1 || /\\\\u[eE]000/.test(text)) {
+                    return text;
+                }
+                var result = '';
+                var copied = 0;
+                var i = 0;
+                while (i < text.length) {
+                    var ch = text[i];
+                    if (ch === '"') {
+                        i++;
+                        while (i < text.length && text[i] !== '"') {
+                            i += text[i] === '\\\\' ? 2 : 1;
+                        }
+                        i++;
+                    } else if (ch === '-' || (ch >= '0' && ch <= '9')) {
+                        var end = i + 1;
+                        while (end < text.length && '0123456789.eE+-'.indexOf(text[end]) !== -1) {
+                            end++;
+                        }
+                        var literal = text.slice(i, end);
+                        if (isInexactNumber(literal)) {
+                            result += text.slice(copied, i) + '"' + NUMBER_LITERAL_MARK + literal + '"';
+                            copied = end;
+                        }
+                        i = end;
+                    } else {
+                        i++;
+                    }
+                }
+                return copied === 0 ? text : result + text.slice(copied);
+            }
+
+            function isInexactNumber(literal) {
+                if (!NUMBER_LITERAL.test(literal)) {
+                    return false;
+                }
+                var value = Number(literal);
+                return !isFinite(value) || (/^-?\\d+$/.test(literal) && !Number.isSafeInteger(value));
+            }
+
+            function restoreNumberLiterals(json) {
+                return json.indexOf(NUMBER_LITERAL_MARK) === -1 ? json : json.replace(MARKED_NUMBER, '$1');
+            }
+            // --- end shared:number-literals ---
+
             function formatValue(value) {
                 var text;
                 if (value === undefined) {
                     text = 'undefined';
                 } else {
                     try {
-                        text = JSON.stringify(value);
+                        text = restoreNumberLiterals(JSON.stringify(value));
                     } catch (e) {
                         text = String(value);
                     }
@@ -303,7 +360,13 @@ export function getDiffViewHtml(nonce: string): string {
 
             function prettyJson(rawText) {
                 try {
-                    return JSON.stringify(JSON.parse(rawText), null, 2);
+                    // The plain parse decides whether the line is valid JSON
+                    var value = JSON.parse(rawText);
+                    var protectedText = protectNumberLiterals(rawText);
+                    if (protectedText !== rawText) {
+                        value = JSON.parse(protectedText);
+                    }
+                    return restoreNumberLiterals(JSON.stringify(value, null, 2));
                 } catch (e) {
                     return rawText;
                 }
@@ -413,6 +476,23 @@ export function getDiffViewHtml(nonce: string): string {
                 }
             }
 
+            // Every row is unchanged. The texts can still differ in how lines
+            // end; saying "identical" then would hide a real change to the file.
+            function emptyMessage(lineEndingChanges) {
+                var lineEndings = !!(lineEndingChanges && lineEndingChanges.lineEndings);
+                var finalNewline = !!(lineEndingChanges && lineEndingChanges.finalNewline);
+                if (lineEndings && finalNewline) {
+                    return 'No changes to the rows \\u2014 only the line endings and the newline at the end of the file differ.';
+                }
+                if (lineEndings) {
+                    return 'No changes to the rows \\u2014 only the line endings differ (e.g. CRLF vs LF).';
+                }
+                if (finalNewline) {
+                    return 'No changes to the rows \\u2014 only the newline at the end of the file differs.';
+                }
+                return 'No changes \\u2014 both versions have identical content.';
+            }
+
             function setStat(id, count, label) {
                 var node = document.getElementById(id);
                 node.textContent = label + ' ' + count;
@@ -435,7 +515,9 @@ export function getDiffViewHtml(nonce: string): string {
                 setStat('statUnchanged', data.summary.unchanged, '=');
 
                 var hasChanges = (data.summary.modified + data.summary.added + data.summary.removed) > 0;
-                document.getElementById('diffEmpty').style.display = hasChanges ? 'none' : 'block';
+                var empty = document.getElementById('diffEmpty');
+                empty.textContent = emptyMessage(data.lineEndingChanges);
+                empty.style.display = hasChanges ? 'none' : 'block';
 
                 var list = document.getElementById('diffList');
                 list.textContent = '';
