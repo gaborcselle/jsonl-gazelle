@@ -4,7 +4,7 @@ import * as path from 'path';
 import { JsonlViewerProvider } from './jsonlViewerProvider';
 import { registerDiffCommands } from './jsonlDiffProvider';
 import { formatJsonlForSave } from './jsonl/formatOnSave';
-import { splitJsonlFile } from './jsonl/splitFile';
+import { describeFiles, findExistingParts, removeFiles, splitJsonlFile } from './jsonl/splitFile';
 
 function getNonce(): string {
     const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
@@ -174,10 +174,32 @@ class LargeFileDecorationProvider implements vscode.FileDecorationProvider {
 
 async function splitLargeFileDirectly(uri: vscode.Uri) {
     try {
-        // Check file size first
-        const stats = await fs.promises.stat(uri.fsPath);
-        const sizeMB = stats.size / (1024 * 1024);
-        
+        // Parts left by an earlier split would be overwritten, edits made to them
+        // since included, and a split into fewer parts would leave the rest beside
+        // the new ones, every row in them on disk twice. Remove them only once the
+        // user has said so.
+        const existingParts = await findExistingParts(uri.fsPath);
+        if (existingParts.length > 0) {
+            const one = existingParts.length === 1;
+            const replace = 'Replace';
+            const choice = await vscode.window.showWarningMessage(
+                `Replace ${one ? '1 part file' : `${existingParts.length} part files`} from an earlier split of ${path.basename(uri.fsPath)}?`,
+                {
+                    modal: true,
+                    detail: `${describeFiles(existingParts)} will be deleted before splitting, along with any changes made to ${one ? 'it' : 'them'}.`
+                },
+                replace
+            );
+            if (choice !== replace) {
+                return;
+            }
+            const notRemoved = await removeFiles(existingParts);
+            if (notRemoved.length > 0) {
+                vscode.window.showErrorMessage(`Could not remove ${describeFiles(notRemoved)}, so ${path.basename(uri.fsPath)} was not split.`);
+                return;
+            }
+        }
+
         // Show progress notification
         await vscode.window.withProgress({
             location: vscode.ProgressLocation.Notification,
@@ -227,6 +249,7 @@ async function splitLargeFile(inputPath: string, maxSizeMB: number = 50): Promis
     try {
         return await splitJsonlFile(inputPath, maxSizeMB * 1024 * 1024);
     } catch (error: any) {
+        // The parts written before the failure are gone by now; the message names any that aren't
         vscode.window.showErrorMessage(`Error splitting file: ${error.message}`);
         return [];
     }

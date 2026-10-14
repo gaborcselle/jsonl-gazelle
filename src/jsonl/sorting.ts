@@ -6,6 +6,11 @@
  * number, boolean, string) and then sort with a comparator for the dominant type.
  * That way "$1,200.00" sorts above "$99.00" and "2024-03-01T10:00:00Z" sorts after
  * "2024-02-28", instead of both falling back to lexicographic order.
+ *
+ * Some values only make sense next to the rest of their column: "1.500" is
+ * fifteen hundred where the other values are written "1.234,56", and "3.10" is
+ * a version where the others read "3.9". So a sort reads the whole column for
+ * those conventions before it builds its keys (readColumnKeys).
  */
 
 import { JsonRow } from './types';
@@ -38,39 +43,87 @@ const CURRENCY_CODES = new Set([
 // Date shapes we accept before handing the string to Date.parse. The guard matters:
 // Date.parse('5') happily returns a date, which would make any short string a
 // "timestamp". Anything not matching one of these is not treated as a date.
-const TIMESTAMP_PATTERNS: RegExp[] = [
-    // 2024-01-15, 2024-01-15T10:30:00.123Z, 2024-01-15 10:30:00+01:00
-    /^\d{4}-\d{2}-\d{2}(?:[T ]\d{1,2}:\d{2}(?::\d{2}(?:\.\d{1,9})?)?\s*(?:Z|[+-]\d{2}:?\d{2})?)?$/i,
+//
+// Date.parse reads a timestamp that names no zone in the viewer's local time -
+// yet an ISO date on its own as UTC - so the order of a sort depended on where
+// the viewer was: west of Greenwich "2024-01-15 20:00:00" landed after
+// "2024-01-16", and a time inside a daylight-saving gap came out an hour late.
+// Such timestamps are read as UTC instead. A shape's `zone` group captures the
+// zone a timestamp names, and `utcSuffix` pins one that names none.
+interface TimestampShape {
+    pattern: RegExp;
+    utcSuffix: string;
+}
+
+const TIMESTAMP_SHAPES: TimestampShape[] = [
+    // 2024-01-15, the one form Date.parse already reads as UTC
+    { pattern: /^\d{4}-\d{2}-\d{2}$/, utcSuffix: '' },
+    // 2024-01-15T10:30:00.123Z, 2024-01-15 10:30:00+01:00
+    { pattern: /^\d{4}-\d{2}-\d{2}[T ]\d{1,2}:\d{2}(?::\d{2}(?:\.\d{1,9})?)?\s*(?<zone>Z|[+-]\d{2}:?\d{2})?$/i, utcSuffix: 'Z' },
     // 2024/01/15 10:30
-    /^\d{4}\/\d{1,2}\/\d{1,2}(?:[T ]\d{1,2}:\d{2}(?::\d{2})?\s*(?:[AaPp]\.?[Mm]\.?)?)?$/,
+    { pattern: /^\d{4}\/\d{1,2}\/\d{1,2}(?:[T ]\d{1,2}:\d{2}(?::\d{2})?\s*(?:[AaPp]\.?[Mm]\.?)?)?$/, utcSuffix: ' UTC' },
     // 01/15/2024 10:30 PM (month/day/year, matching JS Date semantics)
-    /^\d{1,2}\/\d{1,2}\/\d{4}(?:[T ]\d{1,2}:\d{2}(?::\d{2})?\s*(?:[AaPp]\.?[Mm]\.?)?)?$/,
+    { pattern: /^\d{1,2}\/\d{1,2}\/\d{4}(?:[T ]\d{1,2}:\d{2}(?::\d{2})?\s*(?:[AaPp]\.?[Mm]\.?)?)?$/, utcSuffix: ' UTC' },
     // 15 Jan 2024 / Jan 15, 2024 / January 15 2024 10:30:00 GMT
-    /^(?:\d{1,2}\s+[A-Za-z]{3,9}\.?\s+\d{4}|[A-Za-z]{3,9}\.?\s+\d{1,2},?\s+\d{4})(?:\s+\d{1,2}:\d{2}(?::\d{2})?\s*(?:[AaPp]\.?[Mm]\.?)?)?(?:\s+(?:GMT|UTC|Z|[+-]\d{4}))?$/,
+    {
+        pattern: /^(?:\d{1,2}\s+[A-Za-z]{3,9}\.?\s+\d{4}|[A-Za-z]{3,9}\.?\s+\d{1,2},?\s+\d{4})(?:\s+\d{1,2}:\d{2}(?::\d{2})?\s*(?:[AaPp]\.?[Mm]\.?)?)?(?:\s+(?<zone>GMT|UTC|Z|[+-]\d{4}))?$/,
+        utcSuffix: ' UTC'
+    },
     // Mon, 15 Jan 2024 10:30:00 GMT (RFC 2822)
-    /^[A-Za-z]{3},?\s+\d{1,2}\s+[A-Za-z]{3}\s+\d{4}\s+\d{1,2}:\d{2}(?::\d{2})?\s*(?:GMT|UTC|[+-]\d{4}|[A-Z]{2,5})?$/
+    {
+        pattern: /^[A-Za-z]{3},?\s+\d{1,2}\s+[A-Za-z]{3}\s+\d{4}\s+\d{1,2}:\d{2}(?::\d{2})?\s*(?<zone>GMT|UTC|[+-]\d{4}|[A-Z]{2,5})?$/,
+        utcSuffix: ' UTC'
+    }
 ];
 
 // Below this magnitude a raw epoch number is read as seconds rather than
 // milliseconds (1e11 ms is 1973; 1e11 s is the year 5138).
 const EPOCH_SECONDS_CUTOFF = 1e11;
 
+// The decimal mark a number's text shows its writer used
+type DecimalMark = '.' | ',';
+
+// A number read from text. Integers too large for a double to hold exactly
+// are bigints: the 19-digit IDs some APIs emit as strings all round to the
+// same double, so they would tie and keep file order in both directions.
+// `<` and `>` compare a bigint with a number exactly.
+type ExactNumber = number | bigint;
+
+interface NumberReading {
+    value: ExactNumber;
+    // The decimal mark the text proves, or null when it has no separator or
+    // reads either way ("1.500", "1,500")
+    mark: DecimalMark | null;
+}
+
 /**
  * Parse a number that may use thousands separators, in either US (1,234.56) or
- * European (1.234,56) convention.
+ * European (1.234,56) convention. Returns the nearest double; sorting reads
+ * the exact value and the column's convention through readGroupedNumber.
+ */
+export function parseGroupedNumber(text: string): number | null {
+    const reading = readGroupedNumber(text, false);
+    return reading === null ? null : Number(reading.value);
+}
+
+/**
+ * Read digits written with thousands separators and a decimal mark, noting
+ * which mark the text proves its writer used.
  *
- * When both separators appear the right-most one is the decimal point. With only
- * one separator we fall back to a heuristic: a single comma followed by exactly
- * three digits is grouping ("1,234"), otherwise it is a decimal comma ("1,23");
- * repeated dots are grouping ("1.234.567"), a single dot is a decimal point.
- * "1,234"-style values that actually meant 1.234 are the known ambiguous case.
+ * When both separators appear the right-most one is the decimal mark, and
+ * repeated separators are grouping. What's left is one separator before exactly
+ * three digits, where "1,500" and "1.500" each read either way. In a column
+ * that writes decimal commas (`commaDecimal`) both are read that way: "1,500" is
+ * one and a half, "1.500" fifteen hundred. Otherwise US habit decides: "1,500"
+ * is grouping and "1.500" a decimal point. Any other single comma is a decimal
+ * comma ("1,23"), any other single dot a decimal point ("12.5", "0.500").
  *
  * Grouping has to look like grouping: three-digit groups after a first group
  * of one to three digits (or Indian lakh grouping, "12,34,567"). Anything else
  * with repeated separators - a version "1.10.0", an address "10.0.0.1" - is not
  * a number, so such columns sort as text, where natural ordering handles them.
  */
-export function parseGroupedNumber(text: string): number | null {
+function readGroupedNumber(text: string, commaDecimal: boolean): NumberReading | null {
     if (!/\d/.test(text) || !/^[\d.,]+$/.test(text)) {
         return null;
     }
@@ -78,11 +131,12 @@ export function parseGroupedNumber(text: string): number | null {
     const lastComma = text.lastIndexOf(',');
     const lastDot = text.lastIndexOf('.');
     let normalized: string;
+    let mark: DecimalMark | null;
 
     if (lastComma >= 0 && lastDot >= 0) {
-        const decimalSep = lastComma > lastDot ? ',' : '.';
-        const groupSep = decimalSep === ',' ? '.' : ',';
-        const decimalAt = text.lastIndexOf(decimalSep);
+        mark = lastComma > lastDot ? ',' : '.';
+        const groupSep = mark === ',' ? '.' : ',';
+        const decimalAt = text.lastIndexOf(mark);
         const integerPart = text.slice(0, decimalAt);
         const fraction = text.slice(decimalAt + 1);
         if (!isGrouped(integerPart, groupSep) || !/^\d*$/.test(fraction)) {
@@ -96,8 +150,13 @@ export function parseGroupedNumber(text: string): number | null {
                 return null;
             }
             normalized = parts.join('');
+            mark = '.';
+        } else if (parts[1].length === 3 && isGrouped(text, ',')) {
+            normalized = commaDecimal ? parts.join('.') : parts.join('');
+            mark = null;
         } else {
-            normalized = parts[1].length === 3 && isGrouped(text, ',') ? parts.join('') : parts.join('.');
+            normalized = parts.join('.');
+            mark = ',';
         }
     } else if (lastDot >= 0) {
         const parts = text.split('.');
@@ -106,15 +165,35 @@ export function parseGroupedNumber(text: string): number | null {
                 return null;
             }
             normalized = parts.join('');
+            mark = ',';
+        } else if (parts[1].length === 3 && /^[1-9]\d{0,2}$/.test(parts[0])) {
+            normalized = commaDecimal ? parts.join('') : text;
+            mark = null;
         } else {
             normalized = text;
+            mark = '.';
         }
     } else {
         normalized = text;
+        mark = null;
     }
 
+    const value = toExactNumber(normalized);
+    return value === null ? null : { value, mark };
+}
+
+// The value of plain digits with an optional "." fraction, as a bigint when
+// they are an integer past what a double holds exactly
+function toExactNumber(normalized: string): ExactNumber | null {
     const value = Number(normalized);
-    return Number.isFinite(value) ? value : null;
+    if (!Number.isFinite(value)) {
+        return null;
+    }
+    if (Number.isSafeInteger(value) || !Number.isInteger(value)) {
+        return value;
+    }
+    const integer = normalized.replace(/\.0*$/, '');
+    return /^\d+$/.test(integer) ? BigInt(integer) : value;
 }
 
 // Whether `text` is digits grouped by `separator` the way people write numbers
@@ -140,6 +219,11 @@ function isGrouped(text: string, separator: string): boolean {
  * currency marker — a bare "1234" is a number, not currency.
  */
 export function parseCurrency(raw: string): number | null {
+    const reading = readCurrency(raw, false);
+    return reading === null ? null : Number(reading.value);
+}
+
+function readCurrency(raw: string, commaDecimal: boolean): NumberReading | null {
     let text = raw.trim();
     if (!text) {
         return null;
@@ -185,11 +269,11 @@ export function parseCurrency(raw: string): number | null {
         text = text.slice(1);
     }
 
-    const value = parseGroupedNumber(text);
-    if (value === null) {
+    const reading = readGroupedNumber(text, commaDecimal);
+    if (reading === null) {
         return null;
     }
-    return negative ? -value : value;
+    return negative ? { value: -reading.value, mark: reading.mark } : reading;
 }
 
 /**
@@ -198,6 +282,11 @@ export function parseCurrency(raw: string): number | null {
  * sorts below 12%.
  */
 export function parseNumericString(raw: string): number | null {
+    const reading = readNumericString(raw, false);
+    return reading === null ? null : Number(reading.value);
+}
+
+function readNumericString(raw: string, commaDecimal: boolean): NumberReading | null {
     let text = raw.trim();
     if (!text) {
         return null;
@@ -217,24 +306,34 @@ export function parseNumericString(raw: string): number | null {
 
     if (/^\d+(?:\.\d+)?[eE][-+]?\d+$/.test(text)) {
         const exponential = Number(text);
-        return Number.isFinite(exponential) ? sign * exponential : null;
+        return Number.isFinite(exponential) ? { value: sign * exponential, mark: null } : null;
     }
 
-    const value = parseGroupedNumber(text);
-    return value === null ? null : sign * value;
+    const reading = readGroupedNumber(text, commaDecimal);
+    if (reading === null) {
+        return null;
+    }
+    return sign < 0 ? { value: -reading.value, mark: reading.mark } : reading;
 }
 
 /**
  * Parse a timestamp string into epoch milliseconds, or null when the string
- * isn't one of the recognized date shapes.
+ * isn't one of the recognized date shapes. One that names no zone is read as
+ * UTC, so the result is the same in every timezone.
  */
 export function parseTimestamp(raw: string): number | null {
     const text = raw.trim();
-    if (!text || !TIMESTAMP_PATTERNS.some(pattern => pattern.test(text))) {
-        return null;
+    for (const shape of TIMESTAMP_SHAPES) {
+        const match = shape.pattern.exec(text);
+        if (match) {
+            const zone = match.groups?.zone;
+            // "PM" fits the RFC 2822 zone slot, but it is a time of day
+            const namesZone = !!zone && !/^[AP]M$/.test(zone);
+            const parsed = Date.parse(namesZone ? text : text + shape.utcSuffix);
+            return Number.isFinite(parsed) ? parsed : null;
+        }
     }
-    const parsed = Date.parse(text);
-    return Number.isFinite(parsed) ? parsed : null;
+    return null;
 }
 
 /** Classify a single cell value. 'empty' marks null/undefined/blank cells. */
@@ -284,21 +383,28 @@ export function detectColumnType(rows: JsonRow[], columnPath: string, sampleSize
 
     const step = Math.max(1, Math.floor(rows.length / sampleSize));
     const counts: { [key: string]: number } = {};
-    let considered = 0;
+    const sampled: any[] = [];
 
     for (let i = 0; i < rows.length; i += step) {
-        const type = detectValueType(getNestedValue(rows[i], columnPath));
+        const value = getNestedValue(rows[i], columnPath);
+        const type = detectValueType(value);
         if (type === 'empty') {
             continue;
         }
         counts[type] = (counts[type] || 0) + 1;
-        considered++;
+        sampled.push(value);
     }
 
-    if (considered === 0) {
+    if (sampled.length === 0) {
         return 'string';
     }
 
+    const type = dominantType(counts, sampled.length);
+    // Versions parse as numbers, but sort as text (see looksLikeVersions)
+    return type === 'number' && looksLikeVersions(sampled) ? 'string' : type;
+}
+
+function dominantType(counts: { [key: string]: number }, considered: number): ColumnType {
     const currency = counts.currency || 0;
     const number = counts.number || 0;
 
@@ -328,6 +434,51 @@ export function detectColumnType(rows: JsonRow[], columnPath: string, sampleSize
     return winnerCount / considered >= TYPE_CONFIDENCE ? winner : 'string';
 }
 
+/**
+ * Whether a column that parses as numbers holds two-part versions instead:
+ * "3.10" beside "3.9" means minor version ten, not three point one, since
+ * nobody writing decimals pads one value with a trailing zero and leaves the
+ * next at a single place. So: every value is a "major.minor" string, at least
+ * one has a multi-digit fraction ending in zero and another a one-digit
+ * fraction. A fraction with a leading zero ("3.05") is a decimal and rules the
+ * reading out, so consistently padded prices ("3.10", "12.50") and plain
+ * decimals ("0.5", "0.25") stay numbers. Versions sort as text, whose natural
+ * ordering compares them part by part: 3.9 < 3.10 < 3.11.
+ */
+function looksLikeVersions(values: any[]): boolean {
+    let oneDigit = false;
+    let trailingZero = false;
+    for (const value of values) {
+        if (value === null || value === undefined) {
+            continue;
+        }
+        if (typeof value !== 'string') {
+            return false;
+        }
+        const text = value.trim();
+        if (!text) {
+            continue;
+        }
+        const fraction = /^\d+\.(\d+)$/.exec(text)?.[1];
+        if (fraction === undefined || (fraction.length > 1 && fraction.startsWith('0'))) {
+            return false;
+        }
+        if (fraction.length === 1) {
+            oneDigit = true;
+        } else if (fraction.endsWith('0')) {
+            trailingZero = true;
+        }
+    }
+    return oneDigit && trailingZero;
+}
+
+// How a sort reads one column's values, settled from the column as a whole
+interface ColumnReading {
+    type: ColumnType;
+    // Ambiguous "1.500" and "1,500" are read with a decimal comma (see readGroupedNumber)
+    commaDecimal: boolean;
+}
+
 interface SortKey {
     /**
      * 0 = parsed as the column's type, 1 = present but not parseable as that
@@ -335,12 +486,12 @@ interface SortKey {
      * below real ones and blanks stay at the bottom in both directions.
      */
     rank: number;
-    numeric: number;
+    // Set for keys that compare as numbers, null for ones that compare as text
+    numeric: ExactNumber | null;
     text: string;
-    isNumeric: boolean;
 }
 
-const EMPTY_KEY: SortKey = { rank: 2, numeric: 0, text: '', isNumeric: false };
+const EMPTY_KEY: SortKey = { rank: 2, numeric: null, text: '' };
 
 function stringifyValue(value: any): string {
     if (typeof value === 'string') {
@@ -353,13 +504,14 @@ function stringifyValue(value: any): string {
     }
 }
 
-function coerceNumeric(value: any, type: ColumnType): number | null {
+// `marks` collects the decimal marks the column's values prove (see readColumnKeys)
+function coerceNumeric(value: any, reading: ColumnReading, marks?: Set<DecimalMark>): ExactNumber | null {
     if (typeof value === 'number') {
         if (!Number.isFinite(value)) {
             return null;
         }
         // A bare number in a timestamp column is an epoch value
-        if (type === 'timestamp') {
+        if (reading.type === 'timestamp') {
             return Math.abs(value) < EPOCH_SECONDS_CUTOFF ? value * 1000 : value;
         }
         return value;
@@ -367,16 +519,22 @@ function coerceNumeric(value: any, type: ColumnType): number | null {
     if (typeof value !== 'string') {
         return null;
     }
-    if (type === 'timestamp') {
+    if (reading.type === 'timestamp') {
         return parseTimestamp(value);
     }
     // Number and currency columns accept both forms, so a stray "$5" in a
     // number column (or a bare 5 in a money column) still sorts numerically
-    const currency = parseCurrency(value);
-    return currency !== null ? currency : parseNumericString(value);
+    const parsed = readCurrency(value, reading.commaDecimal) || readNumericString(value, reading.commaDecimal);
+    if (parsed === null) {
+        return null;
+    }
+    if (parsed.mark !== null) {
+        marks?.add(parsed.mark);
+    }
+    return parsed.value;
 }
 
-function toSortKey(value: any, type: ColumnType): SortKey {
+function toSortKey(value: any, reading: ColumnReading, marks?: Set<DecimalMark>): SortKey {
     if (value === null || value === undefined) {
         return EMPTY_KEY;
     }
@@ -384,21 +542,50 @@ function toSortKey(value: any, type: ColumnType): SortKey {
         return EMPTY_KEY;
     }
 
-    if (type === 'boolean') {
+    if (reading.type === 'string') {
+        // Everything belongs in a text column, but its real numbers compare as
+        // numbers: as text, -5 sorted before -10 and 2.5 before 2.25
+        return Number.isFinite(value)
+            ? { rank: 0, numeric: value, text: '' }
+            : { rank: 0, numeric: null, text: stringifyValue(value) };
+    }
+    if (reading.type === 'boolean') {
         if (typeof value === 'boolean') {
-            return { rank: 0, numeric: value ? 1 : 0, text: '', isNumeric: true };
-        }
-    } else if (type !== 'string') {
-        const numeric = coerceNumeric(value, type);
-        if (numeric !== null) {
-            return { rank: 0, numeric, text: '', isNumeric: true };
+            return { rank: 0, numeric: value ? 1 : 0, text: '' };
         }
     } else {
-        return { rank: 0, numeric: 0, text: stringifyValue(value), isNumeric: false };
+        const numeric = coerceNumeric(value, reading, marks);
+        if (numeric !== null) {
+            return { rank: 0, numeric, text: '' };
+        }
     }
 
-    // Present, but not the column's type: keep it comparable, just ranked lower
-    return { rank: 1, numeric: 0, text: stringifyValue(value), isNumeric: false };
+    // Present, but not the column's type: keep it comparable, just ranked
+    // lower. A real number there still compares as a number.
+    return Number.isFinite(value)
+        ? { rank: 1, numeric: value, text: '' }
+        : { rank: 1, numeric: null, text: stringifyValue(value) };
+}
+
+/**
+ * Sort keys for one column's values, read the way the column as a whole is
+ * written. A 'number' column of versions is read as text (looksLikeVersions).
+ * A number or currency column whose unambiguous values all write a decimal
+ * comma ("1.234,56", "12,50", "2.000.000") reads its ambiguous "1.500" that way
+ * too; with no evidence, or evidence both ways, the US reading stands. The
+ * marks are collected while building the keys, so only a decimal-comma column
+ * pays for a second pass.
+ */
+function readColumnKeys(values: any[], columnType: ColumnType): { reading: ColumnReading; keys: SortKey[] } {
+    const type = columnType === 'number' && looksLikeVersions(values) ? 'string' : columnType;
+    const marks = new Set<DecimalMark>();
+    let reading: ColumnReading = { type, commaDecimal: false };
+    let keys = values.map(value => toSortKey(value, reading, marks));
+    if (marks.has(',') && !marks.has('.')) {
+        reading = { type, commaDecimal: true };
+        keys = values.map(value => toSortKey(value, reading));
+    }
+    return { reading, keys };
 }
 
 function compareText(a: string, b: string): number {
@@ -415,11 +602,17 @@ function compareKeys(a: SortKey, b: SortKey, direction: SortDirection): number {
         return a.rank - b.rank;
     }
     const sign = direction === 'desc' ? -1 : 1;
-    if (a.isNumeric && b.isNumeric) {
-        if (a.numeric === b.numeric) {
-            return 0;
+    if (a.numeric !== null && b.numeric !== null) {
+        // Not ===: a bigint never equals a number, but < and > compare them exactly
+        if (a.numeric < b.numeric) {
+            return -sign;
         }
-        return (a.numeric < b.numeric ? -1 : 1) * sign;
+        return a.numeric > b.numeric ? sign : 0;
+    }
+    if (a.numeric !== null || b.numeric !== null) {
+        // Numbers among words (a text column, or stray values in one of another
+        // type) come first, as in a spreadsheet, and last when descending
+        return (a.numeric !== null ? -1 : 1) * sign;
     }
     return compareText(a.text, b.text) * sign;
 }
@@ -444,12 +637,13 @@ export function sortRowsWithIndices(
 
     const type = columnType || detectColumnType(rows, columnPath);
     const hasIndices = Array.isArray(indices) && indices.length === rows.length;
+    const { keys } = readColumnKeys(rows.map(row => getNestedValue(row, columnPath)), type);
 
     const entries = rows.map((row, position) => ({
         row,
         index: hasIndices ? indices[position] : position,
         position,
-        key: toSortKey(getNestedValue(row, columnPath), type)
+        key: keys[position]
     }));
 
     entries.sort((a, b) => compareKeys(a.key, b.key, direction) || a.position - b.position);
@@ -463,4 +657,20 @@ export function sortRowsWithIndices(
 /** Sort rows by a column, returning a new array. */
 export function sortRows(rows: JsonRow[], columnPath: string, direction: SortDirection, columnType?: ColumnType): JsonRow[] {
     return sortRowsWithIndices(rows, [], columnPath, direction, columnType).sortedRows;
+}
+
+/**
+ * The order sortRowsWithIndices puts rows in, as a comparator: negative when
+ * `a` sorts before `b`, zero for a tie (which the sort leaves in file order).
+ * How the column is written is read from `rows`, so compare rows from them.
+ */
+export function createRowComparator(rows: JsonRow[], columnPath: string, direction: SortDirection, columnType?: ColumnType) {
+    const columnRows = Array.isArray(rows) ? rows : [];
+    const type = columnType || detectColumnType(columnRows, columnPath);
+    const { reading } = readColumnKeys(columnRows.map(row => getNestedValue(row, columnPath)), type);
+    return (a: JsonRow, b: JsonRow): number => compareKeys(
+        toSortKey(getNestedValue(a, columnPath), reading),
+        toSortKey(getNestedValue(b, columnPath), reading),
+        direction
+    );
 }

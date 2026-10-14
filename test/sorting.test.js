@@ -7,7 +7,8 @@ const {
     detectValueType,
     detectColumnType,
     sortRows,
-    sortRowsWithIndices
+    sortRowsWithIndices,
+    createRowComparator
 } = require('../out/jsonl/sorting');
 
 // --- grouped numbers -------------------------------------------------------
@@ -65,7 +66,8 @@ assert.strictEqual(parseNumericString('2024-01-15'), null);
 
 assert.strictEqual(parseTimestamp('2024-01-15T10:30:00Z'), Date.parse('2024-01-15T10:30:00Z'));
 assert.strictEqual(parseTimestamp('2024-01-15'), Date.parse('2024-01-15'));
-assert.strictEqual(parseTimestamp('2024-01-15 10:30:00'), Date.parse('2024-01-15 10:30:00'));
+// No offset reads as UTC, like the ISO date-only form (see "every timezone" below)
+assert.strictEqual(parseTimestamp('2024-01-15 10:30:00'), Date.parse('2024-01-15T10:30:00Z'));
 assert.strictEqual(parseTimestamp('2024-01-15T10:30:00.123456Z'), Date.parse('2024-01-15T10:30:00.123Z'));
 assert.strictEqual(parseTimestamp('2024-01-15T10:30:00+01:00'), Date.parse('2024-01-15T10:30:00+01:00'));
 assert.ok(parseTimestamp('01/15/2024') !== null);
@@ -265,5 +267,254 @@ assert.deepStrictEqual(sourceRows.map(row => row.id), ['a', 'b', 'c'], 'sortRows
 // Degenerate inputs
 assert.deepStrictEqual(sortRowsWithIndices([], [], 'n', 'asc').sortedRows, []);
 assert.deepStrictEqual(sortRows([{ a: 1 }], 'missing.path', 'asc'), [{ a: 1 }]);
+
+// --- timestamps read the same in every timezone ----------------------------
+
+// Date.parse reads an ISO date-only string as UTC but a date-time without an
+// offset as local time, so "2024-01-15 20:00:00" sorted after "2024-01-16" for
+// a viewer west of Greenwich, and in New York a time inside the spring-forward
+// gap (02:30 on 2024-03-10 never happened there) sorted after 03:15. Node picks
+// up a change to process.env.TZ at runtime, so each zone is checked in-process.
+const originalTimeZone = process.env.TZ;
+try {
+    ['UTC', 'America/Los_Angeles', 'America/New_York', 'Europe/Berlin', 'Asia/Kolkata', 'Pacific/Kiritimati', 'Pacific/Pago_Pago'].forEach(zone => {
+        process.env.TZ = zone;
+
+        const days = [
+            { when: '2024-01-16', id: 'jan16' },
+            { when: '2024-01-15 20:00:00', id: 'jan15 8pm' },
+            { when: '2024-01-15T09:00:00', id: 'jan15 9am' },
+            { when: '2024-01-15', id: 'jan15' }
+        ];
+        assert.deepStrictEqual(sortRows(days, 'when', 'asc').map(r => r.id), ['jan15', 'jan15 9am', 'jan15 8pm', 'jan16'], zone);
+        assert.deepStrictEqual(sortRows(days, 'when', 'desc').map(r => r.id), ['jan16', 'jan15 8pm', 'jan15 9am', 'jan15'], zone);
+
+        const springForward = [
+            { ts: '2024-03-10 03:15:00', id: 'B' },
+            { ts: '2024-03-10 02:30:00', id: 'A' },
+            { ts: '2024-03-10 03:45:00', id: 'C' }
+        ];
+        assert.deepStrictEqual(sortRows(springForward, 'ts', 'asc').map(r => r.id), ['A', 'B', 'C'], zone);
+
+        [
+            // Every recognized shape without an offset reads its wall-clock time as UTC...
+            ['2024-01-15', '2024-01-15T00:00:00Z'],
+            ['2024-01-15 10:30:00', '2024-01-15T10:30:00Z'],
+            ['2024-01-15T10:30', '2024-01-15T10:30:00Z'],
+            ['2024-01-15 9:30:00.5', '2024-01-15T09:30:00.500Z'],
+            ['2024-03-10 02:30:00', '2024-03-10T02:30:00Z'],
+            ['2024/01/15', '2024-01-15T00:00:00Z'],
+            ['2024/01/15 10:30', '2024-01-15T10:30:00Z'],
+            ['01/15/2024', '2024-01-15T00:00:00Z'],
+            ['01/15/2024 10:30 PM', '2024-01-15T22:30:00Z'],
+            ['15 Jan 2024', '2024-01-15T00:00:00Z'],
+            ['Jan 15, 2024', '2024-01-15T00:00:00Z'],
+            ['Jan 15, 2024 10:30 PM', '2024-01-15T22:30:00Z'],
+            ['January 15 2024 10:30:00', '2024-01-15T10:30:00Z'],
+            ['Mon, 15 Jan 2024 10:30:00', '2024-01-15T10:30:00Z'],
+            ['Mon, 15 Jan 2024 10:30:00 PM', '2024-01-15T22:30:00Z'],
+            // ...and one that names an offset or zone keeps meaning what it says
+            ['2024-01-15T10:30:00Z', '2024-01-15T10:30:00Z'],
+            ['2024-01-15 10:30:00+01:00', '2024-01-15T09:30:00Z'],
+            ['2024-01-15T10:30:00-0500', '2024-01-15T15:30:00Z'],
+            ['January 15 2024 10:30:00 GMT', '2024-01-15T10:30:00Z'],
+            ['Jan 15 2024 10:30 -0500', '2024-01-15T15:30:00Z'],
+            ['Mon, 15 Jan 2024 10:30:00 +0100', '2024-01-15T09:30:00Z'],
+            ['Mon, 15 Jan 2024 10:30:00 EST', '2024-01-15T15:30:00Z']
+        ].forEach(([text, utc]) => {
+            assert.strictEqual(parseTimestamp(text), Date.parse(utc), `${text} in ${zone}`);
+        });
+    });
+} finally {
+    if (originalTimeZone === undefined) {
+        delete process.env.TZ;
+    } else {
+        process.env.TZ = originalTimeZone;
+    }
+}
+
+// --- integers too large for a double ---------------------------------------
+
+// IDs past 2^53 held as strings compare exactly. As doubles these four all
+// rounded to the same value, tied, and stayed in file order in both directions.
+const bigIds = ['1790123456789012349', '1790123456789012341', '1790123456789012345', '1790123456789012343'].map(id => ({ id }));
+assert.strictEqual(detectColumnType(bigIds, 'id'), 'number');
+assert.deepStrictEqual(sortRows(bigIds, 'id', 'asc').map(r => r.id),
+    ['1790123456789012341', '1790123456789012343', '1790123456789012345', '1790123456789012349']);
+assert.deepStrictEqual(sortRows(bigIds, 'id', 'desc').map(r => r.id),
+    ['1790123456789012349', '1790123456789012345', '1790123456789012343', '1790123456789012341']);
+
+// They interleave correctly with ordinary numbers, signs and grouping...
+const magnitudes = [
+    { n: '9007199254740993' }, // 2^53 + 1, which no double holds
+    { n: 9007199254740994 },
+    { n: '1,000,000,000,000,000,001' },
+    { n: 9007199254740992 },
+    { n: '-9007199254740995' },
+    { n: 12.5 },
+    { n: '-5' }
+];
+assert.deepStrictEqual(sortRows(magnitudes, 'n', 'asc').map(r => r.n),
+    ['-9007199254740995', '-5', 12.5, 9007199254740992, '9007199254740993', 9007199254740994, '1,000,000,000,000,000,001']);
+// ...and as amounts of money
+const bigAmounts = [{ amt: '$12,345,678,901,234,567,891' }, { amt: '$12,345,678,901,234,567,890' }];
+assert.deepStrictEqual(sortRows(bigAmounts, 'amt', 'asc').map(r => r.amt),
+    ['$12,345,678,901,234,567,890', '$12,345,678,901,234,567,891']);
+
+// --- decimal-comma columns -------------------------------------------------
+
+// "1.500" is fifteen hundred in a column whose other values show it writes
+// decimal commas ("1.234,56", "2.000.000", "12,50"), not one and a half
+const euros = [{ p: '1.500 €' }, { p: '999 €' }, { p: '1.234,56 €' }, { p: '2.000.000 €' }, { p: '12,50 €' }];
+assert.strictEqual(detectColumnType(euros, 'p'), 'currency');
+assert.deepStrictEqual(sortRows(euros, 'p', 'asc').map(r => r.p), ['12,50 €', '999 €', '1.234,56 €', '1.500 €', '2.000.000 €']);
+assert.deepStrictEqual(sortRows(euros, 'p', 'desc').map(r => r.p), ['2.000.000 €', '1.500 €', '1.234,56 €', '999 €', '12,50 €']);
+const column = values => values.map(v => ({ v }));
+// The same goes for plain numbers, where a lone "1,250" is then a decimal comma too
+assert.deepStrictEqual(sortRows(column(['1.500', '999', '1.234.567']), 'v', 'asc').map(r => r.v), ['999', '1.500', '1.234.567']);
+assert.deepStrictEqual(sortRows(column(['1,250', '1,5', '2,75']), 'v', 'asc').map(r => r.v), ['1,250', '1,5', '2,75']);
+// A US column is read the US way: "1,500" is fifteen hundred
+assert.deepStrictEqual(sortRows(column(['1,500', '1,500.25', '999.10', '12.5']), 'v', 'asc').map(r => r.v),
+    ['12.5', '999.10', '1,500', '1,500.25']);
+// With nothing to go on, a single dot stays a decimal point...
+assert.deepStrictEqual(sortRows(column(['999', '1.500']), 'v', 'asc').map(r => r.v), ['1.500', '999']);
+// ...and so it does when the column contradicts itself
+assert.deepStrictEqual(sortRows(column(['1.234,56', '999', '1.500', '1,234.56']), 'v', 'asc').map(r => r.v),
+    ['1.500', '999', '1.234,56', '1,234.56']);
+
+// --- two-part versions -----------------------------------------------------
+
+// "3.10" next to "3.9" is a version: nobody writing decimals pads one value
+// with a trailing zero and leaves the next at one place. Such a column sorts as
+// text, whose natural ordering compares 3.9 < 3.10 part by part.
+const pythons = column(['3.9', '3.12', '3.10', '3.11', '3.8']);
+assert.strictEqual(detectColumnType(pythons, 'v'), 'string');
+assert.deepStrictEqual(sortRows(pythons, 'v', 'asc').map(r => r.v), ['3.8', '3.9', '3.10', '3.11', '3.12']);
+assert.deepStrictEqual(sortRows(pythons, 'v', 'desc').map(r => r.v), ['3.12', '3.11', '3.10', '3.9', '3.8']);
+// Even when the caller already settled on 'number' (a sampled detection can
+// miss the telltale values in a long column), the sort spots them itself
+assert.deepStrictEqual(sortRows(pythons, 'v', 'asc', 'number').map(r => r.v), ['3.8', '3.9', '3.10', '3.11', '3.12']);
+// Prices and other decimals keep sorting as amounts: consistently padded...
+const prices = column(['3.10', '12.50', '3.99', '3.05']);
+assert.strictEqual(detectColumnType(prices, 'v'), 'number');
+assert.deepStrictEqual(sortRows(prices, 'v', 'asc').map(r => r.v), ['3.05', '3.10', '3.99', '12.50']);
+// ...not padded at all...
+assert.deepStrictEqual(sortRows(column(['0.5', '0.25', '0.125']), 'v', 'asc').map(r => r.v), ['0.125', '0.25', '0.5']);
+// ...or with a leading-zero fraction, which no version has
+assert.deepStrictEqual(sortRows(column(['3.5', '3.10', '3.05']), 'v', 'asc').map(r => r.v), ['3.05', '3.10', '3.5']);
+// ...and real JSON numbers are never versions
+assert.deepStrictEqual(sortRows(column([3.9, '3.10', 3.8]), 'v', 'asc').map(r => r.v), ['3.10', 3.8, 3.9]);
+
+// --- numbers in a text column ----------------------------------------------
+
+// A column too mixed to call numeric still holds real numbers. They compare as
+// numbers, ahead of the words as in a spreadsheet, instead of as their digits,
+// which put -5 before -10 and 2.5 before 2.25.
+const readings = [-5, 'n/a', 2.5, 'n/a', -10, 'n/a', 2.25, 'n/a'].map((t, id) => ({ t, id }));
+assert.strictEqual(detectColumnType(readings, 't'), 'string');
+assert.deepStrictEqual(sortRows(readings, 't', 'asc').map(r => r.t), [-10, -5, 2.25, 2.5, 'n/a', 'n/a', 'n/a', 'n/a']);
+// Descending is the reverse, with ties still in file order
+assert.deepStrictEqual(sortRows(readings, 't', 'desc').map(r => r.id), [1, 3, 5, 7, 2, 6, 0, 4]);
+// Blank and missing cells stay last both ways
+const sparse = [{ t: 'b' }, { t: null }, { t: 10 }, {}, { t: 'a' }, { t: '' }, { t: 9 }];
+assert.deepStrictEqual(sortRows(sparse, 't', 'asc', 'string').map(r => r.t).slice(0, 4), [9, 10, 'a', 'b']);
+assert.deepStrictEqual(sortRows(sparse, 't', 'desc', 'string').map(r => r.t).slice(0, 4), ['b', 'a', 10, 9]);
+// Stray numbers in a column of another type compare as numbers too
+assert.deepStrictEqual(sortRows([{ b: true }, { b: -5 }, { b: false }, { b: -10 }], 'b', 'asc', 'boolean').map(r => r.b),
+    [false, true, -10, -5]);
+
+// --- the comparator is a strict weak order ---------------------------------
+
+// Array.prototype.sort only promises a sorted result for a consistent
+// comparator: never both a < b and b < a, and both "sorts before" and "ties
+// with" transitive. Mixed columns are where that is easiest to break - numbers
+// beside words, values that aren't the column's type, blanks - so check the
+// axioms over random columns, for every column type in both directions, and
+// check that sortRows agrees with the comparator and keeps ties in file order.
+function seededRandom(seed) {
+    // mulberry32
+    return () => {
+        seed = (seed + 0x6d2b79f5) | 0;
+        let t = Math.imul(seed ^ (seed >>> 15), 1 | seed);
+        t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+        return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+    };
+}
+const BLANKS = [null, undefined, '', '   '];
+const VALUE_POOLS = {
+    numbers: [0, -0, 1, -1, 2.5, 2.25, -10, -5, 0.1, 1e21, -1e-7, 9007199254740992, 1705315800, 1705315800000],
+    numericText: ['12', '-3.5', '+7', '1.5e3', '45%', '1,234', '1,234.56', '999.10', '0.500', '1790123456789012349',
+        '-1790123456789012349', '9007199254740993', '9007199254740992', '1,000,000,000,000,000,001'],
+    commaDecimals: ['1.234,56', '1.500', '2.000.000', '12,50', '1,250', '999', '0,5', '1.500 €', '12,50 €', '€ 3,10'],
+    currency: ['$99.00', '$1,200.00', '($1,234.00)', 'USD 12', '£0.99', '$-42.50', '$12,345,678,901,234,567,891'],
+    timestamps: ['2024-01-15', '2024-01-16', '2024-01-15 20:00:00', '2024-03-10T02:30:00', '2024-01-15T10:30:00+01:00',
+        '01/15/2024 10:30 PM', 'Jan 15, 2024', 'Mon, 15 Jan 2024 10:30:00 GMT'],
+    versions: ['3.9', '3.10', '3.12', '3.8', '10.1', '10.20'],
+    words: ['n/a', 'apple', 'Apple', 'item2', 'item10', 'é', 'é', 'ß', 'ss', '١٢', '½', '🦌', '1.10.0', '10.0.0.1', '-'],
+    other: [true, false, { a: 1 }, [1, 2], []]
+};
+const POOL_MIXES = [
+    Object.keys(VALUE_POOLS), // anything goes
+    ['numbers', 'words'], // the text-column case
+    ['numbers', 'numericText'],
+    ['commaDecimals', 'words'], // decimal-comma evidence, uncontradicted
+    ['versions'],
+    ['currency', 'numbers', 'words'],
+    ['timestamps', 'numbers', 'words'],
+    ['other', 'numbers']
+];
+const random = seededRandom(20241014);
+const pick = list => list[Math.floor(random() * list.length)];
+const isBlank = value => value === null || value === undefined || (typeof value === 'string' && value.trim() === '');
+const signOf = n => (n > 0 ? 1 : n < 0 ? -1 : 0);
+
+POOL_MIXES.forEach(mix => {
+    for (let round = 0; round < 2; round++) {
+        const rows = [];
+        for (let id = 0; id < 30; id++) {
+            const value = random() < 0.12 ? pick(BLANKS) : pick(VALUE_POOLS[pick(mix)]);
+            rows.push(value === undefined ? { id } : { v: value, id });
+        }
+        [undefined, 'string', 'number', 'currency', 'timestamp', 'boolean'].forEach(columnType => {
+            const effectiveType = columnType || detectColumnType(rows, 'v');
+            const matrices = {};
+            ['asc', 'desc'].forEach(direction => {
+                const label = `${mix.join('+')} #${round}, ${columnType || 'detected ' + effectiveType}, ${direction}`;
+                const compare = createRowComparator(rows, 'v', direction, columnType);
+                const c = rows.map(a => rows.map(b => signOf(compare(a, b))));
+                matrices[direction] = c;
+                const n = rows.length;
+                for (let i = 0; i < n; i++) {
+                    assert.strictEqual(c[i][i], 0, `irreflexive: ${label}`);
+                    for (let j = 0; j < n; j++) {
+                        const [a, b] = [rows[i].v, rows[j].v];
+                        assert.ok(c[i][j] === -c[j][i], `antisymmetric: ${label}: ${JSON.stringify([a, b])}`);
+                        for (let k = 0; k < n; k++) {
+                            if (c[i][j] <= 0 && c[j][k] <= 0 && c[i][k] !== (c[i][j] < 0 || c[j][k] < 0 ? -1 : 0)) {
+                                assert.fail(`transitive: ${label}: ${JSON.stringify([a, b, rows[k].v])}`);
+                            }
+                        }
+                        if (isBlank(a) && !isBlank(b)) {
+                            assert.strictEqual(c[j][i], -1, `blanks last: ${label}: ${JSON.stringify([b, a])}`);
+                        }
+                        // A timestamp column reads numbers as epoch seconds or
+                        // milliseconds by size, so only there may they reorder
+                        if (effectiveType !== 'timestamp' && typeof a === 'number' && typeof b === 'number' && a < b) {
+                            assert.strictEqual(c[i][j], direction === 'asc' ? -1 : 1, `numeric order: ${label}: ${a} vs ${b}`);
+                        }
+                    }
+                }
+                const sorted = sortRows(rows, 'v', direction, columnType);
+                for (let p = 0; p + 1 < sorted.length; p++) {
+                    const order = signOf(compare(sorted[p], sorted[p + 1]));
+                    assert.ok(order < 0 || (order === 0 && sorted[p].id < sorted[p + 1].id), `sortRows agrees: ${label} at ${p}`);
+                }
+            });
+            rows.forEach((_, i) => rows.forEach((__, j) => {
+                assert.strictEqual(matrices.asc[i][j] === 0, matrices.desc[i][j] === 0, 'a tie is a tie in both directions');
+            }));
+        });
+    }
+});
 
 console.log('sorting tests passed');
